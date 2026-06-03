@@ -3,7 +3,7 @@ name = "ariadne"
 version = "0.1.0"
 description = "Documentation library with config-based source path management"
 requires-python = ">=3.12.6"
-license = "Apache-2.0"
+license = "PolyForm-Noncommercial-1.0.0"
 authors = [
     {name = "Aviv Avital"},
 ]
@@ -39,6 +39,7 @@ dependencies = [
     "slack-bolt[async]>=1.28.0",
     "claude-agent-sdk>=0.2.87",
     "aiohttp>=3.13.5",
+    "tiktoken>=0.13.0",
 ]
 
 [project.optional-dependencies]
@@ -84,7 +85,10 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-# Constrain test discovery to the tests/ tree.
+# Constrain test discovery to the tests/ tree. Specifically excludes
+# designs/explorations/ where salvaged tests for abandoned designs
+# live as historical reference — those import modules that no longer
+# resolve, so collection would fail without this guard.
 testpaths = ["tests"]
 # .env lives at repo root; under sandboxed runs the file is unreadable
 # and pytest's rootdir collector aborts on the resulting PermissionError

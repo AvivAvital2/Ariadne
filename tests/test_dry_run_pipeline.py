@@ -184,11 +184,11 @@ class TestDryRunPipeline:
         assert 'discover' in invocation_log
         assert 'index' in invocation_log
         assert 'catalog-sync' in invocation_log
-        # Output names each paid phase + a total.
+        # Output names each paid phase + an estimated-minimum summary.
         assert 'catalog-describe' in out.lower()
         assert 'generate' in out.lower()
         assert 'themes' in out.lower()
-        assert 'total' in out.lower()
+        assert 'minimum' in out.lower()
         # Output contains at least one dollar figure.
         assert '$' in out
 
@@ -291,16 +291,17 @@ class TestDryRunPipeline:
             f'less than baseline ${cd_baseline:.2f}'
         )
 
-        # ---- Cycle T4: total reflects both scenarios -----------------
-        # Since generate has two figures and the user can choose either,
-        # the total line must present both — otherwise the user picks
-        # one mode and has to mentally subtract to figure out the
-        # alternative.
+        # ---- Cycle T4: summary presents both scenarios as a floor ----
+        # Generate has two figures and the user can choose either, so the
+        # estimated-minimum line must present both — otherwise the user
+        # picks one mode and has to mentally subtract the alternative.
         total_lines = [
             ln for ln in out.splitlines()
-            if 'total' in ln.lower() and '$' in ln
+            if 'minimum' in ln.lower() and '$' in ln
         ]
-        assert total_lines, f'expected a total line with $; got:\n{out}'
+        assert total_lines, (
+            f'expected an estimated-minimum line with $; got:\n{out}'
+        )
         total_line = total_lines[0]
         total_amounts = re.findall(r'\$([\d.]+)', total_line)
         assert len(total_amounts) >= 2, (
@@ -328,11 +329,24 @@ class TestDryRunPipeline:
             f'suggests an off-by-one summing bug'
         )
 
-        # ---- Cycle T4.5: total carries an uncertainty band ----------
-        # The total is a char-based heuristic — present it as an estimate
-        # (±50% band), not a precise quote.
-        assert '±' in out, (
-            f'total must show an estimate band (±50%); got:\n{out}'
+        # ---- Cycle T4.5: estimate is a FLOOR, not a ± band ----------
+        # The figure omits first-run themes summarization (onboard runs
+        # it) and uses a char-based heuristic, so the real cost only ever
+        # lands at or above it. Present it as an estimated minimum with a
+        # ~+50% safety ceiling — no lower bound below the estimate, no
+        # symmetric ± band, and not labelled "rough".
+        assert '+50%' in out, (
+            f'summary must show a +50% safety ceiling; got:\n{out}'
+        )
+        assert 'minimum' in out.lower(), (
+            f'estimate must be presented as a minimum/floor; got:\n{out}'
+        )
+        assert '±' not in out, (
+            f'a symmetric ± band implies the cost could be below the '
+            f'estimate, which it cannot; got:\n{out}'
+        )
+        assert 'rough' not in out.lower(), (
+            f'avoid the word "rough" per design; got:\n{out}'
         )
 
         # ---- Cycle T5: default mode is more compact than --verbose ---

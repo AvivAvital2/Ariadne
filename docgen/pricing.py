@@ -2,11 +2,15 @@
 
 Estimates the LLM cost of a generation run from the file list, the
 requested doc types, and the model name. No LLM calls — pure math
-over file sizes and a static rate table.
+over token counts and a static rate table.
 
-The estimate is character-based (≈4 chars/token); accuracy is ±50%.
-The returned ``CostEstimate`` carries a lower/upper bound to make
-the uncertainty visible to users.
+Input tokens are counted exactly via tiktoken when a caller supplies an
+``input_tokens_for`` hook (see ``docgen.token_count``), falling back to
+a ≈4 chars/token heuristic otherwise. Output length can't be known
+before generation, so it stays an estimate (calibrated from past runs
+when available). The result is therefore a floor: callers present it as
+a minimum with a +50% ceiling. ``CostEstimate`` still carries a
+lower/upper bound for callers that want the raw band.
 
 Update ``LLM_PRICING`` when API rates change. Models not in the table
 return an estimate with ``rates=None`` and ``total_cost_usd=0`` so the
@@ -132,6 +136,7 @@ def estimate_cost(
     caching_enabled: bool = False,
     batch_enabled: bool = False,
     output_tokens_for=None,
+    input_tokens_for=None,
 ) -> CostEstimate:
     """Estimate total cost for a generation run.
 
@@ -141,6 +146,14 @@ def estimate_cost(
     flat ``AVG_OUTPUT_TOKENS_PER_CALL`` heuristic for that call;
     ``None`` falls back to the heuristic. This is what makes the estimate
     self-tune to the codebase + model after a run.
+
+    ``input_tokens_for(path) -> int | None`` (optional) supplies an
+    *exact* dynamic (file-content) token count for a file — e.g. via
+    ``docgen.token_count.file_token_counter`` (tiktoken). When it returns
+    a value it replaces the ``size // CHARS_PER_TOKEN`` character
+    heuristic for that file; ``None`` falls back to the heuristic. Output
+    tokens can't be counted ahead of generation, so only the input side
+    is made exact.
 
     Args:
         files: Iterable of ``(path, size_in_bytes)`` for every file the
@@ -184,7 +197,11 @@ def estimate_cost(
         calls = len(effective)
         if calls == 0:
             continue
-        per_call_dynamic = size // CHARS_PER_TOKEN
+        per_call_dynamic = None
+        if input_tokens_for is not None:
+            per_call_dynamic = input_tokens_for(path)
+        if per_call_dynamic is None:
+            per_call_dynamic = size // CHARS_PER_TOKEN
         dynamic_input_tokens += int(per_call_dynamic * calls)
         total_calls += calls
         for t in effective:
@@ -250,7 +267,9 @@ def estimate_cost(
 
     total = llm_cost + embedding_cost
 
-    # Uncertainty band: ±50% reflects the character-based heuristic.
+    # Uncertainty band: output length is estimated (input is tiktoken-
+    # counted when a hook is supplied), so the real cost lands at or
+    # above this — callers present it as a floor with a +50% ceiling.
     return CostEstimate(
         file_count=len(files_list),
         total_calls=total_calls,
@@ -294,6 +313,7 @@ def estimate_generate_by_doc_type(
     caching_enabled: bool = False,
     batch_enabled: bool = False,
     output_tokens_for=None,
+    input_tokens_for=None,
 ) -> list[tuple[str, CostEstimate]]:
     """Per-doc-type cost breakdown for the generate phase.
 
@@ -312,6 +332,7 @@ def estimate_generate_by_doc_type(
                 caching_enabled=caching_enabled,
                 batch_enabled=batch_enabled,
                 output_tokens_for=output_tokens_for,
+                input_tokens_for=input_tokens_for,
             ),
         )
         for t in doc_types

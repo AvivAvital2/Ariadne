@@ -154,6 +154,47 @@ async def cli_confirm(msg: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _library_for_estimate(db_path: Path | None) -> object:
+    """Open the library so the cost estimate's staleness check is
+    type-aware — matching ``DocGenOrchestrator.run``. Opens (and creates
+    if absent) the same library the real run uses; any failure here would
+    block the real run too, so it is surfaced, not swallowed.
+    """
+    from cli.core import get_library
+    return get_library(db_path)
+
+
+def _stale_subset_for_estimate(
+    files_with_size: list[tuple[Path, int]],
+    *,
+    staleness_db_path: Path,
+    base_path: Path,
+    doc_types: tuple[str, ...],
+    library: object | None = None,
+) -> list[tuple[Path, int]]:
+    """Subset of ``files_with_size`` the next generate run would actually
+    process — stale or never-documented — using the SAME staleness logic
+    as :meth:`DocGenOrchestrator.run` (type-aware when ``library`` is
+    given). Lets the dry-run estimate report the real incremental cost
+    instead of a from-scratch upper bound: re-running with a populated
+    staleness DB skips unchanged files, so pricing every discovered file
+    overstates the cost.
+    """
+    from docgen.staleness import StalenessTracker
+
+    paths = [p for p, _ in files_with_size]
+    with StalenessTracker(staleness_db_path) as tracker:
+        stale = set(
+            tracker.get_stale_files(
+                paths,
+                base_path=base_path,
+                requested_types=doc_types,
+                library=library,
+            ),
+        )
+    return [(p, size) for (p, size) in files_with_size if p in stale]
+
+
 def _print_cost_estimate(
     *,
     source_path: Path,
@@ -167,6 +208,10 @@ def _print_cost_estimate(
     provider: str = 'openai',
     batch_mode: str = 'auto',
     auto_batch_threshold: int = 200,
+    staleness_db_path: Path | None = None,
+    base_path: Path | None = None,
+    library: object | None = None,
+    force: bool = False,
 ) -> int:
     """Discover files, run the cost estimator, and print a Rich table.
 
@@ -199,12 +244,30 @@ def _print_cost_estimate(
             exclude_dir_names=exclude_dir_names,
         )
 
-    files_with_size: list[tuple[Path, int]] = []
+    full_files: list[tuple[Path, int]] = []
     for p in files_paths:
         try:
-            files_with_size.append((p, p.stat().st_size))
+            full_files.append((p, p.stat().st_size))
         except OSError:
             continue
+
+    # Incremental scope: a real run skips files whose source is unchanged
+    # (DocGenOrchestrator.run filters via get_stale_files), so the headline
+    # estimate must price only the stale/new subset. ``full_files`` is kept
+    # for a secondary "full regeneration" figure. ``--force`` regenerates
+    # everything, so it bypasses the filter.
+    total_files = len(full_files)
+    if staleness_db_path is not None and not force:
+        files_with_size = _stale_subset_for_estimate(
+            full_files,
+            staleness_db_path=staleness_db_path,
+            base_path=base_path or source_path,
+            doc_types=doc_types,
+            library=library,
+        )
+    else:
+        files_with_size = full_files
+    stale_count = len(files_with_size)
 
     # Caching kicks in only on Anthropic (explicit cache_control markers);
     # OpenAI's is automatic and not modeled in the estimate. Batch eligibility
@@ -213,6 +276,13 @@ def _print_cost_estimate(
     # the actual dispatch decision.
     caching_enabled = provider == 'anthropic'
     batch_eligible = provider in BATCH_ELIGIBLE_PROVIDERS
+
+    # Exact input (file-content) tokens via tiktoken, cached per path
+    # across the estimate passes. Shared factory (same one onboard's
+    # dry-run uses); falls back to the char heuristic when tiktoken is
+    # unavailable.
+    from docgen.token_count import file_token_counter
+    _input_tokens = file_token_counter(model)
 
     # For auto mode we need a planned-calls count to compare against
     # the threshold. ``estimate_cost(batch_enabled=False)`` is the
@@ -256,7 +326,23 @@ def _print_cost_estimate(
         model=model,
         caching_enabled=caching_enabled,
         batch_enabled=batch_resolved,
+        input_tokens_for=_input_tokens,
     )
+
+    # Full-regeneration figure for the note — only recomputed when some
+    # files were skipped (otherwise it equals the headline estimate).
+    skipped = total_files - stale_count
+    if skipped > 0:
+        full_estimate = estimate_cost(
+            files=tuple(full_files),
+            doc_types=doc_types,
+            model=model,
+            caching_enabled=caching_enabled,
+            batch_enabled=batch_resolved,
+            input_tokens_for=_input_tokens,
+        )
+    else:
+        full_estimate = estimate
 
     console.print()
     table = Table(
@@ -270,7 +356,12 @@ def _print_cost_estimate(
     table.add_row('Source path', str(source_path))
     table.add_row('Model', model)
     table.add_row('Doc types requested', ', '.join(doc_types))
-    table.add_row('Files discovered', str(estimate.file_count))
+    table.add_row('Files discovered', str(total_files))
+    table.add_row(
+        'Stale / new (this run)',
+        f'{stale_count} stale/new of {total_files} files'
+        + (f'  ({skipped} up-to-date, skipped)' if skipped > 0 else ''),
+    )
     table.add_row('Total LLM calls', f'{estimate.total_calls:,}')
     table.add_row('Estimated input tokens', f'{estimate.input_tokens:,}')
     table.add_row('Estimated output tokens', f'{estimate.output_tokens:,}')
@@ -309,10 +400,13 @@ def _print_cost_estimate(
             'Embedding cost',
             f'${estimate.embedding_cost_usd:.2f}',
         )
+        # Floor, not a midpoint: the char-based heuristic and any skipped
+        # phases mean the real cost only lands at or above this. Show the
+        # estimate as a minimum with a ~+50% ceiling — no lower bound.
         table.add_row(
-            '[bold]Total estimate[/bold]',
+            '[bold]Estimated minimum[/bold]',
             f'[bold green]${estimate.total_cost_usd:.2f}[/bold green]'
-            f' (range ${estimate.cost_lower_bound:.2f} – ${estimate.cost_upper_bound:.2f})',
+            f' (up to ~+50%: ${estimate.cost_upper_bound:.2f})',
         )
 
     table.add_row(
@@ -328,9 +422,16 @@ def _print_cost_estimate(
     table.add_row('Batch mode', batch_display)
 
     console.print(table)
+    if skipped > 0 and estimate.rates is not None:
+        console.print(
+            f'[dim]{skipped} of {total_files} files are already generated '
+            f'(unchanged source) — skipped. Full regeneration would be '
+            f'${full_estimate.total_cost_usd:.2f}; use --force to '
+            f'regenerate everything.[/dim]',
+        )
     console.print(
-        '[dim]Token estimates are character-based (~4 chars/token); '
-        'real cost may vary ±50%.[/dim]',
+        '[dim]Output length is estimated (it can not be counted before '
+        'generation); real cost can run up to ~+50% higher.[/dim]',
     )
     return 0
 
@@ -663,6 +764,10 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
             provider=provider,
             batch_mode=getattr(args, 'batch_mode', 'auto'),
             auto_batch_threshold=getattr(args, 'auto_batch_threshold', 200),
+            staleness_db_path=Path(cfg.staleness_db_path),
+            base_path=source_path,
+            library=_library_for_estimate(args.db),
+            force=args.force,
         )
 
     config = OrchestratorConfig(

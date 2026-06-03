@@ -2173,6 +2173,29 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                     files.append((p, p.stat().st_size))
                 except OSError:
                     continue
+
+        # Incremental scope: a real generate run skips files whose source
+        # is unchanged (it filters via get_stale_files), so price only the
+        # stale/new subset. `files` stays the full set for a secondary
+        # "full regeneration" figure. --force regenerates everything.
+        from cli.generate import (
+            DEFAULT_GENERATE_DOC_TYPES,
+            _stale_subset_for_estimate,
+        )
+        if files and not getattr(args, 'force', False):
+            gen_files = _stale_subset_for_estimate(
+                files,
+                staleness_db_path=Path(cfg.staleness_db_path),
+                base_path=source_path,
+                doc_types=DEFAULT_GENERATE_DOC_TYPES,
+                library=library,
+            )
+        else:
+            gen_files = files
+        gen_skipped = len(files) - len(gen_files)
+        full_generate_cost: float | None = None
+        full_generate_cost_batched: float | None = None
+
         if files and rates is not None:
             # Price the SAME doc types the generate phase will actually
             # produce (the default set) — estimating a subset silently
@@ -2216,28 +2239,57 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                 _gen_output_cache[key] = result
                 return result
 
+            # Exact input (file-content) tokens via tiktoken, cached per
+            # path across the baseline / batched / per-type passes. Shared
+            # factory (same one the generate --dry-run table uses); falls
+            # back to the char heuristic when tiktoken is unavailable.
+            from docgen.token_count import file_token_counter
+            _gen_input = file_token_counter(model)
+
             # Two estimates: baseline (no --batch) and with Anthropic's
             # ~50% Message Batches discount applied. ``generate`` is the
             # only phase that batches today.
             generate_estimate = estimate_cost(
-                files=files,
+                files=gen_files,
                 doc_types=DEFAULT_GENERATE_DOC_TYPES,
                 model=model,
                 caching_enabled=caching_enabled,
                 output_tokens_for=_gen_output,
+                input_tokens_for=_gen_input,
             )
             generate_estimate_batched = estimate_cost(
-                files=files,
+                files=gen_files,
                 doc_types=DEFAULT_GENERATE_DOC_TYPES,
                 model=model,
                 caching_enabled=caching_enabled,
                 output_tokens_for=_gen_output,
+                input_tokens_for=_gen_input,
                 batch_enabled=True,
             )
             generate_cost: float | None = generate_estimate.total_cost_usd
             generate_cost_batched: float | None = (
                 generate_estimate_batched.total_cost_usd
             )
+            # Full-regeneration figures for the note — only when some
+            # files were skipped (else they equal the headline cost).
+            if gen_skipped > 0:
+                full_generate_cost = estimate_cost(
+                    files=files,
+                    doc_types=DEFAULT_GENERATE_DOC_TYPES,
+                    model=model,
+                    caching_enabled=caching_enabled,
+                    output_tokens_for=_gen_output,
+                    input_tokens_for=_gen_input,
+                ).total_cost_usd
+                full_generate_cost_batched = estimate_cost(
+                    files=files,
+                    doc_types=DEFAULT_GENERATE_DOC_TYPES,
+                    model=model,
+                    caching_enabled=caching_enabled,
+                    output_tokens_for=_gen_output,
+                    input_tokens_for=_gen_input,
+                    batch_enabled=True,
+                ).total_cost_usd
         else:
             generate_cost = 0.0 if rates is not None else None
             generate_cost_batched = generate_cost
@@ -2269,35 +2321,46 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
         )
         _print_phase(
             'generate',
-            calls=len(files),
+            calls=len(gen_files),
             unit='files',
             in_tokens=(
-                generate_estimate.input_tokens if files and rates
+                generate_estimate.input_tokens if gen_files and rates
                 else 0
             ),
             out_tokens=(
-                generate_estimate.output_tokens if files and rates
+                generate_estimate.output_tokens if gen_files and rates
                 else 0
             ),
             cost=generate_cost,
             batched_cost=generate_cost_batched,
             verbose=verbose,
         )
+        if gen_skipped > 0 and rates is not None:
+            console.print(
+                f'      [dim]{gen_skipped} of {len(files)} files already '
+                f'generated (unchanged source) — skipped. Full '
+                f'regeneration: ${full_generate_cost:.2f} / '
+                f'${full_generate_cost_batched:.2f} batched; use '
+                f'--force.[/dim]',
+                soft_wrap=True,
+            )
         # Per-doc-type breakdown so the user sees what each type costs
         # (and can drop the expensive ones). Only meaningful when we have
-        # files + a known rate.
-        if files and rates is not None:
+        # stale files to generate + a known rate.
+        if gen_files and rates is not None:
             from cli.generate import DEFAULT_GENERATE_DOC_TYPES
             from docgen.pricing import estimate_generate_by_doc_type
             per_type = estimate_generate_by_doc_type(
-                files, DEFAULT_GENERATE_DOC_TYPES, model,
+                gen_files, DEFAULT_GENERATE_DOC_TYPES, model,
                 caching_enabled=caching_enabled,
                 output_tokens_for=_gen_output,
+                input_tokens_for=_gen_input,
             )
             per_type_batched = dict(estimate_generate_by_doc_type(
-                files, DEFAULT_GENERATE_DOC_TYPES, model,
+                gen_files, DEFAULT_GENERATE_DOC_TYPES, model,
                 caching_enabled=caching_enabled,
                 output_tokens_for=_gen_output,
+                input_tokens_for=_gen_input,
                 batch_enabled=True,
             ))
             for dt, est in per_type:
@@ -2349,22 +2412,27 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                 describe_cost_batched + generate_cost_batched + themes_part
             )
             console.print(
-                f'  [bold]Total estimated cost: '
-                f'${total_baseline:.2f} / '
+                f'  [bold]Estimated minimum: ${total_baseline:.2f} sync / '
                 f'${total_batched:.2f} batched[/bold]',
                 soft_wrap=True,
             )
-            # Uncertainty band + omissions, so the figure reads as an
-            # estimate (char-based heuristic), not a quote.
-            omits = ['embedding cost']
+            # The figure is a FLOOR: a char-based token heuristic, and it
+            # omits any phase that can't be priced yet (first-run themes
+            # summarization, which onboard still runs). The real cost only
+            # ever lands at or above it — so never show a lower bound
+            # under the estimate; offer a ~+50% safety ceiling instead,
+            # for BOTH the sync and batched figures.
+            omits = []
             if themes_unestimated:
                 omits.append('first-run themes summarization')
-            console.print(
-                f'  [dim]Rough estimate — actual typically within ±50% '
-                f'(${total_baseline * 0.5:.2f}–${total_baseline * 1.5:.2f}); '
-                f'excludes {", ".join(omits)}.[/dim]',
-                soft_wrap=True,
+            ceiling = (
+                f'  [dim]Add up to ~+50% to be safe: '
+                f'${total_baseline * 1.5:.2f} sync / '
+                f'${total_batched * 1.5:.2f} batched.'
             )
+            if omits:
+                ceiling += f' Excludes {", ".join(omits)}.'
+            console.print(ceiling + '[/dim]', soft_wrap=True)
         if themes_unestimated:
             console.print(
                 '[dim]Note: run `ariadne themes build` (clustering is '
