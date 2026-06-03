@@ -54,6 +54,8 @@ uv sync
   ANTHROPIC_API_KEY=sk-ant-...    # only when generating with Claude (e.g. claude-opus-4-8)
   ```
 
+  Or copy the committed template and fill in your keys: `cp .env.example .env`.
+
 ### Supported Languages
 
 Generation and catalog extraction work across:
