@@ -1,0 +1,10 @@
+[environment]
+python-version = "3.12"
+
+[rules]
+# Baseline: 77 diagnostics with default rules (2026-03-30)
+# Currently in LSP-only mode. Tighten incrementally:
+# Phase 1: Enable invalid-return-type, unresolved-import
+# Phase 2: Enable invalid-argument-type
+# Phase 3: Enable remaining rules
+all = "ignore"

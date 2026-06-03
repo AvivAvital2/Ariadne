@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Generated docs (regenerated via ariadne export)
+# Keep top-level docs/*.md, ignore source-specific generated dirs
+docs/*/
+
+# Database
+*.db
+ariadne.db.*
+
+# Environment
+.env
+.venv/
+
+# Configuration
+ariadne.yaml
+/.idea/misc.xml
+/.idea/modules.xml
+/.idea/MypyPlugin.xml
+/.idea/inspectionProfiles/profiles_settings.xml
+/.idea/vcs.xml
+/.idea/Ariadne.iml
+/.idea/.gitignore
+
+# Generated documentation (regenerated on demand via ariadne docs generate)
+generated-docs/
+_site/
+
+# macOS metadata
+.DS_Store
+
+# SQLite WAL/SHM artifacts
+*.db-shm
+*.db-wal
+ariadne_staleness.db.*
+ariadne_staleness.db
+.ariadne/
+
+# Runtime artifacts
+ariadne_runs/
+.coverage

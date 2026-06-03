@@ -1,0 +1,321 @@
+[project]
+name = "ariadne"
+version = "0.1.0"
+description = "Documentation library with config-based source path management"
+requires-python = ">=3.12.6"
+license = "Apache-2.0"
+authors = [
+    {name = "Aviv Avital"},
+]
+dependencies = [
+    "numpy>=2.0",
+    "attrs>=25.3.0",
+    "httpx[http2,socks]>=0.28",
+    "rich>=14.0",
+    "pyyaml>=6.0",
+    # ruamel.yaml is used for round-trip-safe ariadne.yaml mutation in
+    # `ariadne discover --review` (Phase 2j.c). PyYAML can't preserve
+    # comments + formatting on write; ruamel.yaml's RoundTripLoader can.
+    "ruamel.yaml>=0.18",
+    "mcp>=1.26.0",
+    "python-dotenv>=1.0",
+    "ast-grep-py",
+    "ruff>=0.15.12",
+    "hnswlib>=0.8",
+    "igraph>=0.11",
+    "leidenalg>=0.10",
+    # protobuf runtime is required to import the generated scip_pb2.py
+    # (produced by tests/setup_scip_pb2.py). Pinned to 4.25+ to match the
+    # `from google.protobuf.internal import builder` API the generated
+    # module uses.
+    "protobuf>=4.25",
+    # Lark backs the HOCON parser (docgen/hocon_extractor.py). HOCON is
+    # not in ast-grep's bundled tree-sitter set and the only community
+    # tree-sitter-hocon grammar is unmaintained, so we own the grammar
+    # in docgen/hocon_grammar.lark. Lark gives native line/column tracking
+    # via propagate_positions=True, which is the load-bearing requirement.
+    "lark>=1.1",
+    "sockio>=0.15.0",
+    "slack-bolt[async]>=1.28.0",
+    "claude-agent-sdk>=0.2.87",
+    "aiohttp>=3.13.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ty>=0.0.1a1",
+]
+docs = [
+    "mkdocs-material>=9.0",
+    "mkdocs>=1.6,<2.0",
+]
+
+[project.scripts]
+ariadne = "cli.main:main"
+ariadne-slack = "slack_bridge.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+include = ["*.py", "cli/", "library/", "ariadne_mcp/", "docgen/", "docs/", "tests/", "slack_bridge/"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=1.3.0",
+    # Line/branch coverage via pytest --cov. Necessary but not
+    # sufficient: tells us what code is reached, not whether the
+    # behavior is validated. Pair with mutmut below for the
+    # functional half.
+    "pytest-cov>=5.0",
+    # Mutation testing — flips ==/!=, +/-, True/False etc. in source
+    # and reruns tests. Surviving mutants = code that's line-covered
+    # but not behaviorally tested ("paperweight" tests). Use this
+    # before any risky refactor to surface real test gaps in the
+    # touched modules.
+    "mutmut>=2.5",
+    "ty>=0.0.1a1",
+    "pytest-json-report>=1.5.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# Constrain test discovery to the tests/ tree.
+testpaths = ["tests"]
+# .env lives at repo root; under sandboxed runs the file is unreadable
+# and pytest's rootdir collector aborts on the resulting PermissionError
+# before any tests run. Tell pytest to skip it explicitly.
+addopts = ["--ignore=.env"]
+
+
+# ---------------------------------------------------------------------------
+# Coverage configuration (line + branch — via pytest-cov)
+# ---------------------------------------------------------------------------
+#
+# Line coverage answers: did execution reach this code?
+# It does NOT answer: was the behavior validated by an assertion?
+# A test that calls a function without asserting its result still
+# marks lines as "covered". For real test-quality signal, run mutmut
+# (see [tool.mutmut] below) — it mutates the code and reruns tests;
+# any surviving mutant is a line that's covered-on-paper but not
+# tested-in-practice.
+#
+# Usage:
+#   uv run pytest --cov --cov-report=term-missing
+#
+# Scoped to specific modules (for pre-refactor risk analysis):
+#   uv run pytest tests/test_orchestrator*.py \
+#       --cov=docgen.orchestrator --cov-report=term-missing
+#
+# branch=true measures branch coverage in addition to line coverage —
+# important for async code where one path may be tested but the
+# alternate (e.g., abort_event.is_set() == True) isn't.
+
+[tool.coverage.run]
+branch = true
+source = [
+    ".",
+    "docgen",
+]
+omit = [
+    "tests/*",
+    "docgen/scip/scip_pb2.py",   # generated protobuf
+    "docs/*",
+    "generated-docs/*",
+    "_site/*",
+    "scripts/*",                  # one-shot maintenance scripts
+    "*/conftest.py",
+]
+
+[tool.coverage.report]
+# Lines that shouldn't count as "uncovered" because they don't carry
+# runtime behavior (type-only imports, abstract bodies, main guards,
+# bare-ellipsis Protocol stubs).
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "^\\s*\\.\\.\\.\\s*$",       # bare ellipsis (Protocol stubs)
+    "if __name__ == .__main__.:",
+]
+show_missing = true
+skip_covered = false
+precision = 1                     # one decimal place — coarser %s mask drift
+
+
+# ---------------------------------------------------------------------------
+# Mutation testing configuration (mutmut)
+# ---------------------------------------------------------------------------
+#
+# Mutmut answers the question line-coverage cannot: are the tests
+# actually validating behavior, or just calling the code?
+#
+# Workflow for risk analysis on a target module:
+#   uv run mutmut run --paths-to-mutate docgen/orchestrator.py
+#   uv run mutmut results
+#   uv run mutmut show <id>      # inspect a surviving mutant
+#
+# Mutation kill rate (= killed / total) is the "behavioral coverage"
+# percentage. < 70% on a module is a flag that line-coverage is
+# masking weak tests; > 90% means mutations were caught reliably.
+#
+# Mutmut is SLOW — it reruns the test suite per mutation (one mutation
+# per source line in the worst case). Run it scoped to a single module
+# at a time when assessing pre-refactor risk; full-repo mutation passes
+# are CI-level work.
+
+[tool.mutmut]
+paths_to_mutate = "docgen/"
+runner = "uv run pytest -x --tb=no -q"
+tests_dir = "tests/"
+# Files where mutation noise dominates real signal: generated code,
+# pure re-export modules, and trivial __init__ files.
+exclude = [
+    "docgen/scip/scip_pb2.py",
+    "docgen/__init__.py",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Ariadne mixes top-level modules (cli_*.py, library*.py, writer.py, etc.)
+# with the docgen/ subpackage. Listing them all keeps Ruff from
+# treating local imports as third-party in isort.
+src = [".", "docgen", "tests"]
+extend-exclude = [
+    "docs",
+    "generated-docs",
+    "_site",
+    "docgen/scip/scip_pb2.py",         # Generated protobuf — don't lint
+]
+
+[tool.ruff.lint]
+select = [
+    "YTT",                              # flake8-2020 (mishandling sys.version)
+    "ANN",
+    "ASYNC",
+    "S",                                # flake8-bandit
+    "BLE",                              # don't catch all exceptions
+    "B",                                # flake8-bugbear
+    "C4",                               # flake8-comprehensions
+    "T10",                              # flake8-debugger
+    "EXE",                              # flake8-executable
+    "FA",                               # flake8-future-annotations
+    "ISC",                              # flake8-implicit-str-concat
+    "ICN",                              # flake8-import-conventions
+    "LOG",                              # flake8-logging
+    "INP",                              # flake8-no-pep420
+    "PIE",                              # flake8-pie
+    "T20",                              # flake8-print
+    "PYI",                              # flake8-pyi
+    "PT",                               # flake8-pytest-style
+    "Q",                                # flake8-quotes
+    "RSE",                              # flake8-raise
+    "SIM101", "SIM102", "SIM105", "SIM107", "SIM113", "SIM115",
+    "SIM118", "SIM220", "SIM221", "SIM222", "SIM223", "SIM401",
+    "SIM905", "SIM910", "SIM911",
+    "SLOT",                             # flake8-slots
+    "TID",                              # flake8-tidy-imports
+    "ARG",                              # flake8-unused-arguments
+    "PTH",                              # flake8-use-pathlib
+    "I",                                # isort
+    "NPY",                              # numpy
+    "N",                                # PEP8 naming
+    "E", "W",                           # pycodestyle
+    "D",                                # pydocstyle
+    "F",                                # pyflakes
+    "PGH",                              # pygrep-hooks
+    "PL",                               # pylint
+    "UP",                               # pyupgrade
+    "FURB",                             # refurb
+    "RUF",                              # Ruff-original
+    "TRY",                              # Tryceratops
+    "S101",
+]
+
+ignore = [
+    "E203", "E266", "E501",             # whitespace / long-line relaxations
+    "E701",                             # two statements on one line
+    "W293", "W291",                     # whitespace on blank lines / trailing
+    "TC001", "TC002", "TC003",          # move type-only imports into TYPE_CHECKING
+    "TC006",                            # quoted type in cast
+    "D100", "D101", "D102", "D103", "D104", "D105", "D107",   # missing docstrings
+    "D210",                             # whitespace surrounding docstring text
+    "D203", "D204", "D205",             # blank lines around docstrings
+    "D213",                             # opposite of D212
+    "D400",                             # first line should end with a period
+    "D401",                             # imperative mood
+    "D404",                             # "this" in first word
+    "D413",                             # blank line after each section
+    "D415",                             # first line should end with .?!
+    "D417",                             # some Args documented in docstring
+    "RUF009",                           # function call in dataclass default
+    "RUF021",                           # parenthesize and/or sub-expressions
+    "ANN401",                           # typing.Any disallowed
+    "PYI034",                           # __iter__ return self
+    "B024",                             # ABC has no abstract methods
+    "TRY003",                           # long messages outside exception class
+    "TRY004",                           # prefer TypeError for invalid type
+    "TRY300",                           # no return inside try
+    "A002",                             # input shadowing builtin
+    "DTZ005",                           # naive datetime
+    "C901", "PLR0904", "PLR0911", "PLR0912", "PLR0913", "PLR0914", "PLR0915",
+    "PIE808",                           # unnecessary start argument in range
+    "S311",                             # use of random
+    "RUF002",                           # ambiguous unicode chars
+    "B008",                             # function calls in default arguments
+    "UP037",                            # string type annotations
+    "PT018",                            # multi-condition asserts
+    "PT012",                            # multi-statement pytest assert blocks
+    "PLC0415",                          # local/conditional imports — common in Ariadne
+    "ASYNC109",                         # async function with timeout param
+
+    # Future-enable candidates, ignored for now
+    "S608",                             # possible SQL injection
+    "RET505",                           # unnecessary else after return
+]
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "single"
+multiline-quotes = "single"
+
+[tool.ruff.lint.flake8-annotations]
+mypy-init-return = true   # __init__ may omit -> None
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "docgen",
+    "library",
+    "writer", "embedding", "schema", "config", "search", "llm",
+    "cli",
+    "doc_generator", "export", "gap_analysis", "git_ops", "graph_viewer",
+    "ariadne_mcp",
+    "slack_bridge",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "PLR2004",                          # magic value constants
+    "T201",                             # use of print
+    "S101",                             # use of assert
+    "ANN",                              # type annotations not required in tests
+    "INP001",                           # tests/ doesn't need __init__.py
+]
+
+# Generated protobuf — never edit, never lint
+"docgen/scip/scip_pb2.py" = ["ALL"]
+
+# Top-level scripts that print to stdout intentionally
+"export.py" = ["T201"]
+
+# Notebooks
+"*.ipynb" = ["T201"]
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+line-ending = "lf"

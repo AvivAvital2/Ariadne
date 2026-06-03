@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "ariadne": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        ".",
+        "ariadne",
+        "mcp"
+      ]
+    }
+  }
+}

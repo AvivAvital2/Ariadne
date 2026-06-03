@@ -1,0 +1,27 @@
+default_source: myproject
+sources:
+  myproject:
+    path: /path/to/my/repo/
+    exclude:
+      - "**/.env"
+    exclude_dirs:
+      - docs
+    depends_on:
+    - myscalaproject
+
+  myscalaproject:
+    path: /path/to/scala/project
+    index_kinds:
+      java: scip
+      scala: scip
+    scip:
+      artifact_path: /path/to/my/project/index.scip
+      max_staleness_days: 7
+   
+docs_base: ./docs
+mention_ariadne:
+  enabled: true
+defaults:
+  db_path: ariadne.db
+  provider: anthropic
+  model: claude-opus-4-8

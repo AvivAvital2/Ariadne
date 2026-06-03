@@ -1,0 +1,134 @@
+// HOCON grammar for Ariadne — Lark EBNF.
+//
+// Spec reference: https://github.com/lightbend/config/blob/main/HOCON.md
+//
+// Goals:
+//   - Parse the bulk of real-world reference.conf / application.conf files
+//     that ship in JVM/Scala projects.
+//   - Track line/column on every node (Lark with propagate_positions=True).
+//   - Recognize (but not resolve) substitutions and includes — the catalog
+//     records the directive, the runtime resolves it.
+//   - Support triple-quoted strings (the form PGP key blocks live in).
+//
+// Non-goals:
+//   - HOCON-spec-perfect string concatenation rules. We accept a single
+//     value per assignment; concatenation of multiple unquoted tokens is
+//     out of scope. Common conf files don't rely on it.
+//   - Following includes (we record the directive only).
+//   - Resolving substitutions (we record `${var}` as a leaf value).
+
+// `?start: object_body` makes the start rule transparent: `parse()` returns
+// the object_body tree directly. Without this, the test/walker has to
+// descend through a `start` wrapper that adds nothing.
+?start: object_body
+
+// HOCON allows an entirely empty file or one with only separators.
+// Entries are separated by newlines or commas; both are interchangeable.
+// `_SEP` is an anonymous token (underscore prefix) so separators are
+// matched but filtered out of the parse tree — `tree.children` of an
+// `object_body` is just the entries, no separator noise.
+object_body: _SEP* (entry (_SEP+ entry)*)? _SEP*
+
+_SEP: /\r?\n/ | ","
+
+// An entry is either an `include` directive, a `key = value` (or `:`)
+// assignment, or a `key { ... }` block declaration.
+entry: include
+     | assignment
+     | object_block
+
+include: "include" string
+
+assignment: key_path EQ_OR_COLON value
+
+object_block: key_path object
+
+key_path: KEY ("." KEY)*
+
+object: "{" object_body "}"
+
+array: "[" array_body "]"
+array_body: _SEP* (value (_SEP+ value)*)? _SEP*
+
+// A value is one of the structured types or a scalar. We don't model
+// concatenation — assignments take exactly one value. This is enough
+// for ~95% of real config files in the wild.
+value: object
+     | array
+     | duration_value
+     | size_value
+     | scalar
+
+duration_value: NUMBER TIME_UNIT
+size_value: NUMBER SIZE_UNIT
+
+scalar: TRIPLE_STRING
+      | STRING
+      | NUMBER
+      | BOOL
+      | NULL
+      | substitution
+      | UNQUOTED_VALUE
+
+substitution: "${" OPTIONAL_MARK? key_path "}"
+OPTIONAL_MARK: "?"
+
+string: STRING
+
+// Terminals -----------------------------------------------------------
+
+EQ_OR_COLON: "=" | ":"
+
+// Triple-quoted: spans multiple lines, holds raw content (PGP blocks,
+// embedded scripts, multi-line text). MUST be matched before STRING so
+// the longer pattern wins. `[\s\S]*?` matches anything (including
+// newlines) lazily until the closing `"""`.
+TRIPLE_STRING.4: /"""[\s\S]*?"""/
+
+// Single-line double-quoted string with escape support. Disallows raw
+// newlines so that triple-quoted content is never mis-tokenized as two
+// regular strings.
+STRING.3: /"(?:[^"\\\n]|\\.)*"/
+
+// Number: optional sign, integer or float, optional exponent.
+NUMBER.3: /-?\d+(\.\d+)?([eE][+-]?\d+)?/
+
+// Reserved words. Higher priority than UNQUOTED_VALUE so they win.
+BOOL.3: "true" | "false"
+NULL.3: "null"
+
+// Time / size unit suffixes. `5 minutes` and `100 MiB` are HOCON spec.
+// Listed by length descending so multi-char units win over single-char.
+TIME_UNIT.4: "milliseconds" | "millisecond" | "microseconds" | "microsecond"
+           | "nanoseconds" | "nanosecond"
+           | "minutes" | "minute" | "seconds" | "second"
+           | "hours" | "hour" | "days" | "day"
+           | "ms" | "us" | "ns" | "m" | "s" | "h" | "d"
+
+SIZE_UNIT.4: "bytes" | "byte" | "kilobytes" | "kilobyte"
+           | "megabytes" | "megabyte" | "gigabytes" | "gigabyte"
+           | "terabytes" | "terabyte"
+           | "kibibytes" | "kibibyte" | "mebibytes" | "mebibyte"
+           | "gibibytes" | "gibibyte" | "tebibytes" | "tebibyte"
+           | "MiB" | "GiB" | "TiB" | "KiB" | "PiB" | "EiB"
+           | "MB" | "GB" | "TB" | "KB" | "PB" | "EB"
+           | "K" | "M" | "G" | "T" | "P" | "E" | "B"
+
+// Identifier-like keys. Letters, digits, underscore, dash. Quoted keys
+// are also legal in HOCON; we accept them as STRING-prefixed paths via
+// the `key_path` rule (the key_path rule's KEY token below covers the
+// unquoted form; quoted keys handled inside via the string rule when
+// that pattern emerges in real configs).
+KEY: /[A-Za-z_][A-Za-z0-9_-]*/
+
+// Unquoted string values: any printable run that doesn't include HOCON
+// reserved characters. Lower priority than NUMBER/BOOL/NULL/units so
+// those win for overlapping input.
+UNQUOTED_VALUE: /[^\s\=\:\{\}\[\]\,\#\"\$]+/
+
+// Comments — # and // both supported. Discarded; do not affect line
+// numbering of subsequent tokens.
+COMMENT: /(#|\/\/)[^\n]*/
+
+%ignore /[ \t]+/
+%ignore COMMENT

@@ -1,0 +1,274 @@
+"""SCIP cross-source schema (SCIP-everywhere, Phase 2d).
+
+Three tables that hold the materialized cross-source SCIP graph:
+
+- ``scip_symbols`` — every symbol definition seen across all indexed
+  sources. The canonical_id is the SCIP wire-format symbol string and
+  is globally unique by construction.
+- ``scip_edges`` — every reference (call/use) resolved by SCIP, joining
+  caller→callee canonical_ids.
+- ``scip_index_state`` — bookkeeping: which ``.scip`` file we last
+  consumed for each source, with sha256 + indexed_at so we can detect
+  and skip unchanged inputs.
+
+The schema lives at library level (not under ``docgen/``) so the slim
+consumer can ``init_scip_schema`` without transitively importing any
+producer-only modules. The cross-source builder
+(``docgen.scip_cross_source.CrossSourceGraph``) populates these tables;
+slim-side query code reads them directly.
+"""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlite3 import Connection
+
+
+_SCIP_SYMBOLS_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS scip_symbols (
+    canonical_id          TEXT PRIMARY KEY,
+    source_name           TEXT NOT NULL,
+    language              TEXT NOT NULL,
+    file                  TEXT NOT NULL,
+    line_start            INTEGER NOT NULL,
+    line_end              INTEGER NOT NULL,
+    kind                  TEXT NOT NULL,
+    display_name          TEXT NOT NULL,
+    qualified_name        TEXT NOT NULL,
+    parent_qualified_name TEXT
+)
+'''
+
+_SCIP_EDGES_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS scip_edges (
+    caller_canonical_id   TEXT NOT NULL,
+    callee_canonical_id   TEXT NOT NULL,
+    edge_type             TEXT NOT NULL,
+    file                  TEXT NOT NULL,
+    line                  INTEGER NOT NULL,
+    confidence            TEXT NOT NULL,
+    PRIMARY KEY (caller_canonical_id, callee_canonical_id, file, line)
+)
+'''
+
+_SCIP_INDEX_STATE_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS scip_index_state (
+    source_name      TEXT PRIMARY KEY,
+    scip_path        TEXT NOT NULL,
+    file_sha256      TEXT NOT NULL,
+    indexed_at       TEXT NOT NULL,
+    indexer_version  TEXT
+)
+'''
+
+_SCIP_INDEXES = '''
+CREATE INDEX IF NOT EXISTS idx_scip_symbols_source ON scip_symbols(source_name);
+CREATE INDEX IF NOT EXISTS idx_scip_symbols_file   ON scip_symbols(file);
+CREATE INDEX IF NOT EXISTS idx_scip_edges_callee   ON scip_edges(callee_canonical_id);
+CREATE INDEX IF NOT EXISTS idx_scip_edges_caller   ON scip_edges(caller_canonical_id);
+'''
+
+
+# ---------------------------------------------------------------------------
+# API surface schema (Wave 4, Phase 7a)
+# ---------------------------------------------------------------------------
+
+# Producer-side: declared HTTP endpoints, joined to scip_symbols via
+# producer_symbol_id (the handler symbol). resolution_source records
+# whether the binding came from an OpenAPI/Swagger spec, framework
+# pattern matching, or manual override.
+_API_ENDPOINTS_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS api_endpoints (
+    endpoint_id          TEXT PRIMARY KEY,
+    source_name          TEXT NOT NULL,
+    http_method          TEXT NOT NULL,
+    path_template        TEXT NOT NULL,
+    producer_symbol_id   TEXT,
+    resolution_source    TEXT NOT NULL
+)
+'''
+
+# Consumer-side: HTTP call sites resolved to the endpoint they hit.
+# Composite PK across (consumer, endpoint, file, line) tolerates the
+# same call site appearing multiple times in re-runs without
+# ON CONFLICT IGNORE noise.
+_API_CALLS_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS api_calls (
+    consumer_symbol_id   TEXT NOT NULL,
+    endpoint_id          TEXT NOT NULL,
+    call_site_file       TEXT NOT NULL,
+    call_site_line       INTEGER NOT NULL,
+    resolution_source    TEXT NOT NULL,
+    confidence           TEXT NOT NULL,
+    PRIMARY KEY (consumer_symbol_id, endpoint_id, call_site_file, call_site_line)
+)
+'''
+
+_API_INDEXES = '''
+CREATE INDEX IF NOT EXISTS idx_api_endpoints_source       ON api_endpoints(source_name);
+CREATE INDEX IF NOT EXISTS idx_api_endpoints_producer_sym ON api_endpoints(producer_symbol_id);
+CREATE INDEX IF NOT EXISTS idx_api_calls_consumer         ON api_calls(consumer_symbol_id);
+CREATE INDEX IF NOT EXISTS idx_api_calls_endpoint         ON api_calls(endpoint_id);
+'''
+
+
+# ---------------------------------------------------------------------------
+# Layer C config-value index (Phase 2q)
+# ---------------------------------------------------------------------------
+
+# Persists Phase 2o's scanner output (HOCON / dotenv / etc.) so Layer C's
+# resolution traversal (Phase 2s) can look up config values by key during
+# reference walking. The UNIQUE on (source_name, file, key, line_start)
+# tolerates re-ingest without duplicate-constraint violations;
+# persist_config_values clears the source's rows before insert anyway.
+_CONFIG_VALUES_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS config_values (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_name TEXT NOT NULL,
+    file        TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    line_start  INTEGER NOT NULL,
+    UNIQUE(source_name, file, key, line_start)
+)
+'''
+
+_CONFIG_VALUES_INDEXES = '''
+CREATE INDEX IF NOT EXISTS idx_config_values_source     ON config_values(source_name);
+CREATE INDEX IF NOT EXISTS idx_config_values_source_key ON config_values(source_name, key);
+'''
+
+
+# ---------------------------------------------------------------------------
+# Layer C string-literal index (Phase 2p)
+# ---------------------------------------------------------------------------
+
+# Persists every string literal extracted from indexed source files,
+# attributed to its enclosing function/method (owning_symbol_id) where
+# present. Layer C's resolution traversal (Phase 2s) queries this when
+# walking back from a sink call site to find candidate literal
+# arguments inside the call's enclosing scope.
+_STRING_LITERALS_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS string_literals (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_name      TEXT NOT NULL,
+    file             TEXT NOT NULL,
+    line_start       INTEGER NOT NULL,
+    col_start        INTEGER NOT NULL,
+    value            TEXT NOT NULL,
+    owning_symbol_id TEXT
+)
+'''
+
+_STRING_LITERALS_INDEXES = '''
+CREATE INDEX IF NOT EXISTS idx_string_literals_source         ON string_literals(source_name);
+CREATE INDEX IF NOT EXISTS idx_string_literals_owning_symbol  ON string_literals(source_name, owning_symbol_id);
+CREATE INDEX IF NOT EXISTS idx_string_literals_file           ON string_literals(source_name, file);
+'''
+
+
+# ---------------------------------------------------------------------------
+# Layer C process_invocations (Phase 2t)
+# ---------------------------------------------------------------------------
+
+# Final Layer C output: one row per sink call site. ariadne_trace_flow
+# (Phase 9) joins this with scip_edges and api_calls to build
+# cross-language flow traces. ``target_path`` is nullable — unresolved
+# call sites are still recorded so the trace can report "attempted but
+# not resolvable". ``target_symbol_id`` is reserved for Phase 2t.b
+# fuzzy file-matching.
+_PROCESS_INVOCATIONS_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS process_invocations (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_name       TEXT NOT NULL,
+    caller_symbol_id  TEXT NOT NULL,
+    target_path       TEXT,
+    target_symbol_id  TEXT,
+    confidence        TEXT NOT NULL,
+    file              TEXT NOT NULL,
+    line_start        INTEGER NOT NULL,
+    line_end          INTEGER NOT NULL
+)
+'''
+
+_PROCESS_INVOCATIONS_INDEXES = '''
+CREATE INDEX IF NOT EXISTS idx_process_invocations_source ON process_invocations(source_name);
+CREATE INDEX IF NOT EXISTS idx_process_invocations_caller ON process_invocations(source_name, caller_symbol_id);
+CREATE INDEX IF NOT EXISTS idx_process_invocations_target ON process_invocations(target_symbol_id);
+'''
+
+
+# ---------------------------------------------------------------------------
+# HTTP client call sites (Phase 8b)
+# ---------------------------------------------------------------------------
+
+# Per-language HTTP client extractors (8b.1 Python, 8b.2 JS, 8b.3 JVM)
+# all write here. Phase 8c reads ``raw_url`` from these rows, resolves
+# them against ``api_endpoints.path_template``, and inserts matched
+# pairs into ``api_calls``.
+#
+# ``raw_url`` is the literal URL string captured at the call site —
+# stored as-is, normalization happens in Phase 8c. ``http_method`` is
+# nullable because some libraries (Scala play-ws fluent builders) carry
+# the method on a chained call we don't track in v1; the URL is still
+# useful to record.
+#
+# ``consumer_symbol_id`` is the enclosing function/method's
+# ``scip_symbols.canonical_id``; NULL when the call sits at module
+# level. ``sink_name`` is the ``SinkSpec.name`` that matched, useful
+# for audit / debugging.
+_HTTP_CLIENT_CALLS_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS http_client_calls (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_name         TEXT NOT NULL,
+    consumer_symbol_id  TEXT,
+    raw_url             TEXT NOT NULL,
+    http_method         TEXT,
+    call_site_file      TEXT NOT NULL,
+    call_site_line      INTEGER NOT NULL,
+    sink_name           TEXT NOT NULL,
+    confidence          TEXT NOT NULL
+)
+'''
+
+_HTTP_CLIENT_CALLS_INDEXES = '''
+CREATE INDEX IF NOT EXISTS idx_http_client_calls_source   ON http_client_calls(source_name);
+CREATE INDEX IF NOT EXISTS idx_http_client_calls_consumer ON http_client_calls(consumer_symbol_id);
+CREATE INDEX IF NOT EXISTS idx_http_client_calls_file     ON http_client_calls(source_name, call_site_file);
+'''
+
+
+def init_scip_schema(conn: 'Connection') -> None:
+    """Create the SCIP tables (cross-source graph + API surface +
+    config-value index + string-literal index + process_invocations)
+    and their indexes if missing.
+
+    Idempotent — safe to call on an existing DB. Used by Library's
+    __attrs_post_init__ so every fresh open of ariadne.db has the SCIP
+    surface available even before any indexer or Swagger ingestion has
+    populated it.
+    """
+    conn.execute(_SCIP_SYMBOLS_SCHEMA)
+    conn.execute(_SCIP_EDGES_SCHEMA)
+    conn.execute(_SCIP_INDEX_STATE_SCHEMA)
+    conn.executescript(_SCIP_INDEXES)
+    # API surface tables (Wave 4)
+    conn.execute(_API_ENDPOINTS_SCHEMA)
+    conn.execute(_API_CALLS_SCHEMA)
+    conn.executescript(_API_INDEXES)
+    # Layer C config-value index (Phase 2q)
+    conn.execute(_CONFIG_VALUES_SCHEMA)
+    conn.executescript(_CONFIG_VALUES_INDEXES)
+    # Layer C string-literal index (Phase 2p)
+    conn.execute(_STRING_LITERALS_SCHEMA)
+    conn.executescript(_STRING_LITERALS_INDEXES)
+    # Layer C process_invocations (Phase 2t)
+    conn.execute(_PROCESS_INVOCATIONS_SCHEMA)
+    conn.executescript(_PROCESS_INVOCATIONS_INDEXES)
+    # HTTP client call sites (Phase 8b)
+    conn.execute(_HTTP_CLIENT_CALLS_SCHEMA)
+    conn.executescript(_HTTP_CLIENT_CALLS_INDEXES)
+
+
+__all__ = ['init_scip_schema']

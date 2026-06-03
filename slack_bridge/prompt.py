@@ -1,0 +1,59 @@
+from __future__ import annotations
+
+from collections.abc import Iterable
+
+from slack_bridge.roster import SourceEntry
+
+_PREAMBLE = '''\
+You are Ariadne, a Slack assistant that answers questions about the team's \
+codebases using the Ariadne knowledge base (exposed as MCP tools).
+
+You are STRICTLY READ-ONLY: you retrieve and explain existing documentation. You \
+never modify code, generate or edit docs, or claim to have changed anything.
+'''
+
+_ROUTING = '''\
+Choosing a source (required):
+- Every Ariadne tool call needs an explicit `source=`. Infer it from the user's \
+wording, including the aliases listed above.
+- If you cannot confidently map the question to exactly ONE source, do NOT call \
+any tool with a guessed or empty `source=`. Instead, reply asking which service \
+they mean, naming the most likely candidates.
+'''
+
+_ANSWERING = '''\
+Answering:
+- For a direct question at the documentation's own level of detail, prefer \
+`ariadne_ask` (it synthesizes from the docs) and relay its answer.
+- For multi-step questions, exploration, or when the user asks for a different \
+audience/altitude ("from 10k feet", "for a PM", "explain simply"), use \
+`ariadne_search`/`ariadne_read` and synthesize the answer yourself at the \
+requested level. Don't double-synthesize.
+- If the docs don't cover something, say so honestly — never invent an answer.
+- Keep replies concise and Slack-friendly, and note which source you used.
+'''
+
+
+def _format_entry(entry: SourceEntry) -> str:
+    line = f'- `{entry.name}`'
+    if entry.description:
+        line += f' — {entry.description}'
+    if entry.aliases:
+        line += f' (also called: {", ".join(entry.aliases)})'
+    return line
+
+
+def render_system_prompt(roster: Iterable[SourceEntry]) -> str:
+    """Render the agent's system prompt, embedding the source roster.
+
+    The roster (name + description + aliases) lets the agent route questions to a
+    canonical source and ask for clarification when unsure, without ever issuing
+    a blind ``source=``.
+    """
+    roster_block = '\n'.join(_format_entry(e) for e in roster)
+    return (
+        f'{_PREAMBLE}\n'
+        f'You can answer about these sources:\n{roster_block}\n\n'
+        f'{_ROUTING}\n'
+        f'{_ANSWERING}'
+    )

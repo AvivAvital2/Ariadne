@@ -1,0 +1,28 @@
+# Example operational config for the Ariadne Slack bridge.
+# Copy to slack_bridge.yaml and point $ARIADNE_SLACK_CONFIG at it.
+#
+# Holds NO secrets. Tokens/keys come from the environment / secret store:
+#   bridge process : CLAUDE_CODE_OAUTH_TOKEN, SLACK_BOT_TOKEN, SLACK_APP_TOKEN
+#                    (must NOT have ANTHROPIC_API_KEY — that would make the agent metered)
+#   Ariadne subprocess (scoped) : OPENAI_API_KEY, ARIADNE_ANTHROPIC_API_KEY
+
+allowed_users: []        # Slack user IDs (U0123…); an allow-listed user may use the bot anywhere, incl. DMs
+allowed_channels: []     # Slack channel IDs (C0ENG…); opens the whole channel
+# both empty ⇒ deny everyone (fail-closed)
+
+pool:
+  max_size: 50           # max concurrent warm sessions (each holds an Ariadne MCP subprocess)
+  idle_ttl_seconds: 480  # evict a thread's session after this much idle time
+  turn_timeout_seconds: 120
+
+enable_feedback: false   # opt-in: allow the bot to write ariadne_log_hit/miss (usage_events)
+
+source_descriptions:     # one-liners the agent sees, to route + clarify
+  ariadne: 'Documentation library / knowledge engine that generates & serves codebase docs (this repo).'
+  projecta: 'First example project — one-line summary of what this source covers.'
+  # projectb: '...'
+
+source_aliases:          # colloquial term → canonical source (bridge-only; never sent to Ariadne)
+  ariadne: [ariadne, docs, 'knowledge base', kb]
+  projecta: [projecta, 'first project', 'project alpha', proja]
+  projectb: [projectb, projb]
