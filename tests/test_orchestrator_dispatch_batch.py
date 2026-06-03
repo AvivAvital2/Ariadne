@@ -300,6 +300,101 @@ class TestDispatchBatchFetchFails:
 
 
 # ---------------------------------------------------------------------------
+# _dispatch_batch — progress emissions (UX)
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchBatchProgress:
+    """Progress emitted across a batch's life must never park a
+    *determinate* bar at 0/N — that renders as a frozen/empty bar while
+    the batch is really uploading, queued, or processing (the reported
+    UX bug). Indeterminate phases (upload, queued, in-flight-but-none-
+    done, download) emit ``total=0`` so the CLI shows a live *pulsing*
+    bar; only once real per-request counts land (succeeded+errored>0)
+    does the bar switch to a determinate ``done/total`` so the user sees
+    the Anthropic-style 1200/1800 progression.
+    """
+
+    @pytest.mark.asyncio
+    async def test_phases_pulse_and_real_counts_drive_the_bar(
+        self, tmp_path: Path,
+    ) -> None:
+        config = _make_config(tmp_path)
+        async with DocGenOrchestrator(config) as orch:
+            events: list[tuple[str, int, int]] = []
+            orch.progress_callback = (
+                lambda msg, cur, tot: events.append((msg, cur, tot))
+            )
+
+            async def driving_poll(
+                batch_id: str,
+                *,
+                on_progress=None,
+            ) -> BatchStatus:
+                # The count progression both providers surface:
+                # queued (all-zero) → processing/none-done →
+                # 1-of-2 done → both done.
+                on_progress(0, 0, 0)
+                on_progress(2, 0, 0)
+                on_progress(1, 1, 0)
+                on_progress(0, 2, 0)
+                return BatchStatus(
+                    batch_id=batch_id,
+                    processing_status='ended',
+                    processing=0, succeeded=2, errored=0,
+                )
+
+            with (
+                patch.object(
+                    AnthropicBatchStrategy, 'submit_batch',
+                    new=AsyncMock(return_value=BatchSubmission(
+                        batch_id='msgbatch_prog',
+                    )),
+                ),
+                patch.object(
+                    AnthropicBatchStrategy, 'poll_batch',
+                    new=AsyncMock(side_effect=driving_poll),
+                ),
+                patch.object(
+                    AnthropicBatchStrategy, 'fetch_batch_results',
+                    new=AsyncMock(return_value={'0': 'A', '1': 'B'}),
+                ),
+            ):
+                results, abort = await orch._dispatch_batch(
+                    _sample_prompts(),
+                    _file_to_idxs(),
+                    config_hash='hash-prog',
+                )
+
+            assert abort is None
+            assert results == {'0': 'A', '1': 'B'}
+
+            # Core invariant: nothing parks a determinate bar at 0/N.
+            frozen = [(m, c, t) for (m, c, t) in events if c == 0 and t > 0]
+            assert not frozen, f'frozen determinate bar(s): {frozen}'
+
+            # Four indeterminate (pulsing) phases: upload, queued,
+            # in-flight-none-done, download — each emits total == 0.
+            indeterminate = [(m, c, t) for (m, c, t) in events if t == 0]
+            assert len(indeterminate) >= 4, events
+
+            # Real per-request counts drive a determinate bar: 1/2 → 2/2.
+            determinate = [(c, t) for (_, c, t) in events if t > 0]
+            assert (1, 2) in determinate, events
+            assert (2, 2) in determinate, events
+
+            # Phase labelling intent: first event is the upload, last is
+            # the download/fetch — the upload→poll→download arc the user
+            # asked to be observable.
+            assert any(
+                w in events[0][0].lower() for w in ('submit', 'upload')
+            ), events[0]
+            assert any(
+                w in events[-1][0].lower() for w in ('download', 'fetch')
+            ), events[-1]
+
+
+# ---------------------------------------------------------------------------
 # _fetch_with_retry — focused tests
 # ---------------------------------------------------------------------------
 

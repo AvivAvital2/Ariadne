@@ -1082,10 +1082,7 @@ class DocGenOrchestrator:
             for i, p in enumerate(prompts)
         ]
 
-        self._emit(
-            f'Submitting batch: {len(prompts)} prompts...',
-            0, len(prompts),
-        )
+        self._emit(f'Submitting {len(prompts)} prompts to the batch API...', 0, 0)
 
         try:
             submission = await strategy.submit_batch(requests)
@@ -1111,21 +1108,29 @@ class DocGenOrchestrator:
             processing: int, succeeded: int, errored: int,
         ) -> None:
             done = succeeded + errored
-            if processing == 0 and succeeded == 0 and errored == 0:
-                # Anthropic returns all-zero counts during the brief
-                # queued window before processing starts. Replace the
-                # misleading "0 processing" wording with an explicit
-                # queued state.
-                msg = (
-                    f'Batch queued by Anthropic — awaiting processing '
-                    f'({total} prompts)'
+            if done > 0:
+                # Real per-request counts have landed — drive a determinate
+                # bar so the user sees the Anthropic-style 1200/1800
+                # progression as requests finish.
+                in_flight = f' ({processing} in flight)' if processing else ''
+                self._emit(
+                    f'Batch processing: {done}/{total} done{in_flight}',
+                    done, total,
+                )
+            elif processing > 0:
+                # Actively processing but nothing finished yet. Pulse rather
+                # than park a determinate bar at 0/N (which reads as frozen).
+                self._emit(
+                    f'Batch processing — {processing} of {total} in flight...',
+                    0, 0,
                 )
             else:
-                msg = (
-                    f'Batch in flight: {succeeded} ok, {errored} errored, '
-                    f'{processing} processing'
+                # All-zero counts: queued by the provider, awaiting
+                # processing. Pulse here too so the bar stays alive.
+                self._emit(
+                    f'Batch queued — awaiting processing ({total} prompts)',
+                    0, 0,
                 )
-            self._emit(msg, done, total)
 
         try:
             await strategy.poll_batch(
@@ -1139,9 +1144,7 @@ class DocGenOrchestrator:
                 detail=f'batch_id={submission.batch_id}; {e}',
             )
 
-        self._emit(
-            'Batch ended; fetching results...', total, total,
-        )
+        self._emit(f'Batch ended — downloading {total} results...', 0, 0)
         results = await self._fetch_with_retry(
             strategy, submission.batch_id,
         )
