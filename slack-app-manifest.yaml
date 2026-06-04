@@ -1,0 +1,48 @@
+# Ariadne — Slack app manifest
+#
+# Create the app from this file at https://api.slack.com/apps
+#   → Create New App → From an app manifest → pick workspace → paste this → Create.
+# It pre-fills the scopes, events, the /ariadne slash command, and Socket Mode
+# (no public URL needed). After creating the app:
+#   1. Basic Information → App-Level Tokens → generate a token with the
+#      `connections:write` scope → that value is SLACK_APP_TOKEN (xapp-…).
+#   2. Install App → Install to Workspace → OAuth & Permissions →
+#      Bot User OAuth Token → that value is SLACK_BOT_TOKEN (xoxb-…).
+# Operational config + the rest of the env vars (CLAUDE_CODE_OAUTH_TOKEN,
+# OPENAI_API_KEY, ARIADNE_ANTHROPIC_API_KEY, ARIADNE_SLACK_CONFIG): see
+# slack_bridge.yaml.example and the "Slack Bridge" section of the README.
+# (Comments are valid YAML — Slack ignores them when you paste this in.)
+
+display_information:
+  name: Ariadne
+  description: Precise, pre-researched answers about your codebase
+  background_color: "#1f2d3d"
+features:
+  bot_user:
+    display_name: Ariadne
+    always_online: true
+  app_home:
+    messages_tab_enabled: true          # lets users DM the bot
+    messages_tab_read_only_enabled: false
+  slash_commands:
+    - command: /ariadne
+      description: Ask Ariadne about the codebase
+      usage_hint: "[your question]"
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read   # receive @Ariadne mentions
+      - chat:write          # post + edit replies (chat.postMessage / chat.update)
+      - commands            # the /ariadne slash command
+      - im:history          # read direct messages (the message.im events)
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.im          # DMs only — matches the bridge's channel_type=='im' filter
+  interactivity:
+    is_enabled: false       # no buttons/modals
+  org_deploy_enabled: false
+  socket_mode_enabled: true # no Request URLs needed
+  token_rotation_enabled: false
