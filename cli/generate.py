@@ -10,7 +10,7 @@ Owns:
 from __future__ import annotations
 
 import argparse
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,10 +30,6 @@ DEFAULT_GENERATE_DOC_TYPES = (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
-
-    from rich.progress import Progress
-
     from config import Config
 
 console = Console()
@@ -156,76 +152,6 @@ async def cli_confirm(msg: str) -> bool:
 # ---------------------------------------------------------------------------
 # Dry-run cost estimator
 # ---------------------------------------------------------------------------
-
-
-def _scaffold_overhead_counter(model: str) -> 'Callable[[str], int | None]':
-    """Per-doc-type prompt-scaffolding token counter (tiktoken of the real
-    templates), cached per doc_type — for ``estimate_cost(prompt_overhead_for=)``.
-
-    Shared by both dry-run surfaces. Returns ``None`` per doc_type when
-    tiktoken is unavailable, so estimate_cost falls back to its flat
-    PROMPT_OVERHEAD_TOKENS heuristic.
-    """
-    from docgen.prompts import static_scaffold
-    from docgen.token_count import count_text_tokens
-
-    cache: dict = {}
-
-    def counter(doc_type: str) -> int | None:
-        if doc_type not in cache:
-            cache[doc_type] = count_text_tokens(static_scaffold(doc_type), model)
-        return cache[doc_type]
-
-    return counter
-
-
-@asynccontextmanager
-async def _progress_heartbeat(
-    progress: 'Progress', interval: float = 0.5,
-) -> 'AsyncIterator[None]':
-    """Refresh the progress display on a fixed cadence for the duration of
-    a long async phase.
-
-    rich's auto-refresh doesn't reliably tick during batch's long awaits —
-    the ~30s status polls and the single long results download — so the
-    spinner and elapsed timer freeze between the sparse explicit updates.
-    Ticking ``progress.refresh()`` ourselves keeps them moving.
-    """
-    import asyncio
-
-    async def _tick() -> None:
-        try:
-            while True:
-                await asyncio.sleep(interval)
-                progress.refresh()
-        except asyncio.CancelledError:
-            pass
-
-    task = asyncio.create_task(_tick())
-    try:
-        yield
-    finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-
-def _generate_exit_code(result: object) -> int:
-    """Exit code for a finished generation run.
-
-    ``0`` = success or nothing-to-do. A *partial* failure (some docs
-    generated, some failed) is a warning, not an error — so an ``onboard``
-    pipeline keeps going to its later phases rather than halting on a
-    single validation hiccup that batch mode doesn't retry. ``1`` is a
-    HARD failure only: the run aborted, or every attempted doc failed.
-    """
-    if getattr(result, 'aborted', False):
-        return 1
-    if result.docs_created == 0 and result.docs_failed > 0:
-        return 1
-    return 0
 
 
 def _library_for_estimate(db_path: Path | None) -> object:
@@ -357,7 +283,6 @@ def _print_cost_estimate(
     # unavailable.
     from docgen.token_count import file_token_counter
     _input_tokens = file_token_counter(model)
-    _scaffold_overhead = _scaffold_overhead_counter(model)
 
     # For auto mode we need a planned-calls count to compare against
     # the threshold. ``estimate_cost(batch_enabled=False)`` is the
@@ -402,7 +327,6 @@ def _print_cost_estimate(
         caching_enabled=caching_enabled,
         batch_enabled=batch_resolved,
         input_tokens_for=_input_tokens,
-        prompt_overhead_for=_scaffold_overhead,
     )
 
     # Full-regeneration figure for the note — only recomputed when some
@@ -416,7 +340,6 @@ def _print_cost_estimate(
             caching_enabled=caching_enabled,
             batch_enabled=batch_resolved,
             input_tokens_for=_input_tokens,
-            prompt_overhead_for=_scaffold_overhead,
         )
     else:
         full_estimate = estimate
@@ -918,10 +841,7 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
             yes_confirm if getattr(args, 'confirm_yes', False)
             else cli_confirm
         )
-        # Heartbeat keeps the spinner + elapsed timer moving through the
-        # long batch awaits (polls + results download), which otherwise
-        # leave the bar frozen between sparse progress updates.
-        async with orchestrator, _progress_heartbeat(progress):
+        async with orchestrator:
             result = await orchestrator.run(
                 progress_callback=on_progress,
                 crossref_progress=on_crossref_progress,
@@ -1099,15 +1019,4 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
                     f'more validation failures',
                 )
 
-    # Partial failure (some docs succeeded, some failed) is a warning, not
-    # a hard error — surface it loudly but don't fail the run, so an
-    # onboard pipeline continues to its later phases. Batch mode doesn't
-    # retry validation failures, so a re-run picks up just the failed docs.
-    if result.docs_failed > 0 and result.docs_created > 0:
-        console.print(
-            f'[yellow]⚠ {result.docs_failed} doc(s) failed[/yellow] '
-            f'({result.docs_created} succeeded). Re-run `ariadne generate` '
-            f'to retry just the failed ones (staleness skips the rest).'
-        )
-
-    return _generate_exit_code(result)
+    return 0 if result.docs_failed == 0 else 1

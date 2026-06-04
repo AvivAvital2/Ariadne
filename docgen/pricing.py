@@ -137,7 +137,6 @@ def estimate_cost(
     batch_enabled: bool = False,
     output_tokens_for=None,
     input_tokens_for=None,
-    prompt_overhead_for=None,
 ) -> CostEstimate:
     """Estimate total cost for a generation run.
 
@@ -155,14 +154,6 @@ def estimate_cost(
     heuristic for that file; ``None`` falls back to the heuristic. Output
     tokens can't be counted ahead of generation, so only the input side
     is made exact.
-
-    ``prompt_overhead_for(doc_type) -> int | None`` (optional) supplies an
-    *exact* token count for that doc-type's static prompt scaffolding
-    (system prompt + template framing) — e.g. tiktoken of
-    ``docgen.prompts.static_scaffold(doc_type)``. When it returns a value
-    it replaces the flat ``PROMPT_OVERHEAD_TOKENS`` for that doc-type
-    (including the prompt-caching math); ``None`` falls back to the flat
-    constant.
 
     Args:
         files: Iterable of ``(path, size_in_bytes)`` for every file the
@@ -225,20 +216,7 @@ def estimate_cost(
                 out if out is not None else AVG_OUTPUT_TOKENS_PER_CALL
             )
 
-    # Per-doc-type scaffolding (system prompt + template framing). Exact
-    # via ``prompt_overhead_for`` (tiktoken of the real templates) when
-    # supplied, else the flat ``PROMPT_OVERHEAD_TOKENS`` heuristic.
-    def _overhead(doc_type: str) -> int:
-        if prompt_overhead_for is not None:
-            v = prompt_overhead_for(doc_type)
-            if v is not None:
-                return int(v)
-        return PROMPT_OVERHEAD_TOKENS
-
-    overhead_per_type = {t: _overhead(t) for t in calls_per_type}
-    static_input_uncached = sum(
-        overhead_per_type[t] * n for t, n in calls_per_type.items()
-    )
+    static_input_uncached = PROMPT_OVERHEAD_TOKENS * total_calls
     input_tokens = dynamic_input_tokens + static_input_uncached
     embedding_tokens = total_calls * EMBEDDING_TOKENS_PER_CALL
 
@@ -270,9 +248,8 @@ def estimate_cost(
     # PROMPT_OVERHEAD_TOKENS × (1.25 + 0.1 × (n - 1)) instead of × n.
     if caching_enabled:
         static_input_cached = sum(
-            overhead_per_type[t]
-            * (_CACHE_WRITE_MULT + _CACHE_READ_MULT * (n - 1))
-            for t, n in calls_per_type.items() if n > 0
+            PROMPT_OVERHEAD_TOKENS * (_CACHE_WRITE_MULT + _CACHE_READ_MULT * (n - 1))
+            for n in calls_per_type.values() if n > 0
         )
         effective_input = dynamic_input_tokens + static_input_cached
     else:
@@ -337,7 +314,6 @@ def estimate_generate_by_doc_type(
     batch_enabled: bool = False,
     output_tokens_for=None,
     input_tokens_for=None,
-    prompt_overhead_for=None,
 ) -> list[tuple[str, CostEstimate]]:
     """Per-doc-type cost breakdown for the generate phase.
 
@@ -357,7 +333,6 @@ def estimate_generate_by_doc_type(
                 batch_enabled=batch_enabled,
                 output_tokens_for=output_tokens_for,
                 input_tokens_for=input_tokens_for,
-                prompt_overhead_for=prompt_overhead_for,
             ),
         )
         for t in doc_types

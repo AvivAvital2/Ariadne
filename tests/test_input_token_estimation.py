@@ -11,7 +11,7 @@ offline dry-run never crashes.
 """
 from __future__ import annotations
 
-from docgen.pricing import CHARS_PER_TOKEN, PROMPT_OVERHEAD_TOKENS, estimate_cost
+from docgen.pricing import CHARS_PER_TOKEN, estimate_cost
 
 # ---------------------------------------------------------------------------
 # estimate_cost: input_tokens_for hook
@@ -46,71 +46,6 @@ def test_input_tokens_for_none_falls_back_to_chars(tmp_path):
         input_tokens_for=lambda _path: None,
     )
     assert fell_back.input_tokens == base.input_tokens
-
-
-# ---------------------------------------------------------------------------
-# estimate_cost: prompt_overhead_for hook (scaffolding per doc-type)
-# ---------------------------------------------------------------------------
-
-
-def test_prompt_overhead_for_overrides_flat_scaffold(tmp_path):
-    f = tmp_path / 'a.py'
-    f.write_text('x' * 4000)
-    files = [(f, f.stat().st_size)]
-
-    base = estimate_cost(files, ('explanation',), 'gpt-5.4')
-    hooked = estimate_cost(
-        files, ('explanation',), 'gpt-5.4',
-        prompt_overhead_for=lambda _dt: 50,
-    )
-    # One call; the scaffolding term drops from the flat 800 to 50.
-    assert base.input_tokens - hooked.input_tokens == PROMPT_OVERHEAD_TOKENS - 50
-
-
-def test_prompt_overhead_for_none_falls_back_to_flat(tmp_path):
-    f = tmp_path / 'a.py'
-    f.write_text('x' * 4000)
-    files = [(f, f.stat().st_size)]
-
-    base = estimate_cost(files, ('explanation',), 'gpt-5.4')
-    fell_back = estimate_cost(
-        files, ('explanation',), 'gpt-5.4',
-        prompt_overhead_for=lambda _dt: None,
-    )
-    assert fell_back.input_tokens == base.input_tokens
-
-
-# ---------------------------------------------------------------------------
-# Prompt text the estimator tiktoken-counts (scaffolding / describe)
-# ---------------------------------------------------------------------------
-
-
-def test_static_scaffold_returns_text_per_doc_type():
-    from docgen.prompts import static_scaffold
-
-    for dt in ('explanation', 'architecture', 'qa', 'gotcha', 'diagram'):
-        text = static_scaffold(dt)
-        assert isinstance(text, str) and len(text) > 50, dt
-    # The scaffolding is the fixed instructional text — it must NOT carry
-    # the file content (that's counted separately as the dynamic input).
-    assert 'def ' not in static_scaffold('explanation')
-
-
-def test_build_describe_prompt_includes_element_metadata():
-    from docgen.catalog_describer import build_describe_prompt
-
-    md = {
-        'subtype': 'function',
-        'qualified_name': 'pkg.mod.do_thing',
-        'parent_qualified_name': 'pkg.mod',
-        'signature': 'def do_thing(x: int) -> str',
-        'file': 'pkg/mod.py',
-        'location': {'line_start': 10, 'line_end': 20},
-    }
-    prompt = build_describe_prompt(md)
-    assert 'pkg.mod.do_thing' in prompt
-    assert 'def do_thing(x: int) -> str' in prompt
-    assert 'function' in prompt
 
 
 def test_file_token_counter_is_shared_and_cached(tmp_path):
