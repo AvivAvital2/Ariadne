@@ -1,8 +1,12 @@
+<p align="center">
+  <img src="assets/Ariadne.png" alt="Ariadne logo" width="220">
+</p>
+
 # Ariadne
 
 A source-code knowledge base for LLM agents. Ariadne generates, indexes, and serves documentation about your codebase — code explanations, structural catalogs, cross-cutting themes — so any MCP-enabled agent (Claude Code, custom agents, anything speaking the Model Context Protocol) can answer questions about your code without rediscovering it.
 
-> **License: [Apache License 2.0](LICENSE).** Free to use, modify, and redistribute — including for commercial purposes — subject to the terms of the license.
+> **License: [PolyForm Noncommercial 1.0.0](LICENSE).** Free to use, modify, and redistribute for any noncommercial purpose — personal projects, academic research, teaching, and use by charitable, educational, public research, public safety/health, environmental, or governmental organizations. For commercial use, contact Aviv Avital at ubthor@gmail.com for a commercial license.
 
 ## Why Ariadne?
 
@@ -25,8 +29,6 @@ Ariadne walks the source tree, extracts a structural catalog of classes, functio
 To stay current, Ariadne hooks into git: a `notify-changed` call or a post-merge sync re-extracts and re-documents only the files whose content actually changed, so a small diff costs only the touched files in LLM work, not a full re-index. That's the key cost advantage over GraphRAG, which typically rebuilds entity graphs and community summaries wholesale on each refresh; Ariadne reuses everything stable and caches static prompt prefixes to pay the LLM only on real deltas.
 
 The net effect: when an agent opens a file, it already knows what the file does, what depends on it, and which theme it belongs to.
-
-> See **[HOW_IT_WORKS.md](HOW_IT_WORKS.md)** for a step-by-step walkthrough of the whole pipeline, with a flow diagram.
 
 ## Installation
 
@@ -53,8 +55,6 @@ uv sync
   OPENAI_API_KEY=sk-...           # always required (embeddings)
   ANTHROPIC_API_KEY=sk-ant-...    # only when generating with Claude (e.g. claude-opus-4-8)
   ```
-
-  Or copy the committed template and fill in your keys: `cp .env.example .env`.
 
 ### Supported Languages
 
@@ -220,8 +220,6 @@ The MCP server exposes 40+ tools (some multi-action) to LLM agents.
 | `ariadne_review` / `ariadne_review_checklist` | Pre-merge review of changed files |
 | `ariadne_debug_context` | Assemble debugging context for an issue |
 | `ariadne_analyze_issue` | Walk through an issue with code context |
-| `ariadne_trace_flow` | Trace cross-language flow from a symbol (SCIP + HTTP + process tiers) |
-| `ariadne_task_context` | One-shot task briefing: bundles search, per-file explain, review checklist, and find_tests |
 
 **Branch & sync state**
 | Tool | Purpose |
@@ -250,8 +248,6 @@ The MCP server exposes 40+ tools (some multi-action) to LLM agents.
 | `ariadne_contribute` | Save a finding back to the knowledge base |
 | `ariadne_notify_changed` | Trigger incremental catalog refresh for changed files |
 | `ariadne_merge` | Post-merge doc reconciliation |
-| `ariadne_discover_source` | Detect a source's SCIP indexer plan (writes `.ariadne/manifest.json`) |
-| `ariadne_index_source` | Run SCIP indexers for a source and persist the cross-source graph |
 
 Retrieval tools are read-only. Tracking tools record feedback. Administrative actions (full generation, cleanup, migration) require the CLI.
 
@@ -269,30 +265,11 @@ The "explain further" property: dev-level content is always retrievable via a se
 
 Cache invalidation is lazy — at the next cache-lookup, if any parent dev doc has been updated since the audience_response was created, the stale row is dropped and the adapter re-runs. Dev doc updates never block on this; the freshness cost lives entirely on the PM-query path.
 
-Role taxonomy is currently `developer` (default) + `product_manager`. Extension to other audiences is a config change, not a code change.
+Role taxonomy is currently `developer` (default) + `product_manager`. Extension to other audiences is a config change, not a code change — see `designs/role-aware-responses.md`.
 
 > **Tip:** Search returns full document content, which may trigger Claude Code's "Large MCP response" warning. Set `MAX_MCP_OUTPUT_TOKENS=50000` in your `.claude/settings.local.json` `env` section to suppress it. See [docs/claude-code-integration.md](docs/claude-code-integration.md) for details.
 
 See [docs/claude-code-integration.md](docs/claude-code-integration.md) for setup details.
-
-## Slack Bridge (optional)
-
-`ariadne-slack` runs a **read-only Slack bot** that bridges Slack → Claude (via the Claude Agent SDK) → Ariadne's MCP tools. A user @mentions the bot, DMs it, or runs the `/ariadne` slash command, and Claude answers using the same read-only Ariadne tools listed above. It runs over Slack Socket Mode and keeps a pool of warm per-thread sessions, each holding its own Ariadne MCP subprocess.
-
-```bash
-ariadne-slack          # console entry point (installed by `uv sync`)
-# or: python -m slack_bridge
-```
-
-**Configuration** is a YAML file pointed to by `$ARIADNE_SLACK_CONFIG` — copy [`slack_bridge.yaml.example`](slack_bridge.yaml.example) as a starting point. It holds **no secrets**, only:
-- `allowed_users` / `allowed_channels` — access control; **both empty ⇒ deny everyone** (fail-closed)
-- `pool` — `max_size`, `idle_ttl_seconds`, `turn_timeout_seconds`
-- `enable_feedback` — opt-in; lets the bot record `ariadne_log_hit`/`miss`
-- `source_descriptions` / `source_aliases` — help the agent route a question to the right source
-
-**Secrets come from the environment**, split across two trust boundaries:
-- **Bridge process:** `CLAUDE_CODE_OAUTH_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`. It must **not** carry `ANTHROPIC_API_KEY` — the agent runs on the OAuth token (unmetered), and the bridge fails fast at startup if a metered key is present.
-- **Ariadne subprocess (scoped):** `OPENAI_API_KEY` (embeddings) + `ARIADNE_ANTHROPIC_API_KEY`.
 
 ## Commands
 
@@ -351,7 +328,6 @@ ariadne-slack          # console entry point (installed by `uv sync`)
 | `ariadne callers <symbol>` | Show what calls a symbol (cross-source, compiler-precise) |
 | `ariadne callees <symbol>` | Show what a symbol calls |
 | `ariadne impact_radius <symbol>` | Show files affected by a change to a symbol |
-| `ariadne trace-flow <symbol>` | Cross-language flow trace (SCIP edges + HTTP + process tiers) |
 | `ariadne improve --dead-code` | Surface zero-reference symbols (requires SCIP indexes) |
 | **MCP** | |
 | `ariadne mcp` | Start the MCP server (stdio transport) |
@@ -1076,4 +1052,4 @@ Run `ariadne gaps --analyze` for LLM-powered recommendations, or ask Claude: "Wh
 
 ## License
 
-[Apache License 2.0](LICENSE) — free to use, modify, and redistribute, including for commercial purposes, subject to the terms of the license.
+[PolyForm Noncommercial 1.0.0](LICENSE) — free for any noncommercial purpose. Commercial use requires a separate written license from the copyright holder; contact ubthor@gmail.com.
