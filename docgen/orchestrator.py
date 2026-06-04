@@ -1199,16 +1199,7 @@ class DocGenOrchestrator:
         all_results: list[GenerationResult] = []
         all_val_results: list[ValidationResult] = []
 
-        # Storing each doc embeds it (one embedding call per doc), which
-        # for a large batch is many seconds of work AFTER the download.
-        # Emit per-file progress so the bar moves here instead of looking
-        # frozen on the prior "downloading results" message.
-        store_total = len(files_to_process)
-        for store_done, path in enumerate(files_to_process):
-            self._emit(
-                f'Storing & embedding docs: {store_done}/{store_total} files...',
-                store_done, store_total,
-            )
+        for path in files_to_process:
             # Pre-gen failures: count one failure per requested doc_type.
             # No prompts to assemble.
             if path in pre_gen_failed:
