@@ -215,7 +215,11 @@ class TestRunBatchEndToEnd:
         source = _make_source_tree(tmp_path)
         config = _make_config(tmp_path, source)
 
+        progress_msgs: list[str] = []
         async with DocGenOrchestrator(config) as orch:
+            orch.progress_callback = (
+                lambda msg, cur, tot: progress_msgs.append(msg)
+            )
             provider = orch._generator._provider
             with (
                 patch.object(
@@ -246,6 +250,10 @@ class TestRunBatchEndToEnd:
         assert mock_submit.call_count == 1
         assert isinstance(result, PipelineResult)
         assert result.aborted is False
+        # The store/embed phase must emit its own progress — otherwise the
+        # bar looks frozen on "downloading results" for the whole (slow)
+        # store. Pin that a per-file storing message is emitted.
+        assert any('Storing' in m for m in progress_msgs), progress_msgs
 
 
 # ---------------------------------------------------------------------------

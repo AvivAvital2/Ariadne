@@ -527,6 +527,26 @@ def get_template(doc_type: DocType) -> PromptTemplate:
     return TEMPLATES[doc_type]
 
 
+def static_scaffold(doc_type: DocType) -> str:
+    """The fixed prompt scaffolding for ``doc_type`` — system prompt plus
+    template framing and output spec, with the ``{...}`` content slots
+    left as literals.
+
+    This is the per-call, content-independent part of the prompt the cost
+    estimator can tokenize exactly (the file content and metadata are
+    counted separately). Returns ``''`` for an unknown doc_type so callers
+    can fall back to a flat heuristic.
+    """
+    template = TEMPLATES.get(doc_type)
+    if template is None:
+        return ''
+    return '\n'.join((
+        template.system_prompt,
+        template.user_template,
+        template.output_format,
+    ))
+
+
 def format_module_info(module_name: str, docstring: str | None, classes: list[str], functions: list[str]) -> str:
     """Format module information for prompt injection.
 

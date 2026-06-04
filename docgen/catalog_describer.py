@@ -35,24 +35,30 @@ _PROMPT = (
     'Location: {file}:{line_start}-{line_end}\n\n'                                                                                                                                 
     'Description:'                                                                                                                                                                   
 )
-                                                                                                                                                                                     
-                
+def build_describe_prompt(metadata: dict) -> str:
+    """The exact user prompt ``describe_element`` sends for one element.
+
+    Pure (no LLM, no I/O) so the cost estimator can tokenize the real
+    per-element input instead of guessing a flat per-call figure.
+    """
+    location = metadata.get('location') or {}
+    return _PROMPT.format(
+        subtype=metadata.get('subtype', ''),
+        qualified_name=metadata.get('qualified_name', ''),
+        parent=metadata.get('parent_qualified_name') or '(module-level)',
+        signature=metadata.get('signature', ''),
+        file=metadata.get('file', ''),
+        line_start=location.get('line_start', 0),
+        line_end=location.get('line_end', 0),
+    )
+
+
 async def describe_element(metadata: dict, *, model: str | None = None) -> str:
     """Generate a 1-2 sentence description for a single catalog element."""
-    location = metadata.get('location') or {}                                                                                                                                        
-    prompt = _PROMPT.format(
-        subtype=metadata.get('subtype', ''),                                                                                                                                         
-        qualified_name=metadata.get('qualified_name', ''),
-        parent=metadata.get('parent_qualified_name') or '(module-level)',                                                                                                            
-        signature=metadata.get('signature', ''),
-        file=metadata.get('file', ''),                                                                                                                                               
-        line_start=location.get('line_start', 0),
-        line_end=location.get('line_end', 0),                                                                                                                                        
-    )           
     response = await chat_complete(
-        [{'role': 'user', 'content': prompt}],                                                                                                                                       
+        [{'role': 'user', 'content': build_describe_prompt(metadata)}],
         model=model,
-    )                                                                                                                                                                                
+    )
     return response.strip()
 
 
