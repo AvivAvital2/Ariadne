@@ -1916,7 +1916,27 @@ def _estimate_themes_cost(
     if rates is None:
         return n, None, None
     input_per_m, output_per_m = rates
-    input_total = n * _THEMES_INPUT_TOKENS_PER_THEME
+    # Input: tiktoken each theme's REAL prompt (system + user) — assembled
+    # read-only from the clustered members. Falls back to the flat
+    # per-theme figure if tiktoken can't count any theme. Output can't be
+    # counted ahead of generation, so it stays the flat heuristic.
+    from docgen.themes import _build_theme_request
+    from docgen.token_count import count_text_tokens
+    input_total = 0
+    _tt_ok = n > 0
+    for _th in themes:
+        _req = _build_theme_request(library, _th.cluster_id)
+        if _req is None:
+            continue
+        _cnt = count_text_tokens(
+            _req.system_prompt + '\n' + _req.user_prompt, model,
+        )
+        if _cnt is None:
+            _tt_ok = False
+            break
+        input_total += _cnt
+    if not _tt_ok or input_total == 0:
+        input_total = n * _THEMES_INPUT_TOKENS_PER_THEME
     output_total = n * _THEMES_OUTPUT_TOKENS_PER_THEME
     cost = (
         input_total * input_per_m / 1_000_000
@@ -2144,7 +2164,22 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
         from docgen.calibration import CalibrationStore
         cal_store = CalibrationStore(args.db or cfg.db_path)
         desc_in, desc_out = _describe_tokens_per_call(cal_store, model)
-        describe_input = int(len(candidates) * desc_in)
+        # Input: tiktoken the REAL describe prompt per element (its text is
+        # known from the catalog metadata). Falls back to the calibrated/
+        # flat per-call figure if tiktoken can't count any element. Output
+        # can't be counted ahead of generation, so it stays calibrated.
+        from docgen.catalog_describer import build_describe_prompt
+        from docgen.token_count import count_text_tokens
+        describe_input = 0
+        _desc_tt_ok = bool(candidates)
+        for _d in candidates:
+            _n = count_text_tokens(build_describe_prompt(_d.metadata), model)
+            if _n is None:
+                _desc_tt_ok = False
+                break
+            describe_input += _n
+        if not _desc_tt_ok:
+            describe_input = int(len(candidates) * desc_in)
         describe_output = int(len(candidates) * desc_out)
         rates = LLM_PRICING.get(model)
         if rates is None:
@@ -2243,8 +2278,10 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
             # path across the baseline / batched / per-type passes. Shared
             # factory (same one the generate --dry-run table uses); falls
             # back to the char heuristic when tiktoken is unavailable.
+            from cli.generate import _scaffold_overhead_counter
             from docgen.token_count import file_token_counter
             _gen_input = file_token_counter(model)
+            _gen_overhead = _scaffold_overhead_counter(model)
 
             # Two estimates: baseline (no --batch) and with Anthropic's
             # ~50% Message Batches discount applied. ``generate`` is the
@@ -2256,6 +2293,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                 caching_enabled=caching_enabled,
                 output_tokens_for=_gen_output,
                 input_tokens_for=_gen_input,
+                prompt_overhead_for=_gen_overhead,
             )
             generate_estimate_batched = estimate_cost(
                 files=gen_files,
@@ -2264,6 +2302,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                 caching_enabled=caching_enabled,
                 output_tokens_for=_gen_output,
                 input_tokens_for=_gen_input,
+                prompt_overhead_for=_gen_overhead,
                 batch_enabled=True,
             )
             generate_cost: float | None = generate_estimate.total_cost_usd
@@ -2280,6 +2319,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                     caching_enabled=caching_enabled,
                     output_tokens_for=_gen_output,
                     input_tokens_for=_gen_input,
+                    prompt_overhead_for=_gen_overhead,
                 ).total_cost_usd
                 full_generate_cost_batched = estimate_cost(
                     files=files,
@@ -2288,6 +2328,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                     caching_enabled=caching_enabled,
                     output_tokens_for=_gen_output,
                     input_tokens_for=_gen_input,
+                    prompt_overhead_for=_gen_overhead,
                     batch_enabled=True,
                 ).total_cost_usd
         else:
@@ -2355,12 +2396,14 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                 caching_enabled=caching_enabled,
                 output_tokens_for=_gen_output,
                 input_tokens_for=_gen_input,
+                prompt_overhead_for=_gen_overhead,
             )
             per_type_batched = dict(estimate_generate_by_doc_type(
                 gen_files, DEFAULT_GENERATE_DOC_TYPES, model,
                 caching_enabled=caching_enabled,
                 output_tokens_for=_gen_output,
                 input_tokens_for=_gen_input,
+                prompt_overhead_for=_gen_overhead,
                 batch_enabled=True,
             ))
             for dt, est in per_type:
