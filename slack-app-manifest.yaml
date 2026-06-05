@@ -16,6 +16,7 @@
 display_information:
   name: Ariadne
   description: Precise, pre-researched answers about your codebase
+  long_description: Ariadne answers questions about your codebase directly in Slack. It draws on a pre-researched knowledge base — LLM-generated documentation plus a cross-language code graph spanning your repositories and languages — so you get precise, coherent answers grounded in real code, instead of guesses, re-scanned files, or context rebuilt from scratch on every question. @mention Ariadne in a channel, DM it, or use the /ariadne slash command to ask how something works, what depends on a symbol, or where a behavior lives. It answers read-only and never modifies your code.
   background_color: "#1f2d3d"
 features:
   bot_user:
@@ -36,6 +37,9 @@ oauth_config:
       - chat:write          # post + edit replies (chat.postMessage / chat.update)
       - commands            # the /ariadne slash command
       - im:history          # read direct messages (the message.im events)
+      - channels:history    # read public-channel thread history (conversations.replies)
+      - groups:history      # read private-channel thread history
+      - mpim:history        # read group-DM thread history (forward-looking; code handles 1:1 DMs only)
 settings:
   event_subscriptions:
     bot_events:
