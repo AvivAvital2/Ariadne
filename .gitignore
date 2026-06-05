@@ -10,6 +10,8 @@ build/
 # Keep top-level docs/*.md, ignore source-specific generated dirs
 docs/*/
 
+designs/
+
 # Database
 *.db
 ariadne.db.*
