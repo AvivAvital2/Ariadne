@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from slack_bridge.errors import to_user_message
+from slack_bridge.format import to_mrkdwn
 from slack_bridge.orchestrator import answer_question
 from slack_bridge.replay import PLACEHOLDER_PREFIX
 
@@ -59,7 +60,9 @@ async def handle_event(*, cfg: Any, pool: Any, slack: Any, bot_user_id: str, ack
     except Exception as exc:  # noqa: BLE001 — surface the failure to the user, don't mask it
         answer = to_user_message(exc)
 
-    await slack.chat_update(channel=channel, ts=placeholder['ts'], text=answer)
+    await slack.chat_update(
+        channel=channel, ts=placeholder['ts'], text=to_mrkdwn(answer),
+    )
 
 
 def is_dm_message(event: dict) -> bool:

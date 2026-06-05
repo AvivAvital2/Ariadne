@@ -33,6 +33,15 @@ requested level. Don't double-synthesize.
 - Keep replies concise and Slack-friendly, and note which source you used.
 '''
 
+_FORMATTING = '''\
+Formatting (Slack mrkdwn, NOT Markdown):
+- Bold is *single asterisks* — never **double**. Italic is _underscores_.
+- Links are <https://url|label>, not [label](https://url).
+- Inline code uses `backticks`; code blocks use triple backticks.
+- Do not use # / ## headings or Markdown tables; use *bold* labels and \
+`- ` bullet lists instead.
+'''
+
 
 def _format_entry(entry: SourceEntry) -> str:
     line = f'- `{entry.name}`'
@@ -55,5 +64,6 @@ def render_system_prompt(roster: Iterable[SourceEntry]) -> str:
         f'{_PREAMBLE}\n'
         f'You can answer about these sources:\n{roster_block}\n\n'
         f'{_ROUTING}\n'
-        f'{_ANSWERING}'
+        f'{_ANSWERING}\n'
+        f'{_FORMATTING}'
     )
