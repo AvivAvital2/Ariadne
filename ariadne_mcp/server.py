@@ -23,6 +23,8 @@ Configured automatically by ``ariadne init``. Manual setup in .mcp.json::
 """
 from __future__ import annotations
 
+import logging
+
 # Best-effort .env loading — python-dotenv is a convenience for local
 # API-key pickup. Don't let its absence crash MCP server startup.
 try:
@@ -42,6 +44,33 @@ from ariadne_mcp.models import (
     SearchResponse,
     SyncStatusResponse,
 )
+
+_logger = logging.getLogger(__name__)
+
+
+def _warn_if_no_sources() -> None:
+    """Fail loud if the server starts with no sources configured.
+
+    The #1 silent failure mode: launched (e.g. via ``uv run --directory``)
+    from a cwd where no ``ariadne.yaml`` resolves, so every source-scoped tool
+    fails with a cryptic ``configured sources: []``. Name where we looked and
+    how to fix it instead of serving an empty list silently.
+    """
+    from config import CONFIG_FILENAME, config_search_paths, get_config
+
+    if get_config().sources:
+        return
+    searched = ', '.join(str(p) for p in config_search_paths())
+    _logger.warning(
+        'Ariadne MCP starting with NO sources configured — every '
+        'source-scoped query will fail. No %s with sources was found. '
+        'Searched: %s. Fix: set ARIADNE_CONFIG=/abs/path/%s, or launch from '
+        'the project directory.',
+        CONFIG_FILENAME,
+        searched,
+        CONFIG_FILENAME,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Server
@@ -382,6 +411,7 @@ if __name__ == '__main__':
             pass  # Best-effort cleanup at shutdown
 
     atexit.register(_cleanup)
+    _warn_if_no_sources()
     mcp.run(transport='stdio')
                                                                                                                                                                   
                 

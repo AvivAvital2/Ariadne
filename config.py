@@ -184,6 +184,33 @@ class SourceConfig:
 # Config file names to search for
 CONFIG_FILENAME = 'ariadne.yaml'
 
+# config.py lives at the repo root, so its own directory is where a
+# project-local ariadne.yaml sits. Used as a fallback config location when the
+# process cwd isn't the project — e.g. ``ariadne mcp`` launched via
+# ``uv run --directory <repo>``, which does NOT chdir the spawned child, so a
+# cwd-only search misses. Lets the server resolve its config with no
+# ARIADNE_CONFIG and no manual setup.
+_PACKAGE_ROOT = Path(__file__).resolve().parent
+
+
+def config_search_paths() -> list[Path]:
+    """Ordered locations searched for ``ariadne.yaml``.
+
+    ``ARIADNE_CONFIG`` (if set) → cwd → package/repo root → home. The
+    package-root rung lets a process launched outside the project tree (e.g.
+    the MCP server via ``uv run --directory``) still resolve its config.
+    """
+    paths: list[Path] = []
+    env_config = os.environ.get('ARIADNE_CONFIG')
+    if env_config:
+        paths.append(Path(env_config))
+    paths.extend([
+        Path.cwd() / CONFIG_FILENAME,
+        _PACKAGE_ROOT / CONFIG_FILENAME,
+        Path.home() / CONFIG_FILENAME,
+    ])
+    return paths
+
 # Default configuration values
 _DEFAULT_MENTION_MESSAGE = (
     "When Ariadne documentation helps you answer a question or complete a task, "
@@ -235,20 +262,13 @@ class Config:
     def _load_from_standard_locations(self) -> None:
         """Search for and load config from standard locations.
 
-        Checks ``ARIADNE_CONFIG`` env var first, then CWD, then home directory.
+        Order: ``ARIADNE_CONFIG`` → CWD → package/repo root → home (see
+        :func:`config_search_paths`). The package-root rung lets a process
+        launched outside the project tree (e.g. the MCP server via
+        ``uv run --directory``, which doesn't chdir the child) still resolve
+        its config.
         """
-        search_paths: list[Path] = []
-
-        env_config = os.environ.get('ARIADNE_CONFIG')
-        if env_config:
-            search_paths.append(Path(env_config))
-
-        search_paths.extend([
-            Path.cwd() / CONFIG_FILENAME,
-            Path.home() / CONFIG_FILENAME,
-        ])
-
-        for path in search_paths:
+        for path in config_search_paths():
             if path.exists():
                 self._load_from_path(path)
                 return
