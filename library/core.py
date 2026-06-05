@@ -608,3 +608,66 @@ class CoreMixin:
                    synced_at = excluded.synced_at''',
                 (source_name, git_hash, _now_iso()),
             )
+    def get_source_relations(self, source_name: str) -> dict | None:
+        """Read a source's persisted relational graph (depends_on/parent/branches),
+    or None if none was persisted. This is the DB-side record that lets a
+    serving box resolve scope without ariadne.yaml."""
+        with self._conn_provider.acquire() as conn:
+            row = conn.execute(
+                'SELECT depends_on, parent, branches FROM source_relations '
+                'WHERE source_name = ?',
+                (source_name,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            'depends_on': json.loads(row[0]),
+            'parent': row[1],
+            'branches': json.loads(row[2]),
+        }
+    
+    
+    def set_source_relations(
+        self,
+        source_name: str,
+        *,
+        depends_on=(),
+        parent: str | None = None,
+        branches=(),
+    ) -> None:
+        """Persist a source's relational graph, REPLACING any prior one so each
+    build snapshots the current config rather than accreting stale edges."""
+        with self._conn_provider.acquire() as conn:
+            conn.execute(
+                'INSERT INTO source_relations '
+                '(source_name, depends_on, parent, branches) '
+                'VALUES (?, ?, ?, ?) '
+                'ON CONFLICT(source_name) DO UPDATE SET '
+                'depends_on = excluded.depends_on, '
+                'parent = excluded.parent, '
+                'branches = excluded.branches',
+                (
+                    source_name,
+                    json.dumps(list(depends_on)),
+                    parent,
+                    json.dumps(list(branches)),
+                ),
+            )
+    
+    
+    def all_source_relations(self) -> dict[str, dict]:
+        """Every persisted source graph, keyed by name — the basis for DB-only
+    scope resolution when yaml declares no depends_on."""
+        with self._conn_provider.acquire() as conn:
+            rows = conn.execute(
+                'SELECT source_name, depends_on, parent, branches '
+                'FROM source_relations',
+            ).fetchall()
+        return {
+            str(r[0]): {
+                'depends_on': json.loads(r[1]),
+                'parent': r[2],
+                'branches': json.loads(r[3]),
+            }
+            for r in rows
+        }

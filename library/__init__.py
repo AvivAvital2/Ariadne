@@ -141,6 +141,14 @@ CREATE TABLE IF NOT EXISTS sync_state (
     synced_at TEXT NOT NULL
 )
 '''
+_SOURCE_RELATIONS_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS source_relations (
+    source_name TEXT PRIMARY KEY,
+    depends_on  TEXT NOT NULL DEFAULT '[]',
+    parent      TEXT,
+    branches    TEXT NOT NULL DEFAULT '[]'
+)
+'''
 
 _USAGE_EVENTS_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS usage_events (
@@ -262,6 +270,7 @@ class Library(
             conn.execute(_CHUNKS_SCHEMA)
             conn.execute(_SECTIONS_SCHEMA)
             conn.execute(_SYNC_STATE_SCHEMA)
+            conn.execute(_SOURCE_RELATIONS_SCHEMA)
             conn.execute(_USAGE_EVENTS_SCHEMA)
             conn.executescript(_CREATE_INDEXES)
             conn.executescript(_USAGE_INDEXES)
@@ -359,7 +368,8 @@ class Library(
 class ScopedLibrary:
     """Closure-bounded view onto a ``Library``.
 
-    Phase 2 of the closure-scoping design. Every data-returning
+    Phase 2 of the closure-scoping design — see
+    ``designs/directional-closure-scoping.md``. Every data-returning
     method on the underlying ``Library`` is mirrored here and filtered
     by ``closure`` (a ``frozenset[str]`` of source names). The intent
     is that consumers receive a ``ScopedLibrary``, never a raw
