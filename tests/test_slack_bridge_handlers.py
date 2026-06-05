@@ -163,3 +163,77 @@ async def test_message_listener_answers_dms_and_ignores_noise():
         client=noise_slack,
     )
     assert noise_slack.posted == [] and noise_slack.updated == []
+
+
+async def test_thread_followups_one_on_one_then_multiparty_name_gate():
+    """1:1 thread → follow-ups answered without an @mention. Once a SECOND
+    human joins, the bot still ingests every message (replay captures it) but
+    only ANSWERS ones that name 'Ariadne' — a cheap regex gate, no LLM."""
+    cfg = bridge_config(channels=frozenset({'C1'}))
+    reply = types.SimpleNamespace(text='ans', is_error=False, session_id='S')
+    pool = _FakePool(_FakeSession(reply), contains=True)   # thread is engaged
+    slack = _FakeSlack()
+    L = make_listeners(cfg, pool, 'UBOT')
+    asked = pool._session.asked
+
+    # Alice starts with an @mention → answered; thread now engaged.
+    await L['app_mention'](
+        event={'channel': 'C1', 'ts': 'TROOT', 'user': 'UALICE', 'text': '<@UBOT> how does X work?'},
+        client=slack)
+    assert asked == ['how does X work?']
+
+    # Alice follows up in-thread, no @mention → 1:1 correspondence → answered.
+    await L['message'](
+        event={'channel': 'C1', 'thread_ts': 'TROOT', 'user': 'UALICE', 'ts': 'T2', 'text': 'and what about Y?'},
+        client=slack)
+    assert asked[-1] == 'and what about Y?'
+
+    # Bob pitches in WITHOUT the name → ingested, NOT answered.
+    n = len(asked)
+    await L['message'](
+        event={'channel': 'C1', 'thread_ts': 'TROOT', 'user': 'UBOB', 'ts': 'T3', 'text': 'I think it is fine'},
+        client=slack)
+    assert len(asked) == n   # multi-party + no name → silent
+
+    # Bob names Ariadne → answered.
+    await L['message'](
+        event={'channel': 'C1', 'thread_ts': 'TROOT', 'user': 'UBOB', 'ts': 'T4', 'text': 'Ariadne, what do you think?'},
+        client=slack)
+    assert asked[-1] == 'Ariadne, what do you think?'
+
+
+async def test_message_listener_channel_filters():
+    """Channel messages the listener must NOT answer: a thread the bot isn't
+    engaged in, the bot's own / system messages, and an explicit @mention
+    (which app_mention already handles — no double answer)."""
+    cfg = bridge_config(channels=frozenset({'C1'}))
+    reply = types.SimpleNamespace(text='ans', is_error=False, session_id='S')
+
+    # Not engaged (not in pool) → ignored; a fresh topic needs an @mention.
+    p1 = _FakePool(_FakeSession(reply), contains=False)
+    await make_listeners(cfg, p1, 'UBOT')['message'](
+        event={'channel': 'C1', 'thread_ts': 'T', 'user': 'U1', 'ts': 'T2', 'text': 'hello'}, client=_FakeSlack())
+    assert p1._session.asked == []
+
+    # Bot's own + system messages in an engaged thread → ignored.
+    p2 = _FakePool(_FakeSession(reply), contains=True)
+    m2 = make_listeners(cfg, p2, 'UBOT')['message']
+    await m2(event={'channel': 'C1', 'thread_ts': 'T', 'bot_id': 'B', 'ts': 'T2', 'text': 'x'}, client=_FakeSlack())
+    await m2(event={'channel': 'C1', 'thread_ts': 'T', 'subtype': 'message_changed', 'ts': 'T2', 'text': 'x'}, client=_FakeSlack())
+    assert p2._session.asked == []
+
+    # An explicit @mention → deferred to app_mention (no double answer here).
+    p3 = _FakePool(_FakeSession(reply), contains=True)
+    await make_listeners(cfg, p3, 'UBOT')['message'](
+        event={'channel': 'C1', 'thread_ts': 'T', 'user': 'U1', 'ts': 'T2', 'text': '<@UBOT> hi again'}, client=_FakeSlack())
+    assert p3._session.asked == []
+
+
+def test_name_invoked_regex_matches_the_name_not_arbitrary_text():
+    from slack_bridge.handlers import _name_invoked
+
+    assert _name_invoked('Ariadne, what do you think?')
+    assert _name_invoked('hey ARIADNE can you help')   # case-insensitive
+    assert _name_invoked('per the ariadne docs')       # any mention of the name
+    assert not _name_invoked('what do you think?')
+    assert not _name_invoked('')

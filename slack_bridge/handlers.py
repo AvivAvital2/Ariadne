@@ -10,6 +10,10 @@ from slack_bridge.orchestrator import answer_question
 from slack_bridge.replay import PLACEHOLDER_PREFIX
 
 _MENTION_RE = re.compile(r'<@[A-Z0-9]+>')
+# The bot's name, matched as a plain word (any case) so a multi-human thread
+# can summon it without a Slack @mention — e.g. "Ariadne, what do you think?".
+# Deliberately a regex, NOT an LLM call, so the summon gate costs nothing.
+_NAME_RE = re.compile(r'\bariadne\b', re.IGNORECASE)
 _PLACEHOLDER_TEXT = f'{PLACEHOLDER_PREFIX} Searching the docs…'
 _NOT_ALLOWED = (
     "Sorry — you're not set up to use this bot yet. "
@@ -20,6 +24,12 @@ _NOT_ALLOWED = (
 def _clean_text(text: str) -> str:
     """Strip Slack ``<@USERID>`` mention tokens (and surrounding whitespace)."""
     return _MENTION_RE.sub('', text or '').strip()
+
+
+def _name_invoked(text: str) -> bool:
+    """True when the bot's name appears in ``text`` — the no-LLM summon gate for
+    answering in a multi-human thread without a Slack @mention."""
+    return bool(_NAME_RE.search(text or ''))
 
 
 async def handle_event(*, cfg: Any, pool: Any, slack: Any, bot_user_id: str, ack: Any, event: dict) -> None:
@@ -106,7 +116,16 @@ def make_listeners(cfg: Any, pool: Any, bot_user_id: str) -> dict[str, Any]:
     root a thread before delegating to the shared :func:`handle_event`.
     """
 
+    # Distinct human participants per engaged thread_ts (in-memory; rides the
+    # session's lifetime). Drives the 1:1-vs-multi-human follow-up decision.
+    thread_humans: dict[str, set[str]] = {}
+
+    def _note(thread_ts: str, user: str) -> None:
+        if thread_ts and user and user != bot_user_id:
+            thread_humans.setdefault(thread_ts, set()).add(user)
+
     async def _run(event: dict, client: Any) -> None:
+        _note(event.get('thread_ts') or event.get('ts'), event.get('user', ''))
         await handle_event(
             cfg=cfg, pool=pool, slack=client, bot_user_id=bot_user_id, ack=_noop_ack, event=event
         )
@@ -115,7 +134,28 @@ def make_listeners(cfg: Any, pool: Any, bot_user_id: str) -> dict[str, Any]:
         await _run(event, client)
 
     async def on_message(event: dict, client: Any) -> None:
+        # DMs are 1:1 by nature — answer (is_dm_message already drops the bot's
+        # own messages and edit/system noise).
         if is_dm_message(event):
+            await _run(event, client)
+            return
+        # Channel/group: never react to the bot's own posts or edit/system events.
+        if event.get('bot_id') or event.get('subtype'):
+            return
+        thread_ts = event.get('thread_ts')
+        # Only follow up inside a thread the bot is actively engaged in; a fresh
+        # topic must @mention the bot (that's on_mention's job).
+        if not thread_ts or thread_ts not in pool:
+            thread_humans.pop(thread_ts, None)
+            return
+        # An explicit @mention is on_mention's job too — don't answer twice.
+        text = event.get('text', '')
+        if f'<@{bot_user_id}>' in text:
+            return
+        # Ingest the participant (replay keeps the full thread as context), then
+        # answer only in a 1:1 correspondence, or when the bot is named.
+        _note(thread_ts, event.get('user', ''))
+        if len(thread_humans.get(thread_ts, set())) <= 1 or _name_invoked(text):
             await _run(event, client)
 
     async def on_command(ack: Any, command: dict, client: Any) -> None:

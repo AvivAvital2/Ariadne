@@ -44,7 +44,10 @@ settings:
   event_subscriptions:
     bot_events:
       - app_mention
-      - message.im          # DMs only — matches the bridge's channel_type=='im' filter
+      - message.im          # DMs (1:1 with the bot)
+      - message.channels    # public-channel messages — needed for thread follow-ups
+      - message.groups      # private-channel thread follow-ups
+      - message.mpim        # group-DM thread follow-ups
   interactivity:
     is_enabled: false       # no buttons/modals
   org_deploy_enabled: false
