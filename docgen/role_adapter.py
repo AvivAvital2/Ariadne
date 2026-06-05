@@ -8,10 +8,9 @@ into role-appropriate prose. Result is persisted as a new
 ``documents`` row with ``content_type='audience_response'`` so the
 next matching question is a cache hit, not a new LLM call.
 
-This module currently ships a stub. The implementation lands in the
-green phase (TDD plan: tests under
-``tests/test_role_aware_responses.py`` exercise this contract
-end-to-end).
+Exercised end-to-end in ``tests/test_role_aware_responses.py``. See
+``designs/role-aware-responses.md`` for the data model and trigger
+semantics.
 """
 from __future__ import annotations
 
@@ -57,8 +56,10 @@ async def adapt_for_audience(
         f'{dev_docs_context}'
     )
     return await chat_complete(
-        system_prompt=_SYSTEM_PROMPTS[role],
-        user_prompt=user_prompt,
+        messages=[
+            {'role': 'system', 'content': _SYSTEM_PROMPTS[role]},
+            {'role': 'user', 'content': user_prompt},
+        ],
         max_tokens=1024,
     )
 

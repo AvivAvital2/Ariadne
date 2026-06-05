@@ -145,6 +145,7 @@ class AnalysisMixin:
         question: str,
         branch: str | None = None,
         role: str = 'developer',
+        source: str | None = None,
     ) -> 'AskResponse':
         """Answer a question by synthesizing information from relevant docs.
 
@@ -168,7 +169,7 @@ class AnalysisMixin:
         # baseline only; PM queries see matching audience_response rows
         # plus the dev baseline as adapter context).
         search_result = await self.search(
-            query=question, branch=branch, limit=5, role=role,
+            query=question, branch=branch, limit=5, role=role, source=source,
         )
         if not search_result.documents:
             return AskResponse(
@@ -195,7 +196,8 @@ class AnalysisMixin:
         # 4a. Role-aware optional layer — for non-default roles, look
         # for a cached audience_response row keyed on (audience, question).
         # Cache hit returns directly; cache miss calls the adapter and
-        # persists a new row before returning.
+        # persists a new row before returning. See
+        # designs/role-aware-responses.md.
         if role != 'developer':
             cached = _find_cached_audience_response(
                 self.library, role=role, question=question,
@@ -788,7 +790,8 @@ def _find_cached_audience_response(library, *, role: str, question: str):
     since this audience_response was created. Stale rows get deleted
     in place and the lookup returns None (cache miss → regenerate).
     This puts the freshness cost on the cache-read path (PM queries,
-    occasional) rather than on every dev doc update (frequent).
+    occasional) rather than on every dev doc update (frequent) — see
+    ``designs/role-aware-responses.md``.
 
     Embedding-similarity fuzzy matching for the question key remains
     a tuning knob; skip for v1.

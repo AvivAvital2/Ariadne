@@ -1,7 +1,7 @@
 """Role-aware response tests — TDD red phase.
 
 These tests pin the contract for the optional role-aware response
-layer. Today they
+layer described in ``designs/role-aware-responses.md``. Today they
 FAIL behaviorally (not on ImportError) under the stubs landed in:
 - ``mcp_service_search.SearchMixin.search`` — ``role`` kwarg added, ignored
 - ``mcp_service_analysis.AnalysisMixin.ask`` — ``role`` kwarg added, ignored
@@ -357,3 +357,184 @@ async def test_ask_role_pm_cache_hit_skips_adapter(
     assert response.answer == 'Cached PM-friendly content about tokens.', (
         f'expected cached content; got: {response.answer!r}'
     )
+
+
+# ---------------------------------------------------------------------------
+# Contract bite 5 — wiring: source/role must reach the service from the MCP
+# tools, and ask must thread source into its OWN retrieval. This is the gap
+# that made an explicit source-named question fail with "No source context".
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ask_threads_source_into_search(library, service, monkeypatch):
+    """ask must pass ``source`` through to its internal search so a
+    decomposed source actually scopes retrieval — previously ask ignored
+    source and the scoped search fell back / failed closed."""
+    captured: dict = {}
+    real_search = service.search
+
+    async def spy(*args, **kwargs):
+        captured['source'] = kwargs.get('source')
+        return await real_search(*args, **kwargs)
+
+    monkeypatch.setattr(service, 'search', spy)
+    library.add_document(
+        content_type='explanation', title='X', content='x',
+        source_files=[], embedding=_unit_vec(1), metadata={},
+    )
+    await service.ask(question='what does it do', role='developer', source='test')
+    assert captured['source'] == 'test'
+
+
+@pytest.mark.asyncio
+async def test_mcp_ask_tool_threads_source_and_role(monkeypatch):
+    """The ariadne_ask MCP tool must expose ``source`` + ``role`` and forward
+    them, so a PM-scoped question reaches the scoped, role-aware path."""
+    from ariadne_mcp import server_knowledge
+
+    captured: dict = {}
+
+    class _FakeSvc:
+        async def ask(self, question, branch=None, role='developer', source=None):
+            captured.update(question=question, role=role, source=source)
+            return 'ASK_OK'
+
+    monkeypatch.setattr('ariadne_mcp.service.AriadneService.get', lambda: _FakeSvc())
+    out = await server_knowledge.ariadne_ask(
+        question='how does it work', source='demo', role='product_manager',
+    )
+    assert out == 'ASK_OK'
+    assert captured == {
+        'question': 'how does it work', 'role': 'product_manager', 'source': 'demo',
+    }
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_tool_threads_role(monkeypatch):
+    """ariadne_search must expose ``role`` and forward it (it already had
+    ``source``) so PM-scoped retrieval is reachable through the tool."""
+    from ariadne_mcp import server
+
+    captured: dict = {}
+
+    class _FakeSvc:
+        def get_branch(self):
+            return None
+
+        async def search(self, *args, **kwargs):
+            captured['role'] = kwargs.get('role')
+            captured['source'] = kwargs.get('source')
+            return 'SEARCH_OK'
+
+    monkeypatch.setattr('ariadne_mcp.service.AriadneService.get', lambda: _FakeSvc())
+    out = await server.ariadne_search(
+        query='x', source='demo', role='product_manager',
+    )
+    assert out == 'SEARCH_OK'
+    assert captured == {'role': 'product_manager', 'source': 'demo'}
+
+
+# ---------------------------------------------------------------------------
+# Contract bite 6 — graceful degradation: an LLM (adapter) or DB (persist)
+# failure on the PM path must NOT break the answer.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ask_role_pm_adapter_failure_falls_back_to_dev(
+    library, service, monkeypatch,
+):
+    """If the role adapter (an LLM call) fails, ask degrades gracefully —
+    returns the developer-level docs, doesn't raise, and persists nothing."""
+    library.add_document(
+        content_type='explanation', title='Auth',
+        content='Dev detail: HMAC validation.', source_files=['auth.py'],
+        embedding=_unit_vec(7), metadata={},
+    )
+    monkeypatch.setattr(
+        'docgen.role_adapter.adapt_for_audience',
+        AsyncMock(side_effect=RuntimeError('LLM down')),
+    )
+    resp = await service.ask(
+        question='how does auth work', role='product_manager', source='test',
+    )
+    assert 'Dev detail: HMAC validation.' in resp.answer
+    assert library.list_documents(content_type='audience_response') == []
+
+
+@pytest.mark.asyncio
+async def test_ask_role_pm_persist_failure_still_returns(
+    library, service, monkeypatch,
+):
+    """A cache-persist failure must not break the response — the adapted
+    answer is still returned to the caller."""
+    library.add_document(
+        content_type='explanation', title='Tokens',
+        content='Dev token flow.', source_files=['t.py'],
+        embedding=_unit_vec(8), metadata={},
+    )
+    monkeypatch.setattr(
+        'docgen.role_adapter.adapt_for_audience',
+        AsyncMock(return_value='PM answer.'),
+    )
+
+    def _boom(*a, **k):
+        raise RuntimeError('db full')
+
+    monkeypatch.setattr(
+        'ariadne_mcp.service_analysis._persist_audience_response', _boom,
+    )
+    resp = await service.ask(
+        question='token flow', role='product_manager', source='test',
+    )
+    assert resp.answer == 'PM answer.'
+
+
+# ---------------------------------------------------------------------------
+# Contract bite 7 — the adapter itself: must call chat_complete with its real
+# `messages` signature (not the non-existent system_prompt=/user_prompt= kwargs
+# that made the PM path fall back to dev docs), carrying the role prompt + docs.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_adapt_for_audience_calls_chat_complete_with_messages(monkeypatch):
+    from docgen import role_adapter
+
+    captured: dict = {}
+
+    async def fake_chat_complete(
+        messages, *, model=None, max_tokens=2048, timeout=60.0,
+    ):
+        captured['messages'] = messages
+        captured['max_tokens'] = max_tokens
+        return 'PM-ADAPTED'
+
+    monkeypatch.setattr('llm.chat_complete', fake_chat_complete)
+
+    out = await role_adapter.adapt_for_audience(
+        role='product_manager',
+        dev_docs_context='Dev: HMAC validation in auth.py.',
+        query='how does auth work?',
+    )
+
+    assert out == 'PM-ADAPTED'
+    roles = [m['role'] for m in captured['messages']]
+    assert 'system' in roles and 'user' in roles
+    system = next(m['content'] for m in captured['messages'] if m['role'] == 'system')
+    user = next(m['content'] for m in captured['messages'] if m['role'] == 'user')
+    assert 'product manager' in system.lower()
+    assert 'HMAC validation' in user and 'how does auth work?' in user
+
+
+@pytest.mark.asyncio
+async def test_adapt_for_audience_rejects_unknown_role():
+    """Defensive guard: an unsupported role raises ValueError rather than
+    silently producing a wrong-audience answer."""
+    from docgen import role_adapter
+
+    with pytest.raises(ValueError, match='No system prompt for role'):
+        await role_adapter.adapt_for_audience(
+            role='wizard', dev_docs_context='x', query='y',
+        )

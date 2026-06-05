@@ -143,6 +143,8 @@ def ariadne_explain(
 
 async def ariadne_ask(
     question: str,
+    source: str | None = None,
+    role: str = 'developer',
     branch: str | None = None,
 ) -> AskResponse:
     """Ask a natural language question and get a synthesized answer from Ariadne docs.
@@ -156,11 +158,21 @@ async def ariadne_ask(
 
     Args:
         question: Natural language question about the codebase.
+        source: The project/component the question is about — extract it
+            from the user's framing (e.g. "in PROJECT, how does X work?"
+            → source='PROJECT'), same as ariadne_search. Scopes
+            retrieval; if unset and no default_source is configured, the
+            call fails closed.
+        role: Audience for the answer. 'developer' (default) returns the
+            technical synthesis; 'product_manager' returns a PM-adapted
+            answer (generated on first ask, cached and reused after).
         branch: Branch filter (optional, auto-detected).
     """
     from ariadne_mcp.service import AriadneService
 
-    return await AriadneService.get().ask(question, branch)
+    return await AriadneService.get().ask(
+        question, branch=branch, role=role, source=source,
+    )
 
 
 def register_tools(mcp) -> None:

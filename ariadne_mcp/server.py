@@ -156,6 +156,7 @@ async def ariadne_search(
     limit: int = 10,
     sections_only: bool = False,
     source: str | None = None,
+    role: str = 'developer',
 ) -> SearchResponse:
     """Search Ariadne documentation with optional filters for branch-aware retrieval.
 
@@ -180,13 +181,15 @@ async def ariadne_search(
         source: The project/component the user is asking about. Extract
             from the user's question; if not present, ask the user
             rather than guessing.
+        role: Audience for results — 'developer' (default) or
+            'product_manager' (audience-adapted retrieval).
     """
     from ariadne_mcp.service import AriadneService
 
     svc = AriadneService.get()
     if branch is None:
         branch = svc.get_branch()
-    return await svc.search(query, feature, branch, status, limit, context_file=context_file, sections_only=sections_only, source=source)
+    return await svc.search(query, feature, branch, status, limit, context_file=context_file, sections_only=sections_only, source=source, role=role)
 
 
 @mcp.tool(annotations=ToolAnnotations(
