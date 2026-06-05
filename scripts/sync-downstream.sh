@@ -36,7 +36,7 @@
 set -euo pipefail
 
 # --- defaults --------------------------------------------------------
-DOWNSTREAM_DEFAULT="/Users/spark/git/Ariadne"
+DOWNSTREAM_DEFAULT="~/git/Ariadne"
 SINCE=""
 TO="${DOWNSTREAM:-$DOWNSTREAM_DEFAULT}"
 DO_WRITE=1   # write files into the downstream work tree
@@ -147,6 +147,10 @@ for c in "${commits[@]}"; do
 
   for f in ${copy_set[@]+"${copy_set[@]}"}; do
     [ -z "$f" ] && continue
+    # The downstream repo owns its OWN .gitignore — it carries public-only
+    # exclusions (designs/, ariadne.yaml, generated docs/*/) that upstream
+    # doesn't, so replaying upstream's would clobber them. Never sync it.
+    case "$f" in .gitignore|*/.gitignore) n_skip=$((n_skip + 1)); continue ;; esac
     if git -C "$TO" check-ignore -q -- "$f"; then n_skip=$((n_skip + 1)); continue; fi
     if ! git -C "$TO" ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then
       new_to_downstream+=("$f")
@@ -164,6 +168,7 @@ for c in "${commits[@]}"; do
 
   for f in ${del_set[@]+"${del_set[@]}"}; do
     [ -z "$f" ] && continue
+    case "$f" in .gitignore|*/.gitignore) n_skip=$((n_skip + 1)); continue ;; esac
     if git -C "$TO" check-ignore -q -- "$f"; then n_skip=$((n_skip + 1)); continue; fi
     [ -e "$TO/$f" ] || continue
     if [ "$DO_WRITE" -eq 1 ]; then
