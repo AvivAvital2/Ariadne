@@ -149,7 +149,7 @@ class SourceConfig:
             that legitimately contains a ``dist/`` worth indexing).
     """
 
-    path: str
+    path: str | None = None
     depends_on: tuple[str, ...] = ()
     parent: str | None = None
     branches: tuple[str, ...] = ()
@@ -354,12 +354,6 @@ class Config:
             # Path('').resolve(), which is the silent-walk footgun
             # this validation exists to prevent.
             path_value = raw.get('path')
-            if not path_value:
-                raise ConfigError(
-                    f"Source '{source_name}': missing required field "
-                    f"'path' (the absolute path to the source code "
-                    f"directory).",
-                )
 
             excl = set(raw.get('exclude_dirs', []) or [])
             exempt = set(raw.get('exempt_dirs', []) or [])
@@ -484,21 +478,21 @@ class Config:
     def get_source_config(self, source_name: str) -> SourceConfig | None:
         """Get the SourceConfig for a named source.
 
-        Args:
-            source_name: The source name to look up.
-
-        Returns:
-            SourceConfig if found, None otherwise.
-        """
+    Returns None only when the source is not configured at all. A configured
+    source with no ``path`` (a serve-only source whose docs live in the DB)
+    yields a SourceConfig with ``path=None`` — distinct from None, which means
+    "unknown source".
+    """
+        if source_name not in self.sources:
+            return None
         raw = self.sources.get(source_name)
         if raw is None:
-            return None
-
+            return SourceConfig(path=None)
         if isinstance(raw, str):
             return SourceConfig(path=raw)
-        elif isinstance(raw, dict):
+        if isinstance(raw, dict):
             return SourceConfig(
-                path=raw.get('path', ''),
+                path=raw.get('path'),
                 depends_on=tuple(raw.get('depends_on', [])),
                 parent=raw.get('parent'),
                 branches=tuple(raw.get('branches', [])),
@@ -511,17 +505,43 @@ class Config:
             )
         return None
 
-    def get_source_path(self, source_name: str) -> Path | None:
-        """Get the resolved path for a named source.
+    def hydrate_relations(self, all_relations: dict) -> None:
+        """Layer the DB-persisted source graph onto the yaml config.
 
-        Args:
-            source_name: The source name to look up.
-
-        Returns:
-            Resolved Path if found, None otherwise.
+        For every source — those declared in yaml and those known only to the
+        DB — fill each relational field (``depends_on`` / ``parent`` /
+        ``branches``) from ``all_relations`` WHEN yaml omits it
+        (yaml-when-present-else-DB, per field), and ADD sources present only in
+        the DB. This lets a serving box resolve the full closure from
+        ``ariadne.db`` without restating the graph in its own ariadne.yaml.
+        Idempotent; a no-op when ``all_relations`` is empty.
         """
+        sources = self._config.get('sources') or {}
+        hydrated: dict = {}
+        for name in set(sources) | set(all_relations):
+            raw = sources.get(name)
+            if raw is None:
+                entry: dict = {}
+            elif isinstance(raw, str):
+                entry = {'path': raw}
+            else:
+                entry = dict(raw)
+            db = all_relations.get(name, {})
+            for field in ('depends_on', 'parent', 'branches'):
+                if field not in entry and field in db:
+                    entry[field] = db[field]
+            hydrated[name] = entry
+        self._config['sources'] = hydrated
+
+    def get_source_path(self, source_name: str) -> Path | None:
+        """Get the resolved path for a named source, or None.
+
+    None when the source is unknown OR has no ``path`` (serve-only). Callers
+    that need a real path (generation, indexing) must treat None as "not
+    buildable" and fail loud rather than walking cwd.
+    """
         config = self.get_source_config(source_name)
-        if config is None:
+        if config is None or not config.path:
             return None
         return Path(config.path).expanduser().resolve()
 
@@ -898,30 +918,20 @@ class Config:
     def resolve_source(self, source: str | None) -> Path | None:
         """Resolve a source name or path to an absolute Path.
 
-        Args:
-            source: Either a source name (from config), a path string,
-                   or None to use default_source.
-
-        Returns:
-            Resolved Path, or None if no source specified and no default.
-        """
+    For a configured source name, return its resolved path — or None if it is
+    serve-only (no ``path``). We do NOT fall through to treating the name as a
+    filesystem path, which would silently resolve to cwd/<name>. A
+    non-configured argument is treated as a path.
+    """
         if source is None:
             source = self.default_source
-
         if source is None:
             return None
-
-        # Check if it's a configured source name
         if source in self.sources:
-            source_path = self.get_source_path(source)
-            if source_path:
-                return source_path
-
-        # Treat as a path
+            return self.get_source_path(source)
         path = Path(source).expanduser()
         if path.exists():
             return path.resolve()
-
         return path.resolve()
 
     def get_all_source_paths(self) -> dict[str, Path]:

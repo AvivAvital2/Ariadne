@@ -784,20 +784,20 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
     source_name = args.source or cfg.default_source
     source_path = cfg.resolve_source(args.source)
     if source_path is None:
-        console.print('[red]No source specified and no default_source in config.[/red]')
-        console.print('Use --source <path> or set default_source in ariadne.yaml')
+        if source_name and source_name in cfg.sources:
+            console.print(
+                f"[red]Source '{source_name}' is serve-only — it has no 'path' in "
+                f"ariadne.yaml (its docs live in the database). Generation needs a "
+                f"source path; add `path:` under sources.{source_name}.[/red]"
+            )
+        else:
+            console.print('[red]No source specified and no default_source in config.[/red]')
+            console.print('Use --source <path> or set default_source in ariadne.yaml')
         return 1
 
     if not source_path.exists():
         console.print(f'[red]Source path not found: {source_path}[/red]')
         return 1
-
-    if source_name and source_name in cfg.sources and not args.path:
-        _check_and_prompt_dependencies(source_name, source_path, cfg)
-
-    model = args.model or cfg.model
-
-    # When --types is omitted, default to all LLM-driven types. ``catalog`` is
     from docgen.source_graph import persist_source_graph
     from library import Library as _GraphLibrary
     _graph_lib = _GraphLibrary(Path(args.db) if args.db else Path(cfg.db_path))
@@ -805,6 +805,13 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
         persist_source_graph(cfg, _graph_lib)
     finally:
         _graph_lib.close()
+
+    if source_name and source_name in cfg.sources and not args.path:
+        _check_and_prompt_dependencies(source_name, source_path, cfg)
+
+    model = args.model or cfg.model
+
+    # When --types is omitted, default to all LLM-driven types. ``catalog`` is
     # excluded — it's structural (ast-grep) and runs through ``catalog-sync``,
     # not the LLM cost path the estimator and orchestrator share.
     doc_types = (

@@ -1,15 +1,17 @@
 """Contract for SourceConfig key validation in ariadne.yaml loading.
 
-When a user typos a required field (e.g., ``purh: /foo`` instead of
+When a user typos a source key (e.g., ``purh: /foo`` instead of
 ``path: /foo``), config loading must fail loudly with a ConfigError
 naming the unknown key and suggesting the closest match via difflib.
 
-Without this, the loader silently constructs a SourceConfig with
-``path=''``, ``Path('').resolve()`` returns cwd, and the downstream
-walk indexes thousands of files from whatever directory Ariadne was
-launched in. Surfaced 2026-05-09 for source ``zohar`` — a 6-entry
-repo where catalog-sync attempted ~20k files because path was
-typo'd as ``purh``.
+``path`` itself is OPTIONAL — a source without one is serve-only (its
+docs + dependency graph live in the database). The old "empty path →
+``Path('').resolve()`` == cwd → walk thousands of files" footgun is
+closed at RESOLUTION instead (``get_source_path`` / ``resolve_source``
+return None), not by rejecting the config at load. A typo'd key is
+still caught loudly here. Footgun surfaced 2026-05-09 for source
+``zohar`` — a 6-entry repo where catalog-sync attempted ~20k files
+because path was typo'd as ``purh``.
 
 Tests follow the project's discipline: each "should fail" case is
 paired with a "should load" baseline so a stub validator that always
@@ -39,40 +41,44 @@ def yaml_factory(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-class TestPathRequired:
-    def test_dict_source_missing_path_raises(
+class TestPathOptionalServeOnly:
+    """``path`` is optional: a dict source without one is a SERVE-ONLY source
+    (docs + dependency graph live in the DB). It loads cleanly, and the old
+    cwd-walk footgun is closed at RESOLUTION (get_source_path / resolve_source
+    return None) rather than by rejecting the config at load. Typo'd keys still
+    fail loud — see TestUnknownKeys.
+    """
+
+    def test_dict_source_missing_path_loads_as_serve_only(
         self, yaml_factory,
     ) -> None:
-        """Dict-form source without a ``path`` key → ConfigError
-        naming the source AND the missing key. Bites the silent
-        fallback that constructed SourceConfig(path='')."""
+        """Dict-form source without a ``path`` key loads as serve-only:
+        found (not None) but path-less, and resolution yields None so a
+        build fails closed instead of walking cwd."""
         yaml = yaml_factory(
             'sources:\n'
             '  zohar:\n'
             '    branches: [main]\n',
         )
-        with pytest.raises(ConfigError) as exc:
-            Config(config_path=yaml)
-        msg = str(exc.value)
-        assert 'zohar' in msg
-        assert 'path' in msg
+        cfg = Config(config_path=yaml)
+        sc = cfg.get_source_config('zohar')
+        assert sc is not None and sc.path is None
+        assert cfg.get_source_path('zohar') is None
+        assert cfg.resolve_source('zohar') is None
 
-    def test_dict_source_empty_path_raises(
+    def test_dict_source_empty_path_resolves_to_none(
         self, yaml_factory,
     ) -> None:
-        """``path: ""`` is no better than a missing key — same
-        downstream Path('').resolve() = cwd footgun. Paired with
-        the missing-path test so a validator that only checks the
-        key but not the value fails this half."""
+        """``path: ""`` is treated as path-less, same as omitting it — the
+        ``Path('').resolve()`` == cwd footgun is closed at resolution."""
         yaml = yaml_factory(
             'sources:\n'
             '  zohar:\n'
             '    path: ""\n',
         )
-        with pytest.raises(ConfigError) as exc:
-            Config(config_path=yaml)
-        assert 'zohar' in str(exc.value)
-        assert 'path' in str(exc.value)
+        cfg = Config(config_path=yaml)
+        assert cfg.get_source_path('zohar') is None
+        assert cfg.resolve_source('zohar') is None
 
     def test_string_form_source_loads_cleanly(
         self, yaml_factory, tmp_path: Path,

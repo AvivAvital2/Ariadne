@@ -7,7 +7,7 @@ supplied (an explicit source argument, just a cwd, or nothing) into a
 chokepoint structural rather than per-call best-effort.
 
 This module is the one place that resolution lives so both surfaces
-share it.
+share it. Phase 3 of ``designs/directional-closure-scoping.md``.
 """
 from __future__ import annotations
 
@@ -72,6 +72,7 @@ def make_global_scoped_library(
     that intentionally cross sources.
     """
     from library import ScopedLibrary
+    config.hydrate_relations(library.all_source_relations())
 
     sources = frozenset(config.sources)
     if not sources:
@@ -99,6 +100,7 @@ def make_scoped_library(
     prevent.
     """
     from library import ScopedLibrary
+    config.hydrate_relations(library.all_source_relations())
 
     resolved = resolve_source_name(config, source, cwd=cwd, use_cwd=use_cwd)
     if resolved is None:
