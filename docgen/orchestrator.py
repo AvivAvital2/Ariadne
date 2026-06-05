@@ -477,12 +477,11 @@ class DocGenOrchestrator:
             if self.config.catalog_only_generator
             else find_python_files
         )
-        # Merge user excludes with the discovery defaults (test_*.py etc).
-        # Empty user excludes => use discovery's built-in defaults.
-        DEFAULT_EXCLUDES = (
-            '**/test_*.py', '**/*_test.py', '**/conftest.py',
-        )
-        excludes = DEFAULT_EXCLUDES + self.config.exclude_patterns
+        # Merge user excludes with the canonical discovery defaults
+        # (test files + vendored installers like get-pip.py — single-sourced
+        # in config.DEFAULT_EXCLUDE_FILE_PATTERNS so no two-list drift).
+        from config import DEFAULT_EXCLUDE_FILE_PATTERNS
+        excludes = DEFAULT_EXCLUDE_FILE_PATTERNS + self.config.exclude_patterns
 
         search_root = self.config.source_path
         if self.config.target_path:

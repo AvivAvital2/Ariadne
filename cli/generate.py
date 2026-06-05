@@ -296,8 +296,8 @@ def _print_cost_estimate(
     from docgen.staleness import find_catalog_files, find_python_files
 
     discover = find_catalog_files if catalog_only else find_python_files
-    DEFAULT_EXCLUDES = ('**/test_*.py', '**/*_test.py', '**/conftest.py')
-    excludes = DEFAULT_EXCLUDES + tuple(exclude_patterns)
+    from config import DEFAULT_EXCLUDE_FILE_PATTERNS
+    excludes = DEFAULT_EXCLUDE_FILE_PATTERNS + tuple(exclude_patterns)
 
     search_root = source_path
     if target_path is not None:

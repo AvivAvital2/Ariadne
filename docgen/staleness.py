@@ -657,7 +657,7 @@ class StalenessTracker:
 
 def find_python_files(
     directory: Path,
-    exclude_patterns: tuple[str, ...] = ('**/test_*.py', '**/*_test.py', '**/conftest.py'),
+    exclude_patterns: tuple[str, ...] | None = None,
     exclude_dir_names: tuple[str, ...] | None = None,
 ) -> list[Path]:
     """Find all Python files in a directory, pruning excluded subtrees.
@@ -675,8 +675,10 @@ def find_python_files(
     Returns:
         Sorted list of Python file paths.
     """
-    from config import DEFAULT_EXCLUDE_POLICY
+    from config import DEFAULT_EXCLUDE_FILE_PATTERNS, DEFAULT_EXCLUDE_POLICY
 
+    if exclude_patterns is None:
+        exclude_patterns = DEFAULT_EXCLUDE_FILE_PATTERNS
     if exclude_dir_names is None:
         exclude_dir_names = DEFAULT_EXCLUDE_POLICY
 
@@ -712,7 +714,7 @@ def find_python_files(
 
 def find_catalog_files(
     directory: Path,
-    exclude_patterns: tuple[str, ...] = ('**/test_*.py', '**/*_test.py', '**/conftest.py'),
+    exclude_patterns: tuple[str, ...] | None = None,
     exclude_dir_names: tuple[str, ...] | None = None,
 ) -> list[Path]:
     """Find all catalog-supported files under ``directory``.
@@ -732,9 +734,11 @@ def find_catalog_files(
     Returns:
         Sorted list of catalog-supported file paths.
     """
-    from config import DEFAULT_EXCLUDE_POLICY
+    from config import DEFAULT_EXCLUDE_FILE_PATTERNS, DEFAULT_EXCLUDE_POLICY
     from docgen.catalog_writer import CATALOG_EXTS, is_catalog_noise, is_vue_companion
 
+    if exclude_patterns is None:
+        exclude_patterns = DEFAULT_EXCLUDE_FILE_PATTERNS
     if exclude_dir_names is None:
         exclude_dir_names = DEFAULT_EXCLUDE_POLICY
 

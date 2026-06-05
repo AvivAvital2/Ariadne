@@ -9,6 +9,7 @@ __all__ = [
     'Config',
     'ConfigError',
     'DEFAULT_EXCLUDE_POLICY',
+    'DEFAULT_EXCLUDE_FILE_PATTERNS',
     'SourceConfig',
     'get_config',
     'reload_config',
@@ -104,6 +105,22 @@ DEFAULT_EXCLUDE_POLICY: tuple[str, ...] = (
     '.github', '.gitlab', '.circleci', '.husky', '.changeset',
     # Transient / runtime output
     'tmp', 'logs',
+)
+
+
+# Companion to DEFAULT_EXCLUDE_POLICY (directories): default GLOB patterns
+# matched per-file via ``Path.match``, unioned with a source's ``exclude``.
+# These are the pre-existing test-scaffolding globs (kept verbatim — tests
+# themselves may warrant docs, so this is unchanged behaviour, not a claim
+# that test code is never documented) PLUS vendored third-party utilities
+# that are not project source and never will be: pip / poetry bootstrap
+# installers dropped at a repo root (e.g. a 2.6 MB get-pip.py that would
+# otherwise dominate the cost estimate and fail generation).
+DEFAULT_EXCLUDE_FILE_PATTERNS: tuple[str, ...] = (
+    # Test scaffolding (pre-existing default — unchanged)
+    '**/test_*.py', '**/*_test.py', '**/conftest.py',
+    # Vendored third-party installers — not project source
+    '**/get-pip.py', '**/get-poetry.py', '**/install-poetry.py',
 )
 
 
@@ -573,7 +590,8 @@ class Config:
         transitively depends on it. This lets a shared library like an
         auth service see its consumer-side context naturally.
 
-        Phase 1 of the closure-scoping design.
+        Phase 1 of the closure-scoping design (see
+        ``designs/directional-closure-scoping.md``).
         """
         if source_name not in self.sources:
             configured = sorted(self.sources)

@@ -38,6 +38,38 @@ from pathlib import Path
 import pytest
 
 
+class TestDefaultFileExcludePatterns:
+    """Companion to DEFAULT_EXCLUDE_POLICY (dirs): the canonical default for
+    vendored *files* that are never project source — pip/poetry bootstrap
+    installers like ``get-pip.py``. Same no-drift contract as the dir policy:
+    a single source in config.py, consumed by every discovery path.
+    """
+
+    def test_default_includes_vendored_installers(self) -> None:
+        from config import DEFAULT_EXCLUDE_FILE_PATTERNS
+        assert '**/get-pip.py' in DEFAULT_EXCLUDE_FILE_PATTERNS
+
+    def test_find_catalog_files_excludes_get_pip_by_default(
+        self, tmp_path: Path,
+    ) -> None:
+        from docgen.staleness import find_catalog_files
+        (tmp_path / 'get-pip.py').write_text('# vendored pip installer\n')
+        (tmp_path / 'real.py').write_text('def foo():\n    return 1\n')
+        names = {p.name for p in find_catalog_files(tmp_path)}
+        assert 'real.py' in names
+        assert 'get-pip.py' not in names
+
+    def test_find_python_files_excludes_get_pip_by_default(
+        self, tmp_path: Path,
+    ) -> None:
+        from docgen.staleness import find_python_files
+        (tmp_path / 'get-pip.py').write_text('# vendored pip installer\n')
+        (tmp_path / 'real.py').write_text('def foo():\n    return 1\n')
+        names = {p.name for p in find_python_files(tmp_path)}
+        assert 'real.py' in names
+        assert 'get-pip.py' not in names
+
+
 # ---------------------------------------------------------------------------
 # Default policy: shape and content
 # ---------------------------------------------------------------------------
