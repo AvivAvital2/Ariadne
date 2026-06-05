@@ -2113,7 +2113,7 @@ class DocGenOrchestrator:
             target_source=self.config.source_name,
             target_source_root=self.config.source_path,
             related_sources=related_sources,
-            analyzer=self._analyzer,
+            analyzer=self._analyzer.analyze_file,
             generator=self._generator,
         )
 

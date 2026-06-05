@@ -1179,3 +1179,47 @@ class _FakeDoc:
     need the full schema."""
     def __init__(self, doc_id: str) -> None:
         self.id = doc_id
+
+
+class TestReverseAugmentAnalyzerWiring:
+    """Regression for "'SourceAnalyzer' object is not callable".
+
+    The reverse-augment phase invokes the analyzer per its documented
+    ``analyzer(file_abs) -> metadata`` contract (``reverse_augment.py``), so
+    the orchestrator must pass a *callable*. ``SourceAnalyzer`` exposes
+    ``analyze_file`` and is not itself callable, so handing the phase the bare
+    instance crashed mid-run. The existing ``test_reverse_augment`` tests
+    missed this because their ``FakeAnalyzer`` defines ``__call__`` — the
+    production analyzer does not.
+    """
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_passes_callable_analyzer(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from docgen._legacy_metadata import ModuleMetadata
+
+        source = _make_source_tree(tmp_path, {
+            'a.py': '"""a."""\ndef foo(): pass\n',
+        })
+        config = _make_config(tmp_path, source)
+
+        captured: dict = {}
+
+        async def _capture(*, analyzer, **kwargs):
+            captured['analyzer'] = analyzer
+            return []
+
+        # The orchestrator imports this name locally inside
+        # run_reverse_augment, so patching the module attribute intercepts it.
+        monkeypatch.setattr(
+            'docgen.reverse_augment.run_reverse_augment_for_source', _capture,
+        )
+
+        async with DocGenOrchestrator(config) as orch:
+            await orch.run_reverse_augment({})
+
+        analyzer = captured['analyzer']
+        assert callable(analyzer)
+        # And it's the real analyze_file: returns ModuleMetadata for a .py file.
+        assert isinstance(analyzer(source / 'a.py'), ModuleMetadata)
