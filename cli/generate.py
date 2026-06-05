@@ -798,6 +798,13 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
     model = args.model or cfg.model
 
     # When --types is omitted, default to all LLM-driven types. ``catalog`` is
+    from docgen.source_graph import persist_source_graph
+    from library import Library as _GraphLibrary
+    _graph_lib = _GraphLibrary(Path(args.db) if args.db else Path(cfg.db_path))
+    try:
+        persist_source_graph(cfg, _graph_lib)
+    finally:
+        _graph_lib.close()
     # excluded — it's structural (ast-grep) and runs through ``catalog-sync``,
     # not the LLM cost path the estimator and orchestrator share.
     doc_types = (
