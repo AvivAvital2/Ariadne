@@ -1050,6 +1050,12 @@ The gap analysis identifies patterns in miss feedback:
 
 Run `ariadne gaps --analyze` for LLM-powered recommendations, or ask Claude: "What documentation gaps does Ariadne have?"
 
+## Slack Bridge
+
+`ariadne-slack` is an optional **read-only Slack bot** — Slack → Claude (Agent SDK) → Ariadne's MCP tools. A user @mentions it, DMs it, or runs `/ariadne`, and Claude answers from the knowledge base. It runs in Socket Mode (an outbound WebSocket; no public URL).
+
+See **[docs/slack-bridge-deployment.md](docs/slack-bridge-deployment.md)** for the full production runbook: the Slack app manifest, the token/credential model, the serve/build split (ship a prebuilt `ariadne.db` — no `.scip`, staleness DB, or re-indexing on the box), the minimal serving `ariadne.yaml`, and the systemd setup.
+
 ## License
 
 [PolyForm Noncommercial 1.0.0](LICENSE) — free for any noncommercial purpose. Commercial use requires a separate written license from the copyright holder; contact ubthor@gmail.com.
