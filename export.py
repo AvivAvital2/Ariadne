@@ -311,7 +311,7 @@ class LibraryExporter:
             '- `explanations/` - How things work in the codebase',
             '- `architecture/` - System design and component relationships',
             '- `qa/` - Questions and answers about the codebase',
-            '- `diagrams/` - Visual diagrams (Mermaid)',
+            '- `diagrams/` - Visual diagrams (Graphviz DOT)',
             '- `findings/` - Session discoveries and conclusions',
             '',
             '## Usage',

@@ -9,11 +9,15 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from attrs import define, field, frozen
+from attrs import define, frozen
 
+from diagram_format import DOT_BLOCK_RE
 from docgen.prompts import DocType
 
 ValidationLevel = Literal['error', 'warning', 'info']
+
+# A DOT block is valid if it declares a graph/digraph (optionally `strict`).
+_DOT_GRAPH_RE = re.compile(r'^\s*(strict\s+)?(di)?graph\b', re.MULTILINE)
 
 
 @frozen
@@ -84,7 +88,7 @@ REQUIRED_SECTIONS: dict[DocType, list[str]] = {
     'explanation': ['Overview', 'How It Works'],
     'architecture': ['Overview', 'Design'],
     'qa': ['Question', 'Answer'],
-    'diagram': [],  # Just needs valid Mermaid
+    'diagram': [],  # Just needs valid DOT
 }
 
 # Minimum content length by doc type (characters)
@@ -105,26 +109,11 @@ class ContentValidator:
 
     Attributes:
         strict: If True, warnings are treated as errors.
-        check_mermaid: If True, validate Mermaid diagram syntax.
+        check_diagrams: If True, validate diagram (Graphviz DOT) syntax.
     """
 
     strict: bool = False
-    check_mermaid: bool = True
-    _mermaid_patterns: list[re.Pattern] = field(init=False, factory=list)
-
-    def __attrs_post_init__(self) -> None:
-        """Compile regex patterns."""
-        # Basic Mermaid diagram type patterns
-        self._mermaid_patterns = [
-            re.compile(r'^\s*(graph|flowchart)\s+(TB|BT|RL|LR|TD)', re.MULTILINE),
-            re.compile(r'^\s*classDiagram', re.MULTILINE),
-            re.compile(r'^\s*sequenceDiagram', re.MULTILINE),
-            re.compile(r'^\s*stateDiagram', re.MULTILINE),
-            re.compile(r'^\s*erDiagram', re.MULTILINE),
-            re.compile(r'^\s*gantt', re.MULTILINE),
-            re.compile(r'^\s*pie', re.MULTILINE),
-            re.compile(r'^\s*journey', re.MULTILINE),
-        ]
+    check_diagrams: bool = True
 
     def validate(
         self,
@@ -156,9 +145,9 @@ class ContentValidator:
         # Check code blocks
         issues.extend(self._check_code_blocks(content))
 
-        # Check Mermaid diagrams
-        if self.check_mermaid:
-            issues.extend(self._check_mermaid(content, doc_type))
+        # Check diagrams
+        if self.check_diagrams:
+            issues.extend(self._check_diagram(content, doc_type))
 
         # Check for empty sections
         issues.extend(self._check_empty_sections(content))
@@ -280,76 +269,71 @@ class ContentValidator:
 
         return issues
 
-    def _check_mermaid(self, content: str, doc_type: DocType) -> list[ValidationIssue]:
-        """Check Mermaid diagram syntax."""
+    def _check_diagram(self, content: str, doc_type: DocType) -> list[ValidationIssue]:
+        """Check that a diagram doc carries a valid Graphviz DOT block."""
         issues = []
 
-        # Find Mermaid blocks
-        mermaid_pattern = r'```mermaid\n(.*?)```'
-        matches = list(re.finditer(mermaid_pattern, content, re.DOTALL))
+        # Find DOT blocks via the shared fence grammar.
+        matches = list(DOT_BLOCK_RE.finditer(content))
 
-        # For diagram type, we expect at least one Mermaid block
+        # For diagram type, we expect at least one DOT block.
         if doc_type == 'diagram' and not matches:
             issues.append(
                 ValidationIssue(
                     level='error',
-                    code='NO_MERMAID',
-                    message='Diagram document has no Mermaid code blocks',
+                    code='NO_DIAGRAM',
+                    message='Diagram document has no Graphviz DOT (```dot) code blocks',
                 )
             )
             return issues
 
         for match in matches:
-            mermaid_content = match.group(1).strip()
+            dot_content = match.group(1).strip()
             line_num = content[: match.start()].count('\n') + 1
 
-            # Check for valid diagram type
-            has_valid_type = any(p.search(mermaid_content) for p in self._mermaid_patterns)
-            if not has_valid_type:
+            # Must declare a graph / digraph (optionally `strict`).
+            has_valid_graph = bool(_DOT_GRAPH_RE.search(dot_content))
+            if not has_valid_graph:
                 issues.append(
                     ValidationIssue(
                         level='error',
-                        code='INVALID_MERMAID_TYPE',
-                        message='Mermaid block has no recognized diagram type',
+                        code='INVALID_DIAGRAM',
+                        message='DOT block has no graph/digraph declaration',
                         line=line_num,
-                        context=mermaid_content[:100],
+                        context=dot_content[:100],
                     )
                 )
                 continue
 
-            # Check for common syntax errors
-            mermaid_issues = self._validate_mermaid_syntax(mermaid_content, line_num)
-            issues.extend(mermaid_issues)
+            issues.extend(self._validate_dot_syntax(dot_content, line_num))
 
         return issues
 
-    def _validate_mermaid_syntax(self, content: str, base_line: int) -> list[ValidationIssue]:
-        """Validate basic Mermaid syntax."""
+    def _validate_dot_syntax(self, content: str, base_line: int) -> list[ValidationIssue]:
+        """Validate basic Graphviz DOT syntax."""
         issues = []
 
-        # Check for unbalanced brackets
-        brackets = {'[': ']', '(': ')', '{': '}', '"': '"'}
+        # Unbalanced brackets/braces are the common truncation symptom.
+        brackets = {'[': ']', '(': ')', '{': '}'}
         for open_char, close_char in brackets.items():
-            open_count = content.count(open_char)
-            close_count = content.count(close_char)
-            if open_count != close_count and open_char != close_char:
+            if content.count(open_char) != content.count(close_char):
                 issues.append(
                     ValidationIssue(
                         level='warning',
                         code='UNBALANCED_BRACKETS',
-                        message=f'Unbalanced {open_char}{close_char} in Mermaid diagram',
+                        message=f'Unbalanced {open_char}{close_char} in DOT diagram',
                         line=base_line,
                     )
                 )
 
-        # Check for extremely long lines (likely truncated)
+        # Extremely long lines usually mean truncated output.
         for i, line in enumerate(content.split('\n')):
             if len(line) > 200:
                 issues.append(
                     ValidationIssue(
                         level='warning',
-                        code='LONG_MERMAID_LINE',
-                        message='Very long line in Mermaid diagram',
+                        code='LONG_DIAGRAM_LINE',
+                        message='Very long line in DOT diagram',
                         line=base_line + i,
                     )
                 )

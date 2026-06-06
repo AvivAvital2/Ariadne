@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import types
 
+import pytest
+
+from slack_bridge.diagram import dot_available
 from slack_bridge.handlers import (
     command_to_event,
     handle_event,
@@ -13,8 +16,9 @@ from tests._slack_bridge_helpers import bridge_config
 
 class _FakeSlack:
     def __init__(self, replies=None):
-        self.posted = []   # list of (channel, thread_ts, text)
-        self.updated = []  # list of (channel, ts, text)
+        self.posted = []    # list of (channel, thread_ts, text)
+        self.updated = []   # list of (channel, ts, text)
+        self.uploaded = []  # list of files_upload_v2 call dicts
         self._replies = replies or []
         self._n = 0
 
@@ -28,6 +32,11 @@ class _FakeSlack:
 
     async def conversations_replies(self, *, channel, ts):  # noqa: ARG002 — Slack client signature
         return {'messages': self._replies}
+
+    async def files_upload_v2(self, *, channel, file, thread_ts=None, filename=None, title=None):  # noqa: N802
+        self.uploaded.append(
+            {'channel': channel, 'thread_ts': thread_ts, 'file': file, 'filename': filename}
+        )
 
 
 class _FakeSession:
@@ -237,3 +246,90 @@ def test_name_invoked_regex_matches_the_name_not_arbitrary_text():
     assert _name_invoked('per the ariadne docs')       # any mention of the name
     assert not _name_invoked('what do you think?')
     assert not _name_invoked('')
+
+
+class _TrackingPool:
+    """Pool with REAL keying: get_or_create records the key, __contains__ checks it.
+
+    Unlike _FakePool(contains=True), this exercises the load-bearing invariant —
+    that a same-thread follow-up's thread_ts equals the key the initiating
+    @mention / slash command created the session under.
+    """
+
+    def __init__(self, session):
+        self._session = session
+        self.keys: set[str] = set()
+
+    def __contains__(self, thread_ts):
+        return thread_ts in self.keys
+
+    async def get_or_create(self, thread_ts, *, seed=None):  # noqa: ARG002
+        self.keys.add(thread_ts)
+        return self._session
+
+
+async def test_mention_then_same_thread_followup_reuses_session():
+    """Scenario A: top-level @mention → bot answers in a thread → a follow-up in
+    that thread (no mention) must reuse the session and answer. Real keying."""
+    cfg = bridge_config(channels=frozenset({'C1'}))
+    reply = types.SimpleNamespace(text='ans', is_error=False, session_id='S')
+    pool = _TrackingPool(_FakeSession(reply))
+    slack = _FakeSlack()
+    L = make_listeners(cfg, pool, 'UBOT')
+    asked = pool._session.asked
+
+    await L['app_mention'](
+        event={'channel': 'C1', 'ts': 'T1', 'user': 'UALICE', 'text': '<@UBOT> first?'},
+        client=slack)
+    assert asked == ['first?']
+    assert 'T1' in pool.keys            # session keyed by the mention's ts
+
+    await L['message'](
+        event={'channel': 'C1', 'ts': 'T2', 'thread_ts': 'T1', 'user': 'UALICE', 'text': 'and second?'},
+        client=slack)
+    assert asked[-1] == 'and second?'   # follow-up answered
+
+
+async def test_command_then_same_thread_followup_reuses_session():
+    """Scenario B: /ariadne posts an echo, threads its answer under it → a
+    follow-up in that thread must reuse the session. Real keying."""
+    cfg = bridge_config(channels=frozenset({'C1'}))
+    reply = types.SimpleNamespace(text='ans', is_error=False, session_id='S')
+    pool = _TrackingPool(_FakeSession(reply))
+    slack = _FakeSlack()
+    L = make_listeners(cfg, pool, 'UBOT')
+    asked = pool._session.asked
+
+    async def _ack():
+        pass
+
+    await L['command'](
+        ack=_ack, command={'user_id': 'U1', 'channel_id': 'C1', 'text': 'first?'}, client=slack)
+    assert asked == ['first?']
+    assert 'ph1' in pool.keys           # echo ts (first post) is the thread root + key
+
+    await L['message'](
+        event={'channel': 'C1', 'ts': 'T9', 'thread_ts': 'ph1', 'user': 'U1', 'text': 'second?'},
+        client=slack)
+    assert asked[-1] == 'second?'       # follow-up answered
+
+
+@pytest.mark.skipif(not dot_available(), reason='requires graphviz `dot`')
+async def test_diagram_in_reply_is_rendered_to_png_and_uploaded():
+    """A reply carrying a ```dot block → the bridge renders it and uploads the
+    PNG into the thread, and the edited text drops the raw DOT."""
+    reply = types.SimpleNamespace(
+        text='Here is the flow:\n\n```dot\ndigraph G { a -> b }\n```\n',
+        is_error=False, session_id='S',
+    )
+    pool = _FakePool(_FakeSession(reply), contains=True)
+    slack = _FakeSlack()
+    cfg = bridge_config(channels=frozenset({'C1'}))
+    event = {'user': 'U1', 'channel': 'C1', 'ts': 'T1', 'text': '<@UBOT> show me the diagram'}
+
+    await handle_event(cfg=cfg, pool=pool, slack=slack, bot_user_id='UBOT', ack=_noop_ack, event=event)
+
+    assert len(slack.uploaded) == 1
+    assert slack.uploaded[0]['file'][:8] == b'\x89PNG\r\n\x1a\n'   # a real PNG
+    assert slack.uploaded[0]['thread_ts'] == 'T1'
+    assert '```dot' not in slack.updated[-1][2]                   # raw DOT replaced by the image

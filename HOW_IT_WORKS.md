@@ -80,7 +80,7 @@ its elements). Deterministic UUID5 IDs make this idempotent.
 ## 5. The user runs `ariadne generate` (LLM docs)
 
 For each file, an LLM produces narrative documentation: **`explanation`**
-(how it works), **`architecture`** (design decisions + Mermaid diagrams,
+(how it works), **`architecture`** (design decisions + Graphviz DOT diagrams,
 with a Dependents section back-filled from the SCIP graph), **`qa`**
 (question/answer pairs), **`gotcha`** (pitfalls), and **`diagram`**.
 Generation is concurrent, validated, retried, and idempotent (same input →

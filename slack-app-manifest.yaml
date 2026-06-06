@@ -35,11 +35,12 @@ oauth_config:
     bot:
       - app_mentions:read   # receive @Ariadne mentions
       - chat:write          # post + edit replies (chat.postMessage / chat.update)
+      - files:write         # upload rendered diagram PNGs (files_upload_v2) into threads
       - commands            # the /ariadne slash command
       - im:history          # read direct messages (the message.im events)
       - channels:history    # read public-channel thread history (conversations.replies)
       - groups:history      # read private-channel thread history
-      - mpim:history        # read group-DM thread history (forward-looking; code handles 1:1 DMs only)
+      - mpim:history        # read group-DM thread history (message.mpim thread follow-ups)
 settings:
   event_subscriptions:
     bot_events:

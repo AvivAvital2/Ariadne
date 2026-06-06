@@ -7,7 +7,8 @@ text chunking and embedding generation.
 write-side companion to ``Library`` — embedding refresh, batch
 rebuilds, and ingestion helpers operate over the whole library by
 design (they're maintenance ops, not request-boundary reads). Raw
-``self.library.X(...)`` access here is intentional — "Library-internal modules
+``self.library.X(...)`` access here is intentional — see
+``designs/directional-closure-scoping.md`` § "Library-internal modules
 — legitimately unscoped".
 """
 from __future__ import annotations
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING
 
 from attrs import frozen
 
+from diagram_format import fence_dot
 from embedding import EmbeddingConfig, EmbeddingService
 from library import Library
 from schema import Chunk, ContentType, Document, Section
@@ -353,7 +355,6 @@ class LibraryWriter:
         title: str,
         content: str,
         source_files: list[str] | None = None,
-        mermaid_charts: list[str] | None = None,
         source_name: str | None = None,
         doc_id: str | None = None,
     ) -> Document:
@@ -361,16 +362,11 @@ class LibraryWriter:
 
         Architecture documents describe system design and component relationships.
         """
-        metadata: dict[str, object] = {}
-        if mermaid_charts:
-            metadata['mermaid_charts'] = mermaid_charts
-
         return await self.add_document(
             content_type='architecture',
             title=title,
             content=content,
             source_files=source_files,
-            metadata=metadata,
             source_name=source_name,
             doc_id=doc_id,
         )
@@ -403,23 +399,25 @@ class LibraryWriter:
         self,
         title: str,
         description: str,
-        mermaid_code: str,
+        dot_code: str,
         source_files: list[str] | None = None,
         source_name: str | None = None,
         doc_id: str | None = None,
     ) -> Document:
         """Add a diagram document.
 
-        Diagram documents contain Mermaid diagrams with descriptions.
+        Diagram documents contain a Graphviz DOT diagram with a description. DOT
+        renders to PNG with a tiny native binary (`dot`), so the bridge can turn
+        it into an image for Slack. The raw DOT is kept in metadata for reuse.
         """
-        content = f'{description}\n\n```mermaid\n{mermaid_code}\n```'
+        content = f'{description}\n\n{fence_dot(dot_code)}'
 
         return await self.add_document(
             content_type='diagram',
             title=title,
             content=content,
             source_files=source_files,
-            metadata={'mermaid_code': mermaid_code},
+            metadata={'dot_code': dot_code},
             create_chunks=False,
             source_name=source_name,
             doc_id=doc_id,

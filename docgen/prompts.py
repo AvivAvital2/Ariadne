@@ -46,7 +46,7 @@ Your task is to create architecture documentation that shows how components fit 
 
 Guidelines:
 - Focus on component relationships, data flow, and system structure
-- Include Mermaid diagrams where they add clarity
+- Include Graphviz DOT diagrams (```dot) where they add clarity
 - Explain the rationale behind architectural decisions when evident
 - Document interfaces and integration points
 - Describe extension patterns and customization hooks
@@ -66,16 +66,16 @@ Guidelines:
 - Link conceptually related topics
 - Keep answers factual and grounded in the code'''
 
-DIAGRAM_SYSTEM = '''You are a technical diagram specialist creating Mermaid diagrams for code documentation.
+DIAGRAM_SYSTEM = '''You are a technical diagram specialist creating Graphviz DOT diagrams for code documentation.
 Your task is to create clear, informative diagrams that visualize code structure and relationships.
 
 Guidelines:
-- Use appropriate diagram types (flowchart, classDiagram, sequenceDiagram, etc.)
+- Use a directed graph (digraph) for flow/dependencies; an undirected graph only when direction is irrelevant
 - Keep diagrams focused and not too complex
-- Use consistent naming from the codebase
+- Use consistent naming from the codebase for node labels
 - Include only the most important relationships
-- Add brief labels to clarify relationships
-- Ensure diagrams are syntactically valid Mermaid'''
+- Add brief edge labels to clarify relationships
+- Ensure the diagram is syntactically valid Graphviz DOT'''
 
 
 # User prompt templates
@@ -124,7 +124,7 @@ ARCHITECTURE_TEMPLATE = '''Create an architecture document for the following cod
 Write architecture documentation covering:
 1. **Component Overview**: High-level purpose and responsibilities
 2. **Design Decisions**: Key architectural choices and rationale
-3. **Component Diagram**: Mermaid diagram showing structure (use ```mermaid blocks)
+3. **Component Diagram**: Graphviz DOT diagram showing structure (use ```dot blocks)
 4. **Interfaces**: Key APIs, protocols, and integration points
 5. **Data Flow**: How data moves through the component
 6. **Extension Points**: How to extend or customize this component
@@ -236,7 +236,7 @@ GOTCHA_FORMAT = '''### [Gotcha title]
 **Example:** ...'''
 
 
-DIAGRAM_TEMPLATE = '''Create a Mermaid diagram for the following code structure.
+DIAGRAM_TEMPLATE = '''Create a Graphviz DOT diagram for the following code structure.
 
 ## Component Information
 {component_info}
@@ -249,17 +249,17 @@ DIAGRAM_TEMPLATE = '''Create a Mermaid diagram for the following code structure.
 
 ---
 
-Create a clear Mermaid diagram that visualizes:
+Create a clear Graphviz DOT diagram that visualizes:
 - Class hierarchy and relationships
 - Key data flows
 - Component dependencies
 
-Choose the most appropriate diagram type:
-- `classDiagram` for class relationships
-- `flowchart` for process/data flow
-- `sequenceDiagram` for interaction patterns
+Use a `digraph` with:
+- Nodes for the key classes / functions / components (readable labels)
+- Edges for calls, dependencies, and data flow (briefly labelled)
+- `rankdir=LR` (or `TB`) for readability
 
-Output ONLY the Mermaid diagram code in a ```mermaid block.
+Output ONLY the DOT code in a ```dot block, starting with `digraph`.
 Keep the diagram focused and readable (max 15-20 nodes).'''
 
 
@@ -270,7 +270,7 @@ Guidelines:
 - Focus on the workflow and data flow ACROSS files, not individual file details
 - Explain the "big picture" — how components collaborate to achieve a goal
 - Use concrete class/function names from the actual code
-- Include a Mermaid diagram showing the cross-file data flow
+- Include a Graphviz DOT diagram (```dot) showing the cross-file data flow
 - Write for developers who understand Python but are new to this codebase
 - Keep explanations grounded in what the code actually does
 - Highlight entry points, key abstractions, and extension points'''
@@ -291,7 +291,7 @@ TOPIC_TEMPLATE = '''Create a cross-cutting topic guide explaining how these file
 Write a comprehensive topic guide covering:
 1. **Overview**: What this system/workflow does and why it exists
 2. **Key Components**: The main classes and functions across these files and their roles
-3. **Data Flow**: How data moves through the system, from input to output (include a Mermaid flowchart)
+3. **Data Flow**: How data moves through the system, from input to output (include a Graphviz DOT diagram)
 4. **How It Works**: Step-by-step walkthrough of the main workflow
 5. **Entry Points**: Where developers interact with this system
 6. **Extension Points**: How to customize or extend the behavior
@@ -307,7 +307,7 @@ TOPIC_FORMAT = '''## Topic Title
 [Classes and functions across files]
 
 ### Data Flow
-```mermaid
+```dot
 [flowchart showing cross-file data flow]
 ```
 
@@ -348,7 +348,7 @@ ARCHITECTURE_FORMAT = '''## Component Name
 [Key choices and rationale]
 
 ### Component Diagram
-```mermaid
+```dot
 [diagram]
 ```
 
@@ -369,8 +369,8 @@ QA_FORMAT = '''## Question
 
 (Repeat for each Q&A pair)'''
 
-DIAGRAM_FORMAT = '''```mermaid
-[Valid Mermaid diagram code]
+DIAGRAM_FORMAT = '''```dot
+[Valid Graphviz DOT diagram code]
 ```'''
 
 

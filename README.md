@@ -719,7 +719,7 @@ docs/{source}/
 | `explanation` | How a system or feature works |
 | `architecture` | Design decisions and component relationships |
 | `qa` | Common questions and answers |
-| `diagram` | Visual diagrams (Mermaid) |
+| `diagram` | Visual diagrams (Graphviz DOT) |
 | `catalog` | Inventory of modules, classes, or endpoints |
 | `finding` | Quick insights and conclusions captured during sessions |
 | `gotcha` | Structured pitfall docs with trigger/fix/category and encounter counting |

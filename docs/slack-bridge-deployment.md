@@ -41,6 +41,8 @@ git clone <repo-url> /opt/ariadne && cd /opt/ariadne
 uv sync
 ```
 
+**Optional — diagram rendering.** To have the bot post diagrams as *images*, install Graphviz so the `dot` binary is on `PATH` (e.g. `sudo apt install graphviz`). It's used **only here, at the bridge**, to render stored DOT diagrams to PNG. Without it the bridge degrades gracefully — it posts the DOT source plus a one-line note instead of an image (and logs a warning); generation and search never need it.
+
 **Do not build the database here.** Ship the prebuilt one from your build box:
 
 ```bash

@@ -24,6 +24,7 @@ from docgen.llm.factory import batch_strategy_for
 from docgen.prompts import DocType
 from docgen.staleness import StalenessTracker, find_catalog_files, find_python_files
 from docgen.validator import ContentValidator, ValidationResult
+from diagram_format import split_description_and_dot
 from library import Library
 from schema import Document
 from writer import LibraryWriter
@@ -1706,16 +1707,12 @@ class DocGenOrchestrator:
                     doc_id=doc_id,
                 )
             elif gen_doc.doc_type == 'diagram':
-                import re
-
-                mermaid_match = re.search(r'```mermaid\n(.*?)```', gen_doc.content, re.DOTALL)
-                mermaid_code = mermaid_match.group(1) if mermaid_match else ''
-                description = re.sub(r'```mermaid\n.*?```', '', gen_doc.content, flags=re.DOTALL).strip()
+                description, dot_code = split_description_and_dot(gen_doc.content)
 
                 return await self._writer.add_diagram(
                     title=gen_doc.title,
                     description=description,
-                    mermaid_code=mermaid_code,
+                    dot_code=dot_code,
                     source_files=list(gen_doc.source_files),
                     source_name=source_name,
                     doc_id=doc_id,

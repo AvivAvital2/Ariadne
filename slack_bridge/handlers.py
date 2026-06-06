@@ -4,6 +4,7 @@ import asyncio
 import re
 from typing import Any
 
+from slack_bridge.diagram import prepare_diagrams
 from slack_bridge.errors import to_user_message
 from slack_bridge.format import to_mrkdwn
 from slack_bridge.orchestrator import answer_question
@@ -70,9 +71,23 @@ async def handle_event(*, cfg: Any, pool: Any, slack: Any, bot_user_id: str, ack
     except Exception as exc:  # noqa: BLE001 — surface the failure to the user, don't mask it
         answer = to_user_message(exc)
 
+    # Render any DOT diagrams to PNGs off the event loop (dot is a subprocess).
+    # Missing/invalid dot degrades to a warning + the DOT source inside prepared.text.
+    prepared = await asyncio.to_thread(prepare_diagrams, answer)
     await slack.chat_update(
-        channel=channel, ts=placeholder['ts'], text=to_mrkdwn(answer),
+        channel=channel, ts=placeholder['ts'], text=to_mrkdwn(prepared.text),
     )
+    if prepared.images:
+        await asyncio.gather(*(
+            slack.files_upload_v2(
+                channel=channel,
+                thread_ts=thread_ts,
+                file=png,
+                filename=f'diagram-{i + 1}.png',
+                title='Diagram',
+            )
+            for i, png in enumerate(prepared.images)
+        ))
 
 
 def is_dm_message(event: dict) -> bool:
