@@ -136,6 +136,7 @@ def detect_dependencies(
     source_path: Path,
     known_sources: dict[str, Path],
     max_evidence: int = 3,
+    ignore: frozenset[str] = frozenset(),
 ) -> list[DetectedDependency]:
     """Scan Python files for imports matching known sources.
 
@@ -158,6 +159,7 @@ def detect_dependencies(
         for name, path in known_sources.items()
         if path.resolve() != source_path.resolve()
     }
+    other_sources = {n: p for n, p in other_sources.items() if n not in ignore}
 
     if not other_sources:
         return []

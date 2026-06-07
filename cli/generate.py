@@ -511,6 +511,35 @@ def _print_cost_estimate(
         'generation); real cost can run up to ~+50% higher.[/dim]',
     )
     return 0
+def _excluded_evidence_note(dep, excluded_dirs: set[str]) -> str:
+    """Explain evidence found inside a directory excluded from documentation.
+
+    Import analysis intentionally scans every import — including dirs like
+    ``.venv``/``site-packages`` that doc generation excludes — so it can
+    detect dependencies that surface only through an installed package. That
+    scan runs locally (no LLM, no cost). Return an explanatory note when a
+    dependency's evidence comes from such a directory; otherwise ``''``.
+    """
+    from pathlib import Path as _P
+
+    matched = next(
+        (
+            part
+            for ev in dep.evidence
+            for part in _P(ev.file_path).parts
+            if part in excluded_dirs
+        ),
+        None,
+    )
+    if matched is None:
+        return ''
+    return (
+        f'[dim]ⓘ Found via an installed package under {matched}/ — a '
+        f'directory excluded from documentation, but intentionally still '
+        f'scanned for imports so Ariadne can catch links that first-party '
+        f"code alone wouldn't reveal. This scan runs locally; no file content "
+        f'is sent to the LLM, so it adds no cost.[/dim]'
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -543,9 +572,13 @@ def _check_and_prompt_dependencies(
     known_sources = cfg.get_all_source_paths()
     if len(known_sources) < 2:
         return  # No other sources to depend on
-
-    # Detect dependencies
-    detected = detect_dependencies(source_path, known_sources)
+    # Ariadne's own source is never a real dependency target (its name also
+    # collides with common packages, e.g. the `ariadne` GraphQL lib), so
+    # ignore any configured source whose path is this Ariadne repo.
+    from config import _PACKAGE_ROOT
+    _tool_root = Path(_PACKAGE_ROOT).resolve()
+    ignore = frozenset(name for name, p in known_sources.items() if Path(p).resolve() == _tool_root)
+    detected = detect_dependencies(source_path, known_sources, ignore=ignore)
     if not detected:
         return
 
@@ -556,8 +589,10 @@ def _check_and_prompt_dependencies(
             evidence_lines.append(f'  [cyan]{ev.file_path}:{ev.line_number}[/cyan]')
             evidence_lines.append(f'    [dim]{ev.import_statement}[/dim]')
             evidence_lines.append('')
-
         evidence_text = '\n'.join(evidence_lines).rstrip()
+        note = _excluded_evidence_note(dep, set(cfg.resolve_excluded_dirs(source_name)))
+        if note:
+            evidence_text = f'{evidence_text}\n\n{note}'
 
         panel_content = (
             f'No dependency was explicitly configured between [bold]{source_name}[/bold]\n'

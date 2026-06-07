@@ -609,7 +609,7 @@ You author the **user fields** below. The **Ariadne-managed fields** are filled 
 | Field | Type | Description |
 |-------|------|-------------|
 | `path` | string | Path to the source code directory (required) |
-| `depends_on` | list | Source names to load as context. Search auto-includes their docs. |
+| `depends_on` | list | Source names to load as context. Search auto-includes their docs. For Python sources, Ariadne can auto-detect these — see [Automatic dependency detection](#automatic-dependency-detection). |
 | `parent` | string | Parent source name (child path must be subdirectory of parent) |
 | `branches` | list | Git branch patterns where source is active (e.g., `["feature/*"]`) |
 | `ref` | string | Pin dependency to specific git ref (branch/tag) |
@@ -625,6 +625,30 @@ You author the **user fields** below. The **Ariadne-managed fields** are filled 
 |-------|------|-------------|
 | `index_kinds` | dict | Per-language SCIP routing — `{javascript: scip, scala: scip, java: scip}` for languages whose catalog extraction should go through scip-X. Auto-derived from detected file extensions. |
 | `scip` | dict | `artifact_path` (the merged `.scip` file at `<source>/.ariadne/index.scip`) and `max_staleness_days` (default 7). |
+
+### Automatic dependency detection
+
+You don't have to hand-write every `depends_on`. During `ariadne onboard` / `ariadne generate`, when a source has **no `depends_on` set yet** (and at least one other source exists), Ariadne scans that source's Python imports and matches them against your other configured sources. On a match it shows a **Dependency Detection** panel with the evidence (file, line, import statement) and asks whether to save the relationship to `depends_on`:
+
+```text
+┌─ Dependency Detection ──────────────────────────────┐
+│ No dependency was explicitly configured between      │
+│ web-app and auth-app, but Ariadne detected a         │
+│ relationship based on import analysis.               │
+│                                                      │
+│ Evidence:                                            │
+│   be/app/services/auth.py:3                          │
+│     from auth_app import AuthAdmin                   │
+└──────────────────────────────────────────────────────┘
+Save dependency web-app -> auth-app to config? [Y/n]
+```
+
+How the scan behaves:
+
+- **Python imports only.** It's a local, offline AST scan (`*.py` parsed with `ast`) — nothing is sent to the LLM, so it adds **no generation cost**. Other languages are **not** auto-detected; set their `depends_on` by hand. (The multi-language SCIP graph still captures cross-source relationships for callers/callees/flow tracing — see [SCIP Cross-Source Intelligence](#scip-cross-source-intelligence) — but it doesn't drive this prompt.)
+- **Installed packages count.** The scan intentionally includes imports that resolve into directories excluded from *documentation* (e.g. `.venv/`, `site-packages/`), so it can catch dependencies that surface only through an installed package. When evidence comes from such a directory, the panel says so.
+- **Ariadne's own source is never proposed** — a documented project doesn't depend on the documentation tool, and the name `ariadne` collides with common packages (e.g. the GraphQL library), so a source pointing at the Ariadne repo is excluded from detection.
+- **Only prompts while unset** — once `depends_on` is configured for a source (whether you saved a detected one or wrote it by hand), detection stops prompting for it.
 
 ### Directory Exclusion Policy
 
