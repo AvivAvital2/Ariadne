@@ -26,6 +26,7 @@ from rich.tree import Tree
 from config import get_config
 from docgen.trace_flow import HopInfo, TraceFlowResult, trace_flow
 from docgen.trace_flow_llm_bridge import build_llm_bridge
+from docgen.trace_flow_sequence import render_sequence_dot, trace_to_messages
 
 
 _console = Console()
@@ -59,6 +60,13 @@ def register_commands(
     p.add_argument(
         '--json', action='store_true',
         help='Emit structured JSON instead of a Rich tree',
+    )
+    p.add_argument(
+        '--sequence', action='store_true',
+        help=(
+            'Emit a Graphviz DOT sequence diagram of the trace '
+            '(lifelines = sources; render with `dot -Tpng`)'
+        ),
     )
     p.add_argument(
         '--db',
@@ -152,10 +160,20 @@ def cmd_trace_flow(args: argparse.Namespace) -> int:
             conn=conn,
             llm_bridge=bridge,
         )
+        # The sequence renderer resolves hop symbol-ids → sources against the
+        # graph, so build the messages while the connection is still open.
+        messages = (
+            trace_to_messages(result, conn)
+            if getattr(args, 'sequence', False)
+            else None
+        )
     finally:
         conn.close()
 
-    if getattr(args, 'json', False):
+    if getattr(args, 'sequence', False):
+        # Plain print (not Rich) so the DOT is captured/piped verbatim.
+        print(render_sequence_dot(messages))
+    elif getattr(args, 'json', False):
         # Use plain print (not Rich) so capsys captures verbatim.
         print(_json.dumps(trace_result_to_dict(result), indent=2))
     else:
