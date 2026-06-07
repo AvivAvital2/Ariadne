@@ -221,3 +221,67 @@ class TestMcpWrapper:
         # 4 reachable hops within depth=5
         assert len(result['hops']) == 4
         assert result['truncated'] is False
+
+
+class TestSequenceDiagram:
+    """``include_diagram=True`` adds a fenced Graphviz DOT sequence diagram to
+    the response so chat surfaces (the Slack bridge's ``prepare_diagrams``) can
+    render the cross-repo trace in-thread. Additive — the structured trace is
+    unchanged, so existing consumers are untouched."""
+
+    def _seed_two_source_db(self, db_path: Path) -> None:
+        """alpha.login → beta.handle: a SCIP edge across two sources."""
+        from library.scip import init_scip_schema
+
+        conn = sqlite3.connect(db_path)
+        init_scip_schema(conn)
+        conn.execute(
+            'INSERT INTO scip_symbols VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            ('A', 'alpha', 'python', 'app.py', 1, 10, 'function', 'A',
+             'alpha.login', None),
+        )
+        conn.execute(
+            'INSERT INTO scip_symbols VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            ('B', 'beta', 'python', 'app.py', 1, 10, 'function', 'B',
+             'beta.handle', None),
+        )
+        conn.execute(
+            'INSERT INTO scip_edges VALUES (?, ?, ?, ?, ?, ?)',
+            ('A', 'B', 'reference', 'app.py', 7, 'scip'),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_include_diagram_returns_fenced_dot_sequence(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ariadne_mcp.server_admin import ariadne_trace_flow
+
+        db_path = tmp_path / 'seq.db'
+        self._seed_two_source_db(db_path)
+        monkeypatch.setattr(
+            'config.get_config',
+            lambda: SimpleNamespace(db_path=str(db_path)),
+        )
+
+        result = asyncio.run(
+            ariadne_trace_flow(start_symbol='A', depth=5, include_diagram=True),
+        )
+
+        # The structured trace is still present (additive).
+        assert len(result['hops']) == 1
+        # Plus a fenced DOT sequence diagram the bridge can render to PNG.
+        diagram = result['diagram']
+        assert diagram.startswith('```dot')
+        assert 'digraph' in diagram
+        assert 'alpha' in diagram and 'beta' in diagram  # both source lifelines
+
+    def test_diagram_absent_by_default(
+        self, db_with_simple_edge: Path,
+    ) -> None:
+        """Default call is unchanged — no ``diagram`` key, so existing
+        consumers (and token budgets) are unaffected."""
+        from ariadne_mcp.server_admin import ariadne_trace_flow
+
+        result = asyncio.run(ariadne_trace_flow(start_symbol='A', depth=5))
+        assert 'diagram' not in result

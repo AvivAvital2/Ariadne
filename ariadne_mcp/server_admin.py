@@ -296,6 +296,7 @@ async def ariadne_trace_flow(
     start_symbol: str,
     depth: int = 5,
     enable_llm_bridge: bool = False,
+    include_diagram: bool = False,
     ctx: Context | None = None,
 ) -> dict:
     """Trace cross-language flow from a starting symbol — the SCIP-
@@ -319,6 +320,11 @@ async def ariadne_trace_flow(
         start_symbol: Starting canonical_id (e.g., from
             ``ariadne_callers``/``ariadne_callees`` output).
         depth: Maximum hop depth to walk (default: 5).
+        include_diagram: When True, add a ``diagram`` field to the response —
+            a fenced Graphviz DOT sequence diagram of the trace (lifelines =
+            sources, dashed = HTTP hops). Include that ```dot block verbatim
+            in a chat reply to render the cross-repo flow as an image where
+            supported (e.g. the Slack bridge renders it in-thread).
     """
     import sqlite3
 
@@ -344,10 +350,22 @@ async def ariadne_trace_flow(
             conn=conn,
             llm_bridge=bridge,
         )
+        response = trace_result_to_dict(result)
+        if include_diagram:
+            # Resolve hop symbol-ids → sources against the open graph, then
+            # emit a fenced DOT sequence diagram the bridge renders in-thread.
+            from diagram_format import fence_dot
+            from docgen.trace_flow_sequence import (
+                render_sequence_dot,
+                trace_to_messages,
+            )
+
+            messages = trace_to_messages(result, conn)
+            response['diagram'] = fence_dot(render_sequence_dot(messages))
     finally:
         conn.close()
 
-    return trace_result_to_dict(result)
+    return response
 
 
 async def ariadne_docs_read(

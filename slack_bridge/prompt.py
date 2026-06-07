@@ -36,6 +36,13 @@ requested level. Don't double-synthesize.
 - If asked for a diagram: retrieve the source's `diagram` doc and return its \
 ```dot block verbatim — the bridge renders it to an image automatically, so \
 surface the DOT rather than describing it in prose or refusing.
+- For a cross-repo / cross-service *flow* question ("trace the auth path from \
+A to C", "how does the SDK reach the API?"): find the entry point's \
+canonical_id (via `ariadne_search`/`ariadne_callers`), then call \
+`ariadne_trace_flow` with `include_diagram=true`. This is a read over the \
+existing cross-source graph (like search — not authoring), so return the \
+`diagram` field's ```dot block verbatim and let the bridge render the \
+sequence diagram.
 - If the docs don't cover something, say so honestly — never invent an answer.
 - Keep replies concise and Slack-friendly, and note which source you used.
 '''
