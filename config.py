@@ -105,6 +105,9 @@ DEFAULT_EXCLUDE_POLICY: tuple[str, ...] = (
     '.github', '.gitlab', '.circleci', '.husky', '.changeset',
     # Transient / runtime output
     'tmp', 'logs',
+    # Ariadne's own output dir (SCIP index, manifest, intermediate maps).
+    # Never index ourselves — "don't scan yourself" is a built-in default.
+    '.ariadne',
 )
 
 

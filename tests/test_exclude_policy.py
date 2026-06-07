@@ -550,3 +550,46 @@ def test_two_walk_paths_use_same_default_policy(tmp_path):
         'find_catalog_files and iter_catalog_files diverged: '
         f'{set(a) ^ set(b)}'
     )
+
+
+# ---------------------------------------------------------------------------
+# Self-scan guard: Ariadne must never index its own .ariadne/ output dir
+# ---------------------------------------------------------------------------
+
+
+def test_ariadne_output_dir_excluded_by_default(tmp_path):
+    """Ariadne writes its own artifacts — the SCIP index, manifest, and
+    intermediate maps — into ``.ariadne/`` (the source's
+    ``scip.artifact_path`` points there). It must never index that
+    directory: "don't scan yourself" is a built-in default, not
+    something each source has to remember to list in ``exclude_dirs``.
+    """
+    from config import DEFAULT_EXCLUDE_POLICY
+    from docgen.catalog_writer import iter_catalog_files
+    from docgen.staleness import find_catalog_files
+
+    # Source of truth: the output dir is in the canonical policy.
+    assert '.ariadne' in DEFAULT_EXCLUDE_POLICY, (
+        '.ariadne (Ariadne\'s own output dir) must be excluded by default'
+    )
+
+    (tmp_path / 'src').mkdir()
+    (tmp_path / 'src' / 'main.py').write_text('x = 1', encoding='utf-8')
+    # Mirror the real layout that leaked: a .py probe (guarantees the
+    # walk would return it if the dir weren't pruned) plus the JSON
+    # artifacts that actually produced stray docs.
+    ariadne_dir = tmp_path / '.ariadne'
+    (ariadne_dir / 'intermediate').mkdir(parents=True)
+    (ariadne_dir / 'leaked.py').write_text('y = 2', encoding='utf-8')
+    (ariadne_dir / 'manifest.json').write_text('{}', encoding='utf-8')
+    (ariadne_dir / 'intermediate' / 'vue-mapping.json').write_text(
+        '{}', encoding='utf-8',
+    )
+
+    for walk in (find_catalog_files, iter_catalog_files):
+        rels = sorted(str(f.relative_to(tmp_path)) for f in walk(tmp_path))
+        assert 'src/main.py' in rels
+        leaked = [r for r in rels if r.startswith('.ariadne/')]
+        assert not leaked, (
+            f'{walk.__name__} indexed Ariadne\'s own output dir: {leaked}'
+        )
