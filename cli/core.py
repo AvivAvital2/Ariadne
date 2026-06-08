@@ -184,6 +184,13 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         '--kind', choices=['python', 'typescript', 'java'],
         help='Run only entries of this indexer kind (skip the rest)',
     )
+    index_parser.add_argument(
+        '--force', '-f', action='store_true',
+        help='Re-index even if the .scip artifact is still fresh (younger '
+             'than the source max_staleness_days). Without this, a fresh '
+             'index is reused so re-runs (e.g. onboard --approve) skip the '
+             'slow indexers.',
+    )
 
     # usage
     usage_parser = subparsers.add_parser('usage', help='Show usage statistics')
@@ -1467,6 +1474,34 @@ def cmd_index(
             return 1
 
         source_root = Path(sc.path).expanduser().resolve()
+
+        # Freshness skip: if the merged .scip is still fresh (younger than
+        # the source's max_staleness_days), reuse it rather than re-running
+        # the slow per-language indexers. The artifact SHA only gates the
+        # persist step, so the indexer skip is necessarily time-based. The
+        # persist phase below walks every configured source, so it still
+        # reloads this artifact — only the expensive indexer+merge is
+        # skipped. ``--force`` bypasses. This is what makes a re-run of
+        # ``onboard --approve`` (which re-enters the free phases) not
+        # re-index when nothing has gone stale.
+        if not getattr(args, 'force', False):
+            merged_scip = source_root / '.ariadne' / 'index.scip'
+            if merged_scip.exists():
+                scip_cfg = cfg.get_source_scip_config(source_name)
+                max_days = scip_cfg.max_staleness_days if scip_cfg else 7
+                age_days = (
+                    datetime.now(timezone.utc).timestamp()
+                    - merged_scip.stat().st_mtime
+                ) / 86400
+                if age_days < max_days:
+                    if not getattr(args, 'quiet', False):
+                        console.print(
+                            f'  [dim]Index — reusing fresh SCIP for '
+                            f'{source_name} ({age_days:.1f}d < {max_days}d); '
+                            f'pass --force to re-index[/dim]',
+                        )
+                    continue
+
         manifest_path = source_root / '.ariadne' / 'manifest.json'
         if not manifest_path.exists():
             console.print(
