@@ -10,7 +10,8 @@ written (the placeholder stays in place but is filtered from search by default).
 design (a cluster can span members from any indexed source); their
 ``source_name`` column is ``None`` and the LLM summary needs every
 member's text regardless of source. Raw ``library.X(...)`` access here
-is intentional — "Library-internal modules — legitimately unscoped".
+is intentional — see ``designs/directional-closure-scoping.md`` §
+"Library-internal modules — legitimately unscoped".
 """
 from __future__ import annotations
 
@@ -20,7 +21,6 @@ from collections import defaultdict
 from typing import TYPE_CHECKING, NamedTuple
 
 from docgen.cluster import cluster_themes
-from docgen.graph_builder import update_semantic_edges_for
 from docgen.prompts import THEME_SYSTEM_PROMPT, THEME_USER_TEMPLATE
 from llm import chat_complete
 from schema import _now_iso
@@ -279,10 +279,21 @@ async def generate_themes(
     failed = 0
     completed = 0
     lock = asyncio.Lock()
+    # A hard API cap (credit/quota or a maxed workspace usage limit) is fatal
+    # for the whole phase — every further call fails identically. Stop on the
+    # first one and surface ONE clear message instead of N per-cluster
+    # tracebacks. ``aborted`` gates clusters still queued behind the semaphore.
+    from docgen.llm.anthropic import QuotaExhaustedError
+    aborted = asyncio.Event()
+    quota_message: str | None = None
 
     async def process(cluster_id: str) -> None:
-        nonlocal summarized, incoherent, failed, completed
+        nonlocal summarized, incoherent, failed, completed, quota_message
+        if aborted.is_set():
+            return
         async with sem:
+            if aborted.is_set():
+                return
             try:
                 ok = await summarize_theme(library, writer, cluster_id, model=model)
                 async with lock:
@@ -290,6 +301,18 @@ async def generate_themes(
                         summarized += 1
                     else:
                         incoherent += 1
+            except QuotaExhaustedError as e:
+                # Account cap — not a per-cluster content failure. Record the
+                # message once, stop the phase; the caller surfaces it.
+                async with lock:
+                    if quota_message is None:
+                        quota_message = str(e)
+                        import logging as _logging
+                        _logging.getLogger(__name__).error(
+                            'Theme summarization stopped — Anthropic API usage '
+                            'cap reached: %s', quota_message,
+                        )
+                aborted.set()
             except Exception as e:
                 # Log with traceback so silent "Failed: N" stops being
                 # diagnostic-free.
@@ -316,6 +339,8 @@ async def generate_themes(
         'incoherent': incoherent,
         'failed': failed,
         'total_dirty': total_dirty,
+        'quota_exhausted': quota_message is not None,
+        'quota_message': quota_message,
     }
 
 
@@ -433,19 +458,6 @@ def _latest_cluster_run_time(library: "Library") -> str | None:
     return row[0] if row and row[0] is not None else None
 
 
-def _catalog_elements_changed_since(
-    library: "Library", since_iso: str,
-) -> set[str]:
-    """Return ids of catalog-content documents whose updated_at > since_iso."""
-    with library._conn_provider.acquire() as conn:
-        rows = conn.execute(
-            "SELECT id FROM documents "
-            "WHERE content_type = 'catalog' AND updated_at > ?",
-            (since_iso,),
-        ).fetchall()
-    return {row[0] for row in rows}
-
-
 def _empty_summary(path: str) -> dict:
     return {
         'path': path,
@@ -521,6 +533,59 @@ def local_reassign(
         library.mark_theme_dirty(cid)
 
     return affected_clusters
+def _changed_catalog_elements(library: "Library") -> set[str]:
+    """Catalog element ids whose semantic edges themes must refresh: never
+    recorded (new), or whose body hash (``metadata.sha_at_sync``) changed since
+    the last sync.
+
+    Hash-based, so cosmetic ``updated_at`` bumps from metadata-only catalog-sync
+    refreshes don't count — only genuinely-changed elements get their edges
+    rebuilt, leaving every other element's edges (and thus the deterministic
+    Leiden partition) stable. Mirrors the generate-staleness model.
+    """
+    with library._conn_provider.acquire() as conn:
+        rows = conn.execute(
+            "SELECT d.id FROM documents d "
+            "LEFT JOIN theme_synced_hashes t ON t.element_id = d.id "
+            "WHERE d.content_type = 'catalog' "
+            "AND (t.element_id IS NULL "
+            "OR COALESCE(t.content_hash, '') != "
+            "COALESCE(json_extract(d.metadata, '$.sha_at_sync'), ''))"
+        ).fetchall()
+    return {row[0] for row in rows}
+
+
+def _theme_synced_hashes_empty(library: "Library") -> bool:
+    """True when no element has ever been theme-synced — a fresh DB, or a
+    pre-hash install awaiting a one-time baseline adoption."""
+    with library._conn_provider.acquire() as conn:
+        return conn.execute(
+            "SELECT 1 FROM theme_synced_hashes LIMIT 1",
+        ).fetchone() is None
+
+
+def _record_theme_synced_hashes(
+    library: "Library", element_ids: "set[str] | None" = None,
+) -> None:
+    """Stamp the current body hash of each (synced) catalog element so it is not
+    re-detected next run. ``element_ids=None`` stamps every catalog element
+    (first build / one-time baseline adoption)."""
+    sql = (
+        "INSERT INTO theme_synced_hashes (element_id, content_hash) "
+        "SELECT id, COALESCE(json_extract(metadata, '$.sha_at_sync'), '') "
+        "FROM documents WHERE content_type = 'catalog'"
+    )
+    params: list = []
+    if element_ids is not None:
+        ids = list(element_ids)
+        if not ids:
+            return
+        sql += f" AND id IN ({', '.join('?' * len(ids))})"
+        params = ids
+    sql += " ON CONFLICT(element_id) DO UPDATE SET content_hash = excluded.content_hash"
+    with library._conn_provider.acquire() as conn:
+        conn.execute(sql, params)
+        conn.commit()
 
 
 async def refresh_themes(
@@ -528,100 +593,66 @@ async def refresh_themes(
     writer: "LibraryWriter",
     *,
     enabled: bool = True,
-    recluster_threshold: float = 0.05,
     cluster_kwargs: dict | None = None,
     summarize_kwargs: dict | None = None,
 ) -> dict:
-    """Bring themes up to date with current library state.
+    """Re-run the Leiden clustering EVERY time over the current semantic graph,
+    then summarize only the themes whose membership changed.
 
-    Pull-based: the function discovers what's changed by joining
-    cluster_history.created_at against documents.updated_at, so callers don't
-    track changed_element_ids themselves. Updates semantic edges only for
-    changed elements, decides between cheap (local_reassign) and full
-    (cluster_themes) paths via the drift gate, and re-summarizes any dirty
-    themes via generate_themes.
+    Edges are NOT rebuilt every run: the kNN index (HNSW) is approximate and
+    non-deterministic, so a full rebuild would shift existing elements' edges,
+    churn the partition, and spuriously re-summarize ~all themes. Instead edges
+    are built once (first run) and refreshed incrementally only for elements
+    whose body hash changed — every other element's edges stay put. So the
+    seeded Leiden re-cluster over an unchanged graph reproduces the identical
+    partition → nothing dirty → zero LLM cost; only genuinely-changed elements'
+    themes are re-summarized.
 
-    Args:
-        library: Library to refresh.
-        writer: LibraryWriter used by generate_themes for embedding writes.
-        enabled: Master switch (config.themes_enabled). When False, returns
-            immediately with path='disabled'.
-        recluster_threshold: drift_ratio (|changed| / |catalog|) at-or-above
-            which a full recluster runs instead of local reassignment.
-        cluster_kwargs: Forwarded to cluster_themes() when invoked.
-        summarize_kwargs: Forwarded to generate_themes() when invoked.
-
-    Returns:
-        {
-            'path':           'disabled' | 'no_catalog' | 'initial_build' |
-                              'noop' | 'local_reassign' | 'full_recluster' |
-                              'summarize_only',
-            'changed':        int,
-            'recluster_full': bool,
-            'summarized':     int,
-            'incoherent':     int,
-            'failed':         int,
-            'total_dirty':    int,
-        }
+    Callers gate this on the upstream generate step SUCCEEDING — a failed run
+    must not recluster over a partial catalog. ``ariadne themes build`` calls it
+    directly.
     """
     if not enabled:
-        return _empty_summary('disabled')
+        return _empty_summary("disabled")
 
     cluster_kwargs = cluster_kwargs or {}
     summarize_kwargs = summarize_kwargs or {}
 
-    catalog_total = library.count_documents(content_type='catalog')
+    catalog_total = library.count_documents(content_type="catalog")
     if catalog_total == 0:
-        return _empty_summary('no_catalog')
+        return _empty_summary("no_catalog")
 
-    last_run_time = _latest_cluster_run_time(library)
+    from docgen.graph_builder import (
+        build_semantic_edges,
+        update_semantic_edges_for,
+    )
 
-    if last_run_time is None:
-        # No prior clustering — full initial build. We must build semantic
-        # edges BEFORE Leiden, otherwise load_hybrid_graph filters the
-        # structural-only edges out (imports/documents endpoints aren't
-        # catalog doc UUIDs), the resulting igraph has zero edges, and
-        # leidenalg.find_partition crashes with KeyError on the missing
-        # 'weight' edge attribute. The incremental path further down already
-        # calls update_semantic_edges_for; this mirrors it for first runs.
-        from docgen.graph_builder import build_semantic_edges
+    first_build = _latest_cluster_run_time(library) is None
+    if first_build:
         build_semantic_edges(library)
-        cluster_themes(library, **cluster_kwargs)
-        summary = await generate_themes(library, writer, **summarize_kwargs)
-        summary['path'] = 'initial_build'
-        summary['changed'] = catalog_total
-        summary['recluster_full'] = True
-        return summary
-
-    changed_ids = _catalog_elements_changed_since(library, last_run_time)
-
-    if not changed_ids:
-        # Catalog hasn't moved; only summarize if some themes are still dirty
-        # (e.g., a prior summarize call failed for them).
-        if not library.get_dirty_themes():
-            return _empty_summary('noop')
-        summary = await generate_themes(library, writer, **summarize_kwargs)
-        summary['path'] = 'summarize_only'
-        summary['changed'] = 0
-        summary['recluster_full'] = False
-        return summary
-
-    update_semantic_edges_for(library, list(changed_ids))
-
-    drift_ratio = len(changed_ids) / catalog_total
-    if drift_ratio >= recluster_threshold:
-        cluster_themes(library, **cluster_kwargs)
-        path = 'full_recluster'
-        recluster_full = True
+        _record_theme_synced_hashes(library)
+        changed = catalog_total
     else:
-        local_reassign(library, set(changed_ids))
-        path = 'local_reassign'
-        recluster_full = False
+        # Pre-hash DB (clusters but no recorded hashes): adopt the current
+        # catalog as the edge baseline WITHOUT rebuilding every element's edges
+        # (that would churn). Future content changes are picked up by hash.
+        if _theme_synced_hashes_empty(library):
+            _record_theme_synced_hashes(library)
+        changed_ids = _changed_catalog_elements(library)
+        if changed_ids:
+            update_semantic_edges_for(library, list(changed_ids))
+            _record_theme_synced_hashes(library, changed_ids)
+        changed = len(changed_ids)
+
+    cluster_themes(library, **cluster_kwargs)
 
     summary = await generate_themes(library, writer, **summarize_kwargs)
-    summary['path'] = path
-    summary['changed'] = len(changed_ids)
-    summary['recluster_full'] = recluster_full
+    touched = summary["summarized"] + summary["incoherent"] + summary["failed"]
+    summary["path"] = (
+        "initial_build" if first_build else ("rebuilt" if touched else "noop")
+    )
+    summary["changed"] = changed
+    summary["recluster_full"] = True
     return summary
 
 

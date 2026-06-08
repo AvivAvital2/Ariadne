@@ -57,6 +57,37 @@ def get_changed_files_vs_main(
         return []
 
 
+def get_head_commit(cwd: Path) -> str | None:
+    """Current HEAD commit sha, or None if ``cwd`` isn't a git repo."""
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            capture_output=True, text=True, check=True, cwd=cwd,
+        )
+        return result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def get_changed_files_since(commit: str, cwd: Path) -> list[str] | None:
+    """Files changed between ``commit`` and HEAD, relative to ``cwd``.
+
+    ``--relative`` scopes the diff to ``cwd`` and yields ``cwd``-relative
+    paths, so a source rooted in a subdirectory of a larger repo still gets
+    paths that match the orchestrator's source-relative file keys. Returns
+    None when ``cwd`` isn't a git repo or the commit is unknown (caller falls
+    back to a full pass) — distinct from an empty list (no files changed).
+    """
+    try:
+        result = subprocess.run(
+            ['git', 'diff', '--name-only', '--relative', f'{commit}..HEAD'],
+            capture_output=True, text=True, check=True, cwd=cwd,
+        )
+        return [f for f in result.stdout.strip().split('\n') if f]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
 def get_commit_message(git_hash: str, cwd: Path) -> str | None:
     """Get the commit message for a given hash.
 

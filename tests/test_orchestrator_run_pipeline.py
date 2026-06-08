@@ -114,6 +114,92 @@ _VALID_DOC_CONTENT = (
 )
 
 
+class TestRestrictToFiles:
+    """The commit-diff gate. When ``restrict_to_files`` is set, run() generates
+    exactly those files (intersected with discovery) and the staleness/doc-type
+    check no longer drives selection — this is how generate/onboard honor
+    'changed since the last synced commit'. ``None`` keeps the legacy staleness
+    path; ``force_regenerate`` still wins."""
+
+    @pytest.mark.asyncio
+    async def test_restrict_scopes_generation_to_listed_files(
+        self, tmp_path: Path,
+    ) -> None:
+        source = _make_source_tree(tmp_path, {
+            'a.py': '"""a."""\ndef foo(): pass\n',
+            'b.py': '"""b."""\ndef bar(): pass\n',
+        })
+        config = _make_config(
+            tmp_path, source, restrict_to_files=frozenset({'a.py'}),
+        )
+        with patch.object(
+            DocGenerator, '_call_llm', new_callable=AsyncMock,
+            return_value=_VALID_DOC_CONTENT,
+        ) as mock_llm:
+            async with DocGenOrchestrator(config) as orch:
+                result = await orch.run()
+        assert mock_llm.call_count == 1          # only a.py generated
+        assert result.files_processed == 1
+        assert result.files_skipped == 1          # b.py not in the changed set
+    @pytest.mark.asyncio
+    async def test_post_process_gated_on_generation_success(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        """Post-processing (themes/crossrefs) runs after a CLEAN generation — even
+    a no-op one, since the Leiden rebuild is deterministic and free — but is
+    SKIPPED when generation hit errors, so a failed run never reclusters over a
+    partial catalog and clobbers existing themes."""
+        source = _make_source_tree(tmp_path, {
+            "a.py": '"""a."""\ndef foo(): pass\n',
+        })
+        calls: list[int] = []
+
+        async def fake_pp(self, results, *, crossref_progress=None):
+            calls.append(len(results))
+
+        monkeypatch.setattr(DocGenOrchestrator, "_post_process", fake_pp)
+
+        # Clean run with nothing to (re)generate → post-processing still runs.
+        cfg_clean = _make_config(
+            tmp_path, source, restrict_to_files=frozenset(), themes_enabled=True,
+        )
+        async with DocGenOrchestrator(cfg_clean) as orch:
+            await orch.run()
+        assert calls == [0], "a clean run must post-process (clustering is free)"
+
+        # A generation error → post-processing skipped, existing themes preserved.
+        calls.clear()
+
+        async def boom(self, path):
+            raise RuntimeError("generation failed")
+
+        monkeypatch.setattr(DocGenOrchestrator, "_process_file", boom)
+        cfg_err = _make_config(tmp_path, source, themes_enabled=True)
+        async with DocGenOrchestrator(cfg_err) as orch:
+            await orch.run()
+        assert calls == [], "post-processing must be skipped when generation errored"
+
+    @pytest.mark.asyncio
+    async def test_empty_restrict_generates_nothing(
+        self, tmp_path: Path,
+    ) -> None:
+        """Unchanged code → empty changed-set → zero generation (the $0 case)."""
+        source = _make_source_tree(tmp_path, {
+            'a.py': '"""a."""\ndef foo(): pass\n',
+        })
+        config = _make_config(
+            tmp_path, source, restrict_to_files=frozenset(),
+        )
+        with patch.object(
+            DocGenerator, '_call_llm', new_callable=AsyncMock,
+            return_value=_VALID_DOC_CONTENT,
+        ) as mock_llm:
+            async with DocGenOrchestrator(config) as orch:
+                result = await orch.run()
+        assert mock_llm.call_count == 0
+        assert result.files_processed == 0
+
+
 # ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------

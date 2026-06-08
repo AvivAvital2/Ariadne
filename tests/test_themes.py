@@ -269,6 +269,47 @@ class TestGenerateThemes:
         assert call_count == 0
         assert summary['summarized'] == 0
 
+    @pytest.mark.asyncio
+    async def test_api_usage_cap_stops_themes_gracefully(
+        self, library: Library, mocked_embedding, monkeypatch,
+    ) -> None:
+        """When the Anthropic API cap is hit mid-phase, themes stop
+        immediately (no point hammering a maxed cap), surface it via
+        ``quota_exhausted`` + a message, and do NOT record per-cluster
+        failures or spew tracebacks."""
+        from docgen import themes
+        from docgen.cluster import cluster_themes
+        from docgen.graph_builder import build_semantic_edges
+        from docgen.llm.anthropic import WorkspaceUsageLimitError
+
+        _populate_two_clusters(library)
+        build_semantic_edges(library, k=5, min_sim=0.6)
+        cluster_themes(library, min_cluster_size=3)
+        assert len(library.get_dirty_themes()) == 2
+
+        calls = 0
+
+        async def fake_chat(messages, *, model=None, **kwargs):
+            nonlocal calls
+            calls += 1
+            raise WorkspaceUsageLimitError(
+                'You have reached your specified workspace API usage limits. '
+                'You will regain access on 2026-07-01 at 00:00 UTC.'
+            )
+
+        monkeypatch.setattr('docgen.themes.chat_complete', fake_chat)
+
+        async with LibraryWriter(library) as writer:
+            summary = await themes.generate_themes(
+                library, writer, concurrency=1,
+            )
+
+        assert calls == 1                        # stopped at the cap, didn't hammer
+        assert summary.get('quota_exhausted') is True
+        assert 'usage limit' in (summary.get('quota_message') or '').lower()
+        assert summary['summarized'] == 0
+        assert summary['failed'] == 0            # skipped due to cap, not a failure
+
 
 # ---------------------------------------------------------------------------
 # Prompt construction & summary_hash

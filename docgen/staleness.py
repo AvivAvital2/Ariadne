@@ -133,6 +133,20 @@ class StalenessTracker:
             CREATE INDEX IF NOT EXISTS idx_pending_config_hash
             ON pending_batches(config_hash)
         ''')
+        # Reverse-augment freshness markers. Keyed by (source, path) — unlike
+        # source_records (which has no source column), so the same relative
+        # path in two sources doesn't collide. ``marker`` is sha256(source +
+        # rendered consumer-context); an unchanged marker means the augment
+        # prompt would be identical, so the file is skipped on re-run instead
+        # of re-billed. See docgen.reverse_augment.augment_marker.
+        self._conn.execute('''
+            CREATE TABLE IF NOT EXISTS augment_markers (
+                source TEXT NOT NULL,
+                path TEXT NOT NULL,
+                marker TEXT NOT NULL,
+                PRIMARY KEY (source, path)
+            )
+        ''')
         self._conn.commit()
 
     def close(self) -> None:
@@ -146,6 +160,36 @@ class StalenessTracker:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.close()
+
+    def get_augment_marker(self, source: str, path: str) -> str | None:
+        """Return the stored reverse-augment freshness marker for
+        ``(source, path)``, or None if never augmented. See
+        docgen.reverse_augment for the marker semantics."""
+        if self._conn is None:
+            return None
+        row = self._conn.execute(
+            'SELECT marker FROM augment_markers WHERE source = ? AND path = ?',
+            (source, path),
+        ).fetchone()
+        return row['marker'] if row else None
+
+    def set_augment_marker(self, source: str, path: str, marker: str) -> None:
+        """Record the reverse-augment freshness marker for ``(source, path)``.
+
+        Called only after the file's augmented docs are durably stored, so a
+        re-run skips it; an interrupted pass leaves unfinished files unmarked
+        and they retry. Commits immediately for crash-durability."""
+        if self._conn is None:
+            return
+        self._conn.execute(
+            '''
+            INSERT INTO augment_markers (source, path, marker)
+            VALUES (?, ?, ?)
+            ON CONFLICT(source, path) DO UPDATE SET marker = excluded.marker
+            ''',
+            (source, path, marker),
+        )
+        self._conn.commit()
 
     def record_documentation(
         self,

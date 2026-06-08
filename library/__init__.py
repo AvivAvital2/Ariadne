@@ -43,8 +43,7 @@ if __name__ != '__main__':
         _CLUSTER_HISTORY_SCHEMA,
         _THEME_MEMBERS_SCHEMA,
         _THEMES_SCHEMA,
-        ThemesMixin,
-    )
+        ThemesMixin, _THEME_SYNCED_HASHES_SCHEMA)
 
 _logger = logging.getLogger(__name__)
 
@@ -281,6 +280,7 @@ class Library(
             conn.execute(_THEMES_SCHEMA)
             conn.executescript(_THEME_MEMBERS_SCHEMA)
             conn.executescript(_CLUSTER_HISTORY_SCHEMA)
+            conn.executescript(_THEME_SYNCED_HASHES_SCHEMA)
             init_scip_schema(conn)
             # Migration: add returned_document_ids column if missing
             cols = {row[1] for row in conn.execute('PRAGMA table_info(usage_events)')}

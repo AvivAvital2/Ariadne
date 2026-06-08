@@ -1894,32 +1894,29 @@ def _print_catalog_describe_cost_estimate(
 # "INCOHERENT" terminator). Mid-range estimates:
 _THEMES_INPUT_TOKENS_PER_THEME = 2000
 _THEMES_OUTPUT_TOKENS_PER_THEME = 600
-
-
 def _estimate_themes_cost(
     library: "Library", model: str,
 ) -> tuple[int, float | None, tuple[float, float] | None]:
-    """Count existing themes and estimate the LLM cost to (re)summarize
-    each one. Returns ``(theme_count, cost_usd_or_None, rates)``.
+    """Count the DIRTY themes and estimate the LLM cost to (re)summarize them.
+    Returns ``(dirty_count, cost_usd_or_None, rates)``.
 
-    If the themes table is empty (clustering hasn't run yet), returns
-    ``(0, 0.0, rates)`` — there's nothing to summarize. We don't run
-    Leiden here; that's the caller's choice, since it would mutate the
-    DB. The estimate is only meaningful AFTER clustering has populated
-    the themes table.
+    Only dirty themes incur an LLM call: the Leiden rebuild is free and
+    deterministic and re-summarizes only themes whose membership changed, so an
+    unchanged tree estimates $0 (zero dirty). Mirrors the runtime, where
+    generate_themes summarizes exactly the dirty set.
     """
     from docgen.pricing import LLM_PRICING
 
-    themes = library.list_themes(coherent_only=False)
+    dirty = set(library.get_dirty_themes())
+    themes = [
+        t for t in library.list_themes(coherent_only=False)
+        if t.cluster_id in dirty
+    ]
     n = len(themes)
     rates = LLM_PRICING.get(model)
     if rates is None:
         return n, None, None
     input_per_m, output_per_m = rates
-    # Input: tiktoken each theme's REAL prompt (system + user) — assembled
-    # read-only from the clustered members. Falls back to the flat
-    # per-theme figure if tiktoken can't count any theme. Output can't be
-    # counted ahead of generation, so it stays the flat heuristic.
     from docgen.themes import _build_theme_request
     from docgen.token_count import count_text_tokens
     input_total = 0
@@ -1929,7 +1926,7 @@ def _estimate_themes_cost(
         if _req is None:
             continue
         _cnt = count_text_tokens(
-            _req.system_prompt + '\n' + _req.user_prompt, model,
+            _req.system_prompt + "\n" + _req.user_prompt, model,
         )
         if _cnt is None:
             _tt_ok = False
@@ -2034,6 +2031,35 @@ def _print_index_summary(summary: list) -> None:
         console.print(
             f"    {row['language']:<11}{row['files']:>6} files · {elapsed}",
         )
+
+
+def _discover_files_for_estimate(cfg, source_name, source_path):
+    """Files the generate phase will actually process, honoring the source's
+    excludes — the SAME ``exclude_patterns`` / ``exclude_dir_names`` the real
+    run (and the ``generate --dry-run`` table) apply.
+
+    Without this the preview walks test suites and deploy configs the run
+    skips (``test``/``testkit``/``cypress``/``kustomize``/…), over-counting
+    and over-pricing them. Returns ``(path, size)`` pairs; unreadable files
+    are skipped.
+    """
+    from config import DEFAULT_EXCLUDE_FILE_PATTERNS
+    from docgen.staleness import find_catalog_files
+
+    sc = cfg.get_source_config(source_name)
+    files: list = []
+    for p in find_catalog_files(
+        source_path,
+        exclude_patterns=(
+            DEFAULT_EXCLUDE_FILE_PATTERNS + tuple((sc.exclude if sc else ()) or ())
+        ),
+        exclude_dir_names=cfg.resolve_excluded_dirs(source_name),
+    ):
+        try:
+            files.append((p, p.stat().st_size))
+        except OSError:
+            continue
+    return files
 
 
 async def cmd_dry_run(args: argparse.Namespace) -> int:
@@ -2203,26 +2229,47 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
         from docgen.staleness import find_catalog_files
         files = []
         if source_path is not None and source_path.exists():
-            for p in find_catalog_files(source_path):
-                try:
-                    files.append((p, p.stat().st_size))
-                except OSError:
-                    continue
+            files = _discover_files_for_estimate(cfg, source_name, source_path)
 
-        # Incremental scope: a real generate run skips files whose source
-        # is unchanged (it filters via get_stale_files), so price only the
-        # stale/new subset. `files` stays the full set for a secondary
-        # "full regeneration" figure. --force regenerates everything.
+        # Incremental scope: price what the real run will actually generate.
+        # The real run (generate/onboard) uses the commit-diff gate — only
+        # files changed since the source's last synced commit — so the preview
+        # must scope the same way, else it over-reports a from-scratch cost.
+        # When there's no commit gate (first run / non-git / --force) fall back
+        # to the staleness subset. `files` stays the full set for the secondary
+        # "full regeneration" figure.
         from cli.generate import (
             DEFAULT_GENERATE_DOC_TYPES,
+            _commit_scope,
             _stale_subset_for_estimate,
         )
-        if files and not getattr(args, 'force', False):
+        requested_doc_types = (
+            tuple(t.strip() for t in args.types.split(',') if t.strip())
+            if getattr(args, 'types', None) else DEFAULT_GENERATE_DOC_TYPES
+        )
+        _restrict, _ = (
+            _commit_scope(
+                Path(getattr(args, 'db', None) or cfg.db_path),
+                source_name, source_path, getattr(args, 'force', False),
+            )
+            if source_name and source_path is not None
+            and not getattr(args, 'path', None)
+            else (None, None)
+        )
+        if files and _restrict is not None:
+            # Commit gate active: price exactly the changed files.
+            def _rel(p: Path) -> str:
+                try:
+                    return p.relative_to(source_path).as_posix()
+                except ValueError:
+                    return p.as_posix()
+            gen_files = [(p, s) for (p, s) in files if _rel(p) in _restrict]
+        elif files and not getattr(args, 'force', False):
             gen_files = _stale_subset_for_estimate(
                 files,
                 staleness_db_path=Path(cfg.staleness_db_path),
                 base_path=source_path,
-                doc_types=DEFAULT_GENERATE_DOC_TYPES,
+                doc_types=requested_doc_types,
                 library=library,
             )
         else:
@@ -2288,7 +2335,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
             # only phase that batches today.
             generate_estimate = estimate_cost(
                 files=gen_files,
-                doc_types=DEFAULT_GENERATE_DOC_TYPES,
+                doc_types=requested_doc_types,
                 model=model,
                 caching_enabled=caching_enabled,
                 output_tokens_for=_gen_output,
@@ -2297,7 +2344,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
             )
             generate_estimate_batched = estimate_cost(
                 files=gen_files,
-                doc_types=DEFAULT_GENERATE_DOC_TYPES,
+                doc_types=requested_doc_types,
                 model=model,
                 caching_enabled=caching_enabled,
                 output_tokens_for=_gen_output,
@@ -2314,7 +2361,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
             if gen_skipped > 0:
                 full_generate_cost = estimate_cost(
                     files=files,
-                    doc_types=DEFAULT_GENERATE_DOC_TYPES,
+                    doc_types=requested_doc_types,
                     model=model,
                     caching_enabled=caching_enabled,
                     output_tokens_for=_gen_output,
@@ -2323,7 +2370,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                 ).total_cost_usd
                 full_generate_cost_batched = estimate_cost(
                     files=files,
-                    doc_types=DEFAULT_GENERATE_DOC_TYPES,
+                    doc_types=requested_doc_types,
                     model=model,
                     caching_enabled=caching_enabled,
                     output_tokens_for=_gen_output,
@@ -2334,14 +2381,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
         else:
             generate_cost = 0.0 if rates is not None else None
             generate_cost_batched = generate_cost
-
-        # themes build: count themes already in the table. If
-        # clustering hasn't run, the count is 0 and the cost is 0 —
-        # the user can re-invoke after running `themes build` (which
-        # has a cheap clustering pass and an LLM summarization pass).
-        themes_count, themes_cost, _ = _estimate_themes_cost(
-            library, model,
-        )
+        themes_count, themes_cost, _ = _estimate_themes_cost(library, model)
 
         # ---- Output ---------------------------------------------------
         # NOTE: any_unknown check uses these locals further down — keep
@@ -2392,14 +2432,14 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
             from cli.generate import DEFAULT_GENERATE_DOC_TYPES
             from docgen.pricing import estimate_generate_by_doc_type
             per_type = estimate_generate_by_doc_type(
-                gen_files, DEFAULT_GENERATE_DOC_TYPES, model,
+                gen_files, requested_doc_types, model,
                 caching_enabled=caching_enabled,
                 output_tokens_for=_gen_output,
                 input_tokens_for=_gen_input,
                 prompt_overhead_for=_gen_overhead,
             )
             per_type_batched = dict(estimate_generate_by_doc_type(
-                gen_files, DEFAULT_GENERATE_DOC_TYPES, model,
+                gen_files, requested_doc_types, model,
                 caching_enabled=caching_enabled,
                 output_tokens_for=_gen_output,
                 input_tokens_for=_gen_input,
@@ -2418,7 +2458,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
         # count is 0 — but onboard WILL cluster + summarize, so showing
         # "$0.00" implies it's free. Mark it not-estimated and keep it
         # out of the total (flagged below) instead.
-        themes_unestimated = themes_count == 0
+        themes_unestimated = library.count_documents(content_type='theme') == 0
         if themes_unestimated:
             console.print(
                 '  [cyan]themes build      [/cyan]'
@@ -2429,7 +2469,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
             _print_phase(
                 'themes build',
                 calls=themes_count,
-                unit='themes',
+                unit='dirty themes',
                 in_tokens=themes_count * _THEMES_INPUT_TOKENS_PER_THEME,
                 out_tokens=themes_count * _THEMES_OUTPUT_TOKENS_PER_THEME,
                 cost=themes_cost,
@@ -2449,8 +2489,8 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
         else:
             themes_part = 0.0 if themes_unestimated else themes_cost
             total_baseline = describe_cost + generate_cost + themes_part
-            # Both catalog-describe AND generate now support --batch.
-            # The batched total applies the discount to both phases.
+            # Both catalog-describe AND generate support --batch; the batched
+            # total applies the discount to both phases.
             total_batched = (
                 describe_cost_batched + generate_cost_batched + themes_part
             )
@@ -2640,12 +2680,12 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
             '  [green]✓[/green] Generate — explanation/architecture/qa docs written',
             lambda: cmd_generate(generate_args),
         ),
-        (
-            'Building themes',
-            '  [green]✓[/green] Themes build — cluster summaries written',
-            lambda: cmd_themes_build(themes_args),
-        ),
     ]
+    phases.append((
+        'Building themes',
+        '  [green]✓[/green] Themes build — cluster summaries written',
+        lambda: cmd_themes_build(themes_args),
+    ))
 
     import inspect
 
@@ -3437,6 +3477,16 @@ async def cmd_themes_build(args: argparse.Namespace) -> int:
         console.print(f'  Incoherent: {summary.get("incoherent", 0)}')
         if summary.get('failed', 0):
             console.print(f'  [red]Failed: {summary["failed"]}[/red]')
+        if summary.get('quota_exhausted'):
+            console.print(
+                '  [yellow]⚠ Theme summaries stopped — Anthropic API usage '
+                'cap reached:[/yellow]',
+            )
+            console.print(f'    [dim]{summary.get("quota_message", "")}[/dim]')
+            console.print(
+                '    [dim]Docs were generated; re-run [bold]ariadne themes '
+                'build[/bold] once the cap resets to finish summaries.[/dim]',
+            )
         return 0
     finally:
         library.close()

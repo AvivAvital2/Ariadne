@@ -101,6 +101,13 @@ CREATE TABLE IF NOT EXISTS cluster_history (
 );
 CREATE INDEX IF NOT EXISTS idx_cluster_history_prev ON cluster_history(prev_cluster_id);
 '''
+_THEME_SYNCED_HASHES_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS theme_synced_hashes (
+    element_id TEXT PRIMARY KEY,
+    content_hash TEXT NOT NULL,
+    FOREIGN KEY (element_id) REFERENCES documents(id) ON DELETE CASCADE
+)
+'''
 
 
 # ---------------------------------------------------------------------------

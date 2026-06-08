@@ -153,6 +153,19 @@ async def cli_confirm(msg: str) -> bool:
     return response.strip().lower() in ('y', 'yes')
 
 
+def _prompt_yes_no(question: str) -> bool:
+    """Prompt for a yes/no answer, returning True for ``y``/``Y`` and
+    False for ``n``/``N``. Any other response is invalid; the prompt is
+    shown again until one of those four is given.
+    """
+    while True:
+        match console.input(f'{question} [y/n] '):
+            case 'y' | 'Y':
+                return True
+            case 'n' | 'N':
+                return False
+
+
 # ---------------------------------------------------------------------------
 # Dry-run cost estimator
 # ---------------------------------------------------------------------------
@@ -236,6 +249,44 @@ def _library_for_estimate(db_path: Path | None) -> object:
     """
     from cli.core import get_library
     return get_library(db_path)
+
+
+def _commit_scope(
+    db_path: Path,
+    source_name: str,
+    source_path: Path,
+    force: bool,
+) -> tuple[frozenset[str] | None, str | None]:
+    """Resolve the incremental commit-diff scope for a generate/onboard run.
+
+    The commit recorded in ``sync_state`` is the source of truth for "what's
+    already documented": a run regenerates only files changed since it, then
+    promotes HEAD. Returns ``(restrict_to_files, head)``:
+
+    - ``head`` — the current HEAD to promote into ``sync_state`` after a
+      successful run, or None when ``source_path`` isn't a git repo (then
+      there's nothing to promote and the caller uses the staleness path).
+    - ``restrict_to_files`` — source-relative paths changed since the last
+      synced commit, or None meaning "no commit scoping; run the full /
+      staleness pass" (never synced, ``force``, or a git/diff failure). An
+      empty frozenset means "synced and nothing changed" → generate nothing.
+    """
+    from git_ops import get_changed_files_since, get_head_commit
+    from library import Library
+
+    head = get_head_commit(source_path)
+    if head is None:
+        return None, None            # not a git repo → legacy staleness, no promote
+    if force:
+        return None, head            # full pass, but still promote the baseline
+    with Library(db_path) as lib:
+        state = lib.get_sync_state(source_name)
+    if state is None:
+        return None, head            # never synced → full first pass, set baseline after
+    changed = get_changed_files_since(state[0], source_path)
+    if changed is None:
+        return None, head            # diff failed → safe full fallback
+    return frozenset(changed), head
 
 
 def _stale_subset_for_estimate(
@@ -612,11 +663,10 @@ def _check_and_prompt_dependencies(
         ))
         console.print()
 
-        response = console.input(
-            f'Save dependency [bold]{source_name}[/bold] -> [bold]{dep.source_name}[/bold] to config? [Y/n] '
-        )
-
-        if response.lower() in ('', 'y', 'yes'):
+        if _prompt_yes_no(
+            f'Save dependency [bold]{source_name}[/bold] -> '
+            f'[bold]{dep.source_name}[/bold] to config?'
+        ):
             current_deps = cfg.get_source_dependencies(source_name)
             if dep.source_name not in current_deps:
                 new_deps = current_deps + [dep.source_name]
@@ -896,6 +946,19 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
             force=args.force,
         )
 
+    # Commit-diff gate: regenerate only files changed since the source's last
+    # synced commit, then promote HEAD on success. ``restrict_to_files=None``
+    # falls back to the staleness path (first run / non-git / --force).
+    _db_path = Path(args.db or cfg.db_path)
+    # Skip commit-scoping for subdirectory runs (--path): they document only
+    # part of the tree, so promoting HEAD would wrongly mark the whole source
+    # synced and skip changed files elsewhere next time.
+    restrict_to_files, _promote_head = (
+        _commit_scope(_db_path, source_name, source_path, args.force)
+        if source_name and not args.dry_run and not getattr(args, 'path', None)
+        else (None, None)
+    )
+
     config = OrchestratorConfig(
         source_path=source_path,
         db_path=args.db or Path(cfg.db_path),
@@ -916,6 +979,7 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
         exclude_dir_names=exclude_dir_names,
         batch_mode=getattr(args, 'batch_mode', 'auto'),
         auto_batch_threshold=getattr(args, 'auto_batch_threshold', 200),
+        restrict_to_files=restrict_to_files,
     )
 
     progress_columns = (
@@ -1010,6 +1074,15 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
                         f'[yellow]Reverse-augment phase encountered an '
                         f'error: {e}[/yellow]'
                     )
+
+                # Promote the synced commit: the next generate/onboard then
+                # regenerates only files changed AFTER this run. Done only on a
+                # clean (non-aborted) run so an interrupted pass re-scopes from
+                # the prior commit and retries the unfinished files.
+                if _promote_head:
+                    from library import Library
+                    with Library(_db_path) as _lib:
+                        _lib.set_sync_state(source_name, _promote_head)
 
     # Aborted: show resume guidance prominently before the standard table.
     if getattr(result, 'aborted', False):

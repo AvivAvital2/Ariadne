@@ -209,7 +209,7 @@ class TestFullPipeline:
             summary = await refresh_themes(library, writer)
 
         assert summary['recluster_full'] is True
-        assert summary['path'] == 'full_recluster'
+        assert summary['path'] == 'rebuilt'
 
         # Themes are coherent and content is real (not placeholder).
         themes = library.list_themes(coherent_only=True)

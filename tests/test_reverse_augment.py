@@ -152,6 +152,25 @@ class TestConsumedFiles:
         graph = _build_graph_with_consumers()
         assert consumed_files_for_source(graph, 'ghost_source') == set()
 
+    def test_allowed_files_restricts_to_doc_gen_set(self) -> None:
+        """``allowed_files`` makes reverse-augment honor the same excludes
+        as the catalog walk: a consumed file outside the set is dropped, so
+        an excluded file is never re-submitted just because it has consumers."""
+        from docgen.reverse_augment import consumed_files_for_source
+
+        graph = _build_graph_with_consumers()
+        lic = 'src/main/scala/com/scalaproject/LicenseService.scala'
+        # Unfiltered (None): the consumed file is present.
+        assert lic in consumed_files_for_source(graph, 'scalaproject')
+        # Excluded from the doc-gen set → dropped.
+        assert consumed_files_for_source(
+            graph, 'scalaproject', allowed_files=set(),
+        ) == set()
+        # In the doc-gen set → kept.
+        assert lic in consumed_files_for_source(
+            graph, 'scalaproject', allowed_files={lic},
+        )
+
 
 # ---------------------------------------------------------------------------
 # build_consumer_context
@@ -318,6 +337,33 @@ class TestBuildConsumerContext:
         assert 'callA' in ctx
         assert 'callB' in ctx
 
+    def test_context_is_bounded_for_heavily_consumed_files(self) -> None:
+        """A file referenced by hundreds of call sites must NOT dump them all
+        into the prompt — that's what blew per-file input tokens to 300k. The
+        rendered call sites are capped and the omitted count is noted."""
+        from types import SimpleNamespace as NS
+
+        from docgen.reverse_augment import build_consumer_context
+
+        edges = [
+            NS(
+                caller=NS(source_name='consumer', display_name=f'c{i}',
+                          canonical_id=f'c{i}'),
+                callee=NS(file='Target.scala', display_name='validate',
+                          canonical_id='validate'),
+                file='consumer/Caller.scala', line=i,
+            )
+            for i in range(60)
+        ]
+        graph = NS(consumers_of_source=lambda _src: edges)
+
+        ctx = build_consumer_context(
+            'Target.scala', 'tgt', graph, max_call_sites=10,
+        )
+        call_lines = [ln for ln in ctx.splitlines() if ln.lstrip().startswith('- `')]
+        assert len(call_lines) == 10           # capped, not all 60
+        assert 'more' in ctx.lower()            # omitted-count note present
+
 
 # ---------------------------------------------------------------------------
 # reverse_augment_plan — orchestrator entry point
@@ -379,6 +425,25 @@ class TestReverseAugmentPlan:
         a = reverse_augment_plan(graph, ['scalaproject'])
         b = reverse_augment_plan(graph, ['scalaproject'])
         assert a == b
+
+    def test_plan_respects_allowed_files(self) -> None:
+        """The plan honors ``allowed_files`` so the reverse-augment pass skips
+        files the source excludes from doc generation — the fix for "I excluded
+        it but reverse-augment still regenerated it"."""
+        from docgen.reverse_augment import reverse_augment_plan
+
+        graph = _build_graph_with_consumers()
+        lic = 'src/main/scala/com/scalaproject/LicenseService.scala'
+        # Excluded → no plan entry, even though it has cross-source consumers.
+        assert reverse_augment_plan(
+            graph, ['scalaproject'], allowed_files=set(),
+        ) == []
+        # Included → the entry is present.
+        plan = reverse_augment_plan(
+            graph, ['scalaproject'], allowed_files={lic},
+        )
+        assert len(plan) == 1
+        assert lic in plan[0][1]
 
 
 # ---------------------------------------------------------------------------
@@ -451,7 +516,173 @@ class FakeGenerator:
         ]
 
 
+class FakeMarkerStore:
+    """In-memory augment-marker store: (source, path) -> marker hex.
+
+    Mirrors the duck-typed interface the StalenessTracker implements in
+    production (``get_augment_marker`` / ``set_augment_marker``)."""
+
+    def __init__(self) -> None:
+        self.markers: dict[tuple[str, str], str] = {}
+
+    def get_augment_marker(self, source: str, path: str) -> str | None:
+        return self.markers.get((source, path))
+
+    def set_augment_marker(self, source: str, path: str, marker: str) -> None:
+        self.markers[(source, path)] = marker
+
+
+class TestAugmentMarker:
+    """``augment_marker(source_bytes, consumer_context)`` is the freshness key:
+    a file need only be reverse-augmented again when the regeneration prompt
+    would differ — i.e. when its source OR its rendered consumer context
+    changed. Hashing both means an unchanged prompt → identical output → safe
+    to skip; a changed caller (different context) → re-augment."""
+
+    def test_marker_is_deterministic_and_sensitive_to_source_and_context(self) -> None:
+        from docgen.reverse_augment import augment_marker
+
+        base = augment_marker(b'class Foo {}', 'ctx-A')
+        assert base == augment_marker(b'class Foo {}', 'ctx-A')   # deterministic
+        assert base != augment_marker(b'class Foo { def x = 1 }', 'ctx-A')  # source changed
+        assert base != augment_marker(b'class Foo {}', 'ctx-B')   # caller context changed
+
+
 class TestRunReverseAugmentPhase:
+    @pytest.mark.asyncio
+    async def test_marker_store_skips_unchanged_then_regenerates_on_change(
+        self, tmp_path: Path,
+    ) -> None:
+        """The cost fix. With a marker store, a file whose (source +
+        consumer-context) is unchanged since the last augment is SKIPPED on
+        re-run — no second generator call, no re-billing. A change to the
+        source re-augments it."""
+        from docgen.reverse_augment import run_reverse_augment_phase
+
+        graph = _build_graph_with_consumers()
+        source_paths = {
+            'scalaproject': tmp_path / 'scalaproject',
+            'biggerproject': tmp_path / 'biggerproject',
+        }
+        file_path = (
+            tmp_path / 'scalaproject'
+            / 'src/main/scala/com/scalaproject/LicenseService.scala'
+        )
+        file_path.parent.mkdir(parents=True)
+        file_path.write_text('class LicenseService {}', encoding='utf-8')
+
+        store = FakeMarkerStore()
+        # First run: nothing marked → regenerate + mark.
+        gen1 = FakeGenerator()
+        r1 = await run_reverse_augment_phase(
+            graph=graph, source_paths=source_paths,
+            analyzer=FakeAnalyzer(), generator=gen1, marker_store=store,
+        )
+        assert len(gen1.calls) == 1 and len(r1) == 1
+
+        # Re-run, nothing changed → SKIP: generator not called, no result.
+        gen2 = FakeGenerator()
+        r2 = await run_reverse_augment_phase(
+            graph=graph, source_paths=source_paths,
+            analyzer=FakeAnalyzer(), generator=gen2, marker_store=store,
+        )
+        assert gen2.calls == [] and r2 == []     # reused, not re-billed
+
+        # Source changes → marker differs → re-augment.
+        file_path.write_text('class LicenseService { def x = 1 }', encoding='utf-8')
+        gen3 = FakeGenerator()
+        r3 = await run_reverse_augment_phase(
+            graph=graph, source_paths=source_paths,
+            analyzer=FakeAnalyzer(), generator=gen3, marker_store=store,
+        )
+        assert len(gen3.calls) == 1 and len(r3) == 1
+
+    @pytest.mark.asyncio
+    async def test_file_is_marked_fresh_only_after_successful_generation(
+        self, tmp_path: Path,
+    ) -> None:
+        """Resume-safety. A file is marked fresh ONLY after generation
+        succeeds. If the generator raises (an aborted/rate-limited pass), the
+        marker stays unset so the NEXT run retries it instead of silently
+        skipping a file whose doc was never produced."""
+        from docgen.reverse_augment import run_reverse_augment_phase
+
+        graph = _build_graph_with_consumers()
+        source_paths = {
+            'scalaproject': tmp_path / 'scalaproject',
+            'biggerproject': tmp_path / 'biggerproject',
+        }
+        file_path = (
+            tmp_path / 'scalaproject'
+            / 'src/main/scala/com/scalaproject/LicenseService.scala'
+        )
+        file_path.parent.mkdir(parents=True)
+        file_path.write_text('class LicenseService {}', encoding='utf-8')
+
+        class FailingGenerator:
+            async def generate_for_module(self, metadata, doc_types=None, extra_prompt_context=''):
+                raise RuntimeError('boom')
+
+        store = FakeMarkerStore()
+        with pytest.raises(RuntimeError, match='boom'):
+            await run_reverse_augment_phase(
+                graph=graph, source_paths=source_paths,
+                analyzer=FakeAnalyzer(), generator=FailingGenerator(), marker_store=store,
+            )
+        assert store.markers == {}              # failure → nothing marked
+
+        # Retry now succeeds → regenerates (not skipped) and marks.
+        gen = FakeGenerator()
+        r = await run_reverse_augment_phase(
+            graph=graph, source_paths=source_paths,
+            analyzer=FakeAnalyzer(), generator=gen, marker_store=store,
+        )
+        assert len(gen.calls) == 1 and store.markers
+
+    @pytest.mark.asyncio
+    async def test_persist_runs_before_marking(self, tmp_path: Path) -> None:
+        """When a ``persist`` hook is provided, a file is persisted BEFORE it
+        is marked fresh — a persist failure must NOT leave the file marked,
+        else a re-run would skip a file whose augmented doc was never stored."""
+        from docgen.reverse_augment import run_reverse_augment_phase
+
+        graph = _build_graph_with_consumers()
+        source_paths = {
+            'scalaproject': tmp_path / 'scalaproject',
+            'biggerproject': tmp_path / 'biggerproject',
+        }
+        file_path = (
+            tmp_path / 'scalaproject'
+            / 'src/main/scala/com/scalaproject/LicenseService.scala'
+        )
+        file_path.parent.mkdir(parents=True)
+        file_path.write_text('class LicenseService {}', encoding='utf-8')
+
+        store = FakeMarkerStore()
+        persisted: list = []
+
+        async def failing_persist(source_name, file_rel, docs):
+            raise RuntimeError('store down')
+
+        with pytest.raises(RuntimeError, match='store down'):
+            await run_reverse_augment_phase(
+                graph=graph, source_paths=source_paths,
+                analyzer=FakeAnalyzer(), generator=FakeGenerator(),
+                marker_store=store, persist=failing_persist,
+            )
+        assert store.markers == {}              # persist failed → not marked
+
+        # A working persist hook runs before marking and receives the docs.
+        async def ok_persist(source_name, file_rel, docs):
+            persisted.append((source_name, file_rel, docs))
+
+        await run_reverse_augment_phase(
+            graph=graph, source_paths=source_paths,
+            analyzer=FakeAnalyzer(), generator=FakeGenerator(),
+            marker_store=store, persist=ok_persist,
+        )
+        assert len(persisted) == 1 and store.markers   # persisted, then marked
+
     @pytest.mark.asyncio
     async def test_empty_plan_does_not_call_generator(self) -> None:
         from docgen.reverse_augment import run_reverse_augment_phase
@@ -546,6 +777,30 @@ class TestRunReverseAugmentPhase:
                 analyzer=FakeAnalyzer(),
                 generator=FailingGenerator(),
             )
+
+    @pytest.mark.asyncio
+    async def test_allowed_files_filters_the_phase(
+        self, tmp_path: Path,
+    ) -> None:
+        """``allowed_files`` excluding the consumed file → no regeneration,
+        even though the graph has a cross-source consumer for it. This is the
+        end-to-end guarantee that an excluded file isn't re-billed."""
+        from docgen.reverse_augment import run_reverse_augment_phase
+
+        graph = _build_graph_with_consumers()
+        generator = FakeGenerator()
+        result = await run_reverse_augment_phase(
+            graph=graph,
+            source_paths={
+                'scalaproject': tmp_path / 'scalaproject',
+                'biggerproject': tmp_path / 'biggerproject',
+            },
+            analyzer=FakeAnalyzer(),
+            generator=generator,
+            allowed_files=set(),  # nothing is in the doc-gen set
+        )
+        assert result == []
+        assert generator.calls == []
 
 
 # ---------------------------------------------------------------------------

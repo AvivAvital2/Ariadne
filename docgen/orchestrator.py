@@ -80,6 +80,12 @@ class OrchestratorConfig:
     dependencies: tuple[str, ...] = ()
     target_path: Path | None = None
     themes_enabled: bool = True
+    # Commit-diff gate (set by generate/onboard from the source's sync_state):
+    # source-relative posix paths changed since the last synced commit. When
+    # not None, run() generates exactly this set (∩ discovery) and skips the
+    # hash/doc-type staleness check — the commit is the source of truth.
+    # ``None`` keeps the legacy staleness path; ``force_regenerate`` overrides.
+    restrict_to_files: frozenset[str] | None = None
     # Glob patterns matched against Path.match to exclude files from the
     # discovery walk. Set per-source via ``exclude:`` in ariadne.yaml; the
     # CLI threads it through. Use to keep secrets / credentials out of
@@ -511,6 +517,19 @@ class DocGenOrchestrator:
         # Eliminates the need for --force when adding doc types incrementally.
         if self.config.force_regenerate:
             files_to_process = all_files
+        elif self.config.restrict_to_files is not None:
+            # Commit-diff gate: generate exactly the files changed since the
+            # last synced commit (∩ discovery). No hash/doc-type staleness —
+            # unchanged code yields an empty set and nothing is generated.
+            restrict = self.config.restrict_to_files
+
+            def _rel(f: Path) -> str:
+                try:
+                    return f.relative_to(self.config.source_path).as_posix()
+                except ValueError:
+                    return f.as_posix()
+
+            files_to_process = [f for f in all_files if _rel(f) in restrict]
         else:
             files_to_process = self._staleness.get_stale_files(
                 all_files,
@@ -647,6 +666,11 @@ class DocGenOrchestrator:
             # set wastes work the resume run will redo. Mark and return.
             self._emit(
                 f'Aborted: {abort_reason[:80]}',
+                completed, total_to_process,
+            )
+        elif errors:
+            self._emit(
+                f'Generation hit {len(errors)} error(s) — skipping post-processing; existing themes/crossrefs preserved.',
                 completed, total_to_process,
             )
         else:
@@ -2105,20 +2129,59 @@ class DocGenOrchestrator:
 
         from docgen.reverse_augment import run_reverse_augment_for_source
 
-        results = await run_reverse_augment_for_source(
+        # Honor the same doc-gen excludes the main run applied: reverse-augment
+        # must not regenerate a file the source excludes (e.g. test dirs) just
+        # because another source references it. Build the source's included
+        # doc-gen set the same way run() discovers files, and pass it as the
+        # filter so the expensive cross-source pass respects exclude_dirs/exclude.
+        from config import DEFAULT_EXCLUDE_FILE_PATTERNS
+        from docgen.staleness import find_catalog_files, find_python_files
+
+        _discover = (
+            find_catalog_files
+            if self.config.catalog_only_generator
+            else find_python_files
+        )
+        _root = self.config.source_path
+        allowed_files: set[str] = set()
+        for _f in _discover(
+            _root,
+            exclude_patterns=(
+                DEFAULT_EXCLUDE_FILE_PATTERNS + self.config.exclude_patterns
+            ),
+            exclude_dir_names=self.config.exclude_dir_names,
+        ):
+            try:
+                allowed_files.add(_f.relative_to(_root).as_posix())
+            except ValueError:
+                allowed_files.add(_f.as_posix())
+
+        # Persist each file's augmented docs as they're produced, so the phase
+        # can mark a file fresh ONLY after it's durably stored (skip-check →
+        # generate → persist → mark, per file). This makes the pass both
+        # reuse-aware on re-run (the marker_store skip) and resumable after an
+        # abort — completed files skip, the rest retry — instead of the old
+        # "regenerate everything, then store everything" which re-billed the
+        # whole consumed set on every run.
+        persisted = 0
+
+        async def _persist(_source_name: str, _file: str, docs: list) -> None:
+            nonlocal persisted
+            for doc in docs:
+                stored = await self._store_document(doc)
+                if stored is not None:
+                    persisted += 1
+
+        await run_reverse_augment_for_source(
             target_source=self.config.source_name,
             target_source_root=self.config.source_path,
             related_sources=related_sources,
             analyzer=self._analyzer.analyze_file,
             generator=self._generator,
+            allowed_files=allowed_files,
+            marker_store=self._staleness,
+            persist=_persist,
         )
-
-        persisted = 0
-        for _source_name, _file, docs in results:
-            for doc in docs:
-                stored = await self._store_document(doc)
-                if stored is not None:
-                    persisted += 1
         return persisted
 
 

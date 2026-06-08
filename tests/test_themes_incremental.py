@@ -19,28 +19,26 @@ def _unit(vec: list[float]) -> np.ndarray:
     arr = np.asarray(vec, dtype=np.float32)
     norm = float(np.linalg.norm(arr))
     return arr / norm if norm > 0 else arr
-
-
 def _add_catalog(
     library: Library,
     doc_id: str,
     embedding: list[float],
     *,
     description: str | None = None,
-    source_name: str = 'test',
+    source_name: str = "test",
 ) -> None:
     metadata: dict[str, object] = {
-        'kind': 'element',
-        'source_name': source_name,
-        'qualified_name': doc_id,
-        'subtype': 'function',
+        "kind": "element",
+        "source_name": source_name,
+        "qualified_name": doc_id,
+        "subtype": "function",
     }
     if description is not None:
-        metadata['description'] = description
+        metadata["description"] = description
     library.add_document(
-        content_type='catalog',
+        content_type="catalog",
         title=doc_id,
-        content=f'function {doc_id}',
+        content=f"function {doc_id}",
         source_files=[],
         embedding=_unit(embedding),
         metadata=metadata,
@@ -48,7 +46,7 @@ def _add_catalog(
     )
     with library._conn_provider.acquire() as conn:
         conn.execute(
-            'UPDATE documents SET source_name = ? WHERE id = ?',
+            "UPDATE documents SET source_name = ? WHERE id = ?",
             (source_name, doc_id),
         )
 
@@ -353,157 +351,3 @@ class TestRefreshThemes:
 
         assert summary['path'] == 'noop'
         assert chat_count == first_count, 'second refresh should issue zero LLM calls'
-
-    @pytest.mark.asyncio
-    async def test_picks_up_changed_element_via_updated_at(
-        self, library: Library, mocked_chat_coherent, mocked_embedding, monkeypatch,
-    ) -> None:
-        """After initial build, modifying one catalog doc's updated_at should
-        cause refresh_themes to discover it without being told explicitly.
-        """
-        from docgen import themes
-        from docgen.graph_builder import build_semantic_edges
-
-        _populate_two_clusters(library)
-        build_semantic_edges(library, k=5, min_sim=0.6)
-
-        async with LibraryWriter(library) as writer:
-            await themes.refresh_themes(library, writer)
-
-        # Capture the element ids passed into the inner update path.
-        seen_changed = {'ids': None}
-
-        original_local = themes.local_reassign
-
-        def tracking_local_reassign(library, changed):
-            seen_changed['ids'] = set(changed)
-            return original_local(library, changed)
-
-        monkeypatch.setattr(
-            'docgen.themes.local_reassign', tracking_local_reassign,
-        )
-
-        # Modify A0 — its updated_at gets bumped past the cluster_history time.
-        library.update_document('A0', content='modified body')
-
-        async with LibraryWriter(library) as writer:
-            summary = await themes.refresh_themes(
-                library, writer,
-                recluster_threshold=0.5,  # high enough to take local path
-            )
-
-        assert summary['path'] == 'local_reassign'
-        assert seen_changed['ids'] is not None
-        assert 'A0' in seen_changed['ids']
-
-    @pytest.mark.asyncio
-    async def test_large_drift_triggers_full_recluster(
-        self, library: Library, mocked_chat_coherent, mocked_embedding, monkeypatch,
-    ) -> None:
-        from docgen import themes
-        from docgen.graph_builder import build_semantic_edges
-
-        _populate_two_clusters(library)
-        build_semantic_edges(library, k=5, min_sim=0.6)
-
-        async with LibraryWriter(library) as writer:
-            await themes.refresh_themes(library, writer)
-
-        # Modify many elements (4/6 ≈ 67% drift, well above default 0.05).
-        for eid in ('A0', 'A1', 'B0', 'B1'):
-            library.update_document(eid, content=f'changed {eid}')
-
-        full_called = {'called': False}
-
-        def tracking_cluster(library, **kwargs):
-            full_called['called'] = True
-            from docgen.cluster import cluster_themes as real
-            return real(library, **kwargs)
-
-        monkeypatch.setattr('docgen.themes.cluster_themes', tracking_cluster)
-
-        async with LibraryWriter(library) as writer:
-            summary = await themes.refresh_themes(library, writer)
-
-        assert summary['recluster_full'] is True
-        assert summary['path'] == 'full_recluster'
-        assert full_called['called'] is True
-
-    @pytest.mark.asyncio
-    async def test_drift_at_exact_threshold_uses_full_path(
-        self, library: Library, mocked_chat_coherent, mocked_embedding, monkeypatch,
-    ) -> None:
-        """drift_ratio == threshold should take the full path (>=, not >).
-
-        With 6 catalog elements and 1 changed, drift = 1/6. Setting threshold
-        to 1/6 must trigger full recluster.
-        """
-        from docgen import themes
-        from docgen.graph_builder import build_semantic_edges
-
-        _populate_two_clusters(library)
-        build_semantic_edges(library, k=5, min_sim=0.6)
-
-        async with LibraryWriter(library) as writer:
-            await themes.refresh_themes(library, writer)
-
-        library.update_document('A0', content='changed')
-
-        full_called = {'called': False}
-
-        def tracking_cluster(library, **kwargs):
-            full_called['called'] = True
-            from docgen.cluster import cluster_themes as real
-            return real(library, **kwargs)
-
-        monkeypatch.setattr('docgen.themes.cluster_themes', tracking_cluster)
-
-        async with LibraryWriter(library) as writer:
-            summary = await themes.refresh_themes(
-                library, writer, recluster_threshold=1.0 / 6.0,
-            )
-
-        assert summary['recluster_full'] is True
-        assert full_called['called'] is True
-
-    @pytest.mark.asyncio
-    async def test_summarize_only_when_dirty_but_no_catalog_change(
-        self, library: Library, mocked_chat_coherent, mocked_embedding, monkeypatch,
-    ) -> None:
-        """If a theme is dirty (e.g., a prior summarize failed) but no catalog
-        elements have moved, refresh_themes should re-attempt summarization
-        without reclustering or reassigning.
-        """
-        from docgen import themes
-        from docgen.graph_builder import build_semantic_edges
-
-        _populate_two_clusters(library)
-        build_semantic_edges(library, k=5, min_sim=0.6)
-
-        async with LibraryWriter(library) as writer:
-            await themes.refresh_themes(library, writer)
-
-        # Mark a theme dirty manually (simulate a prior failure).
-        cluster_id = library.list_themes(coherent_only=False)[0].cluster_id
-        library.mark_theme_dirty(cluster_id)
-
-        cluster_called = {'called': False}
-        local_called = {'called': False}
-
-        def tracking_cluster(library, **kwargs):
-            cluster_called['called'] = True
-
-        def tracking_local(library, changed):
-            local_called['called'] = True
-            return set()
-
-        monkeypatch.setattr('docgen.themes.cluster_themes', tracking_cluster)
-        monkeypatch.setattr('docgen.themes.local_reassign', tracking_local)
-
-        async with LibraryWriter(library) as writer:
-            summary = await themes.refresh_themes(library, writer)
-
-        assert summary['path'] == 'summarize_only'
-        assert summary['summarized'] >= 1
-        assert cluster_called['called'] is False
-        assert local_called['called'] is False
