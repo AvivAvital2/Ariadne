@@ -96,6 +96,59 @@ async def test_quota_exhausted_message_raises_quota_error(monkeypatch):
     assert sc.calls == 1
 
 
+async def test_workspace_usage_limit_400_raises_quota_error(monkeypatch):
+    """A maxed workspace usage cap comes back as HTTP 400
+    ``invalid_request_error`` (NOT 429). It's still a hard, non-retryable
+    account cap, so the provider must classify it as QuotaExhaustedError —
+    letting callers fail gracefully instead of dumping a raw httpx traceback.
+    """
+    from docgen.llm.anthropic import AnthropicProvider, QuotaExhaustedError
+
+    body = {
+        'type': 'error',
+        'error': {
+            'type': 'invalid_request_error',
+            'message': (
+                'You have reached your specified workspace API usage limits. '
+                'You will regain access on 2026-07-01 at 00:00 UTC.'
+            ),
+        },
+    }
+    sc = _ScriptedClient([_FakeResponse(400, body)])
+    monkeypatch.setattr(AnthropicProvider, '_get_client', lambda self: sc)
+
+    provider = AnthropicProvider(model='claude-opus-4-8', api_key='test')
+    with pytest.raises(QuotaExhaustedError) as excinfo:
+        await provider.call(system_prompt='s', user_prompt='u')
+
+    m = str(excinfo.value).lower()
+    assert 'usage limit' in m or 'workspace' in m
+    assert sc.calls == 1   # hard cap → no retry
+
+
+async def test_genuine_400_is_not_misclassified_as_quota(monkeypatch):
+    """A real bad-payload 400 must still surface as HTTPStatusError (not
+    QuotaExhaustedError) so the request bug stays diagnosable."""
+    from docgen.llm.anthropic import AnthropicProvider, QuotaExhaustedError
+
+    body = {
+        'type': 'error',
+        'error': {
+            'type': 'invalid_request_error',
+            'message': 'max_tokens: must be greater than 0',
+        },
+    }
+    sc = _ScriptedClient([_FakeResponse(400, body)])
+    monkeypatch.setattr(AnthropicProvider, '_get_client', lambda self: sc)
+
+    provider = AnthropicProvider(
+        model='claude-opus-4-8', api_key='test', retry_delay=0,
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        await provider.call(system_prompt='s', user_prompt='u')
+    assert sc.calls == 1   # 400 is non-retryable
+
+
 async def test_rate_limit_per_minute_retries_not_aborts(monkeypatch):
     """A 429 with a transient rate-limit message must trigger normal retry
     backoff (no QuotaExhaustedError raised).

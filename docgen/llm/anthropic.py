@@ -53,6 +53,8 @@ _ANTHROPIC_BETAS = f'{ANTHROPIC_PROMPT_CACHING_BETA},{ANTHROPIC_MESSAGE_BATCHES_
 # Matched case-insensitively on the error.message field. Conservative list:
 # false negatives just mean we retry uselessly until max_retries; false
 # positives would short-circuit a transient error. Lean toward false negatives.
+# Substrings that indicate a 429 is from monthly/credit quota exhaustion
+# (fatal for the run) rather than a per-minute rate limit (transient, retry).
 _QUOTA_EXHAUSTED_KEYWORDS: tuple[str, ...] = (
     'monthly',
     'credit',
@@ -62,25 +64,51 @@ _QUOTA_EXHAUSTED_KEYWORDS: tuple[str, ...] = (
     'spend limit',
 )
 
+# Substrings that mark a 400 ``invalid_request_error`` as a maxed *workspace*
+# API usage limit — an admin-set cap that resets on a date, distinct from a
+# credit/quota 429. Kept separate so the two caps get distinct messages.
+_WORKSPACE_LIMIT_KEYWORDS: tuple[str, ...] = (
+    'usage limit',
+    'workspace',
+)
+
 
 class QuotaExhaustedError(Exception):
-    """Raised when Anthropic returns a 429 with a quota-exhausted message.
+    """Raised on a hard, non-retryable Anthropic account cap.
 
-    Distinct from per-minute rate limits which the provider retries with
-    backoff. The orchestrator catches this to abort the run cleanly and
-    surface a resume hint to the user.
+    Base for both cap shapes so a caller can ``except QuotaExhaustedError`` to
+    stop the run cleanly. Distinct from per-minute rate limits, which the
+    provider retries with backoff.
+    """
+
+
+class WorkspaceUsageLimitError(QuotaExhaustedError):
+    """A maxed *workspace* API usage limit (Anthropic returns this as a 400
+    ``invalid_request_error``, not a 429). Subclasses QuotaExhaustedError so
+    existing abort handlers catch it, while keeping a distinct type + message
+    — which includes Anthropic's "regain access on <date>" note. The remedy
+    differs from a credit quota: wait for the reset or raise the workspace cap.
     """
 
 
 def _is_quota_exhausted(body: dict) -> bool:
-    """True iff a 429 error body indicates a hard quota cap (vs a transient
-    per-minute rate limit). Matches against ``error.message`` substrings.
+    """True iff a 429 error body indicates a credit/monthly quota cap (vs a
+    transient per-minute rate limit). Matches ``error.message`` substrings.
     """
     err = (body or {}).get('error') or {}
     msg = (err.get('message') or '').lower()
     if not msg:
         return False
     return any(kw in msg for kw in _QUOTA_EXHAUSTED_KEYWORDS)
+
+
+def _is_workspace_usage_limit(body: dict) -> bool:
+    """True iff a 400 error body indicates a maxed workspace API usage limit."""
+    err = (body or {}).get('error') or {}
+    msg = (err.get('message') or '').lower()
+    if not msg:
+        return False
+    return any(kw in msg for kw in _WORKSPACE_LIMIT_KEYWORDS)
 
 
 @define
@@ -215,10 +243,31 @@ class AnthropicProvider:
             except httpx.HTTPStatusError as e:
                 last_error = e
                 status = e.response.status_code
-                # Dump the request payload + response body on 4xx so the
-                # user can diagnose without enabling debug logging. The
-                # short string str(e) hides what Anthropic actually
-                # rejected.
+                try:
+                    err_body = e.response.json() if hasattr(e.response, 'json') else {}
+                except (ValueError, json.JSONDecodeError):
+                    err_body = {}
+                # Hard, non-retryable account caps — surface a clean typed
+                # error (and skip the payload dump, which is for diagnosing
+                # genuine request bugs) so callers fail gracefully. Keep the
+                # two distinct: a 429 credit/quota vs a 400 workspace usage
+                # cap (each carries its own remedy in the message).
+                if status == 429 and _is_quota_exhausted(err_body):
+                    msg = (err_body.get('error') or {}).get('message') or 'quota exhausted'
+                    _logger.error('Anthropic quota exhausted; aborting: %s', msg)
+                    raise QuotaExhaustedError(msg) from e
+                if status == 400 and _is_workspace_usage_limit(err_body):
+                    msg = (
+                        (err_body.get('error') or {}).get('message')
+                        or 'workspace API usage limit reached'
+                    )
+                    _logger.error(
+                        'Anthropic workspace usage limit reached; aborting: %s', msg,
+                    )
+                    raise WorkspaceUsageLimitError(msg) from e
+                # Dump the request payload + response body on a genuine 4xx so
+                # the user can diagnose without enabling debug logging. The
+                # short string str(e) hides what Anthropic actually rejected.
                 if 400 <= status < 500:
                     try:
                         resp_text = e.response.text[:500]
@@ -235,21 +284,6 @@ class AnthropicProvider:
                         resp_text,
                     )
                 # Anthropic uses 429 for rate limits and 529 for overloaded.
-                # Distinguish quota exhausted (fatal) from per-minute rate
-                # limit (transient): retrying through a quota cap just
-                # wastes time and runs through the user's max_retries on
-                # every file in the run.
-                if status == 429:
-                    try:
-                        err_body = e.response.json() if hasattr(e.response, 'json') else {}
-                    except (ValueError, json.JSONDecodeError):
-                        err_body = {}
-                    if _is_quota_exhausted(err_body):
-                        msg = (err_body.get('error') or {}).get('message') or 'quota exhausted'
-                        _logger.error(
-                            'Anthropic quota exhausted; aborting: %s', msg,
-                        )
-                        raise QuotaExhaustedError(msg) from e
                 if status >= 500 or status in (429, 529):
                     if attempt + 1 >= self.max_retries:
                         _logger.error(
