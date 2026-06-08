@@ -329,3 +329,64 @@ def test_malformed_hocon_returns_empty(tmp_path: Path):
     f = _write(tmp_path, 'broken.conf', 'foo { unclosed = 1\nbar = ')
     elements = extract_elements(f, tmp_path)
     assert elements == []
+
+
+def test_parse_failure_is_logged_not_silent(tmp_path: Path, caplog) -> None:
+    """A `.conf` that isn't valid HOCON (an INI-style pip.conf, a PAM
+    limits.conf, or a genuinely malformed file) must NOT be silently
+    swallowed. The extractor logs a warning naming the file — so a config
+    that degraded to file-index-only is visible — then returns [] so the
+    batch sync still keeps going."""
+    import logging
+
+    from docgen.catalog_extractor import extract_elements
+
+    f = _write(tmp_path, 'broken.conf', 'foo { unclosed = 1\nbar = ')
+    with caplog.at_level(logging.WARNING):
+        elements = extract_elements(f, tmp_path)
+
+    assert elements == []
+    assert any('broken.conf' in r.getMessage() for r in caplog.records), (
+        f"parse failure was not surfaced; warnings="
+        f"{[r.getMessage() for r in caplog.records]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression: a real-world reference.conf shape combining substitution-built
+# paths (`${base.dir}/log/events`) with the activation.pub PGP-key block.
+# Before value-concatenation support, the path lines failed to parse and the
+# WHOLE file degraded to file_index-only — so `activation.pub` (the key the
+# user expected to find) was never catalogued at all.
+# ---------------------------------------------------------------------------
+
+
+def test_path_concatenation_does_not_suppress_activation_pub(tmp_path: Path):
+    from docgen.catalog_extractor import extract_elements
+
+    src = (
+        'eventslogger.file.dir {\n'
+        '\tparent  = ${base.dir}/log/events\n'
+        '\tcurrent = ${eventslogger.file.dir.parent}/current\n'
+        '}\n'
+        'activation {\n'
+        '\tpub = [\n'
+        '\t\t"""-----BEGIN PGP PUBLIC KEY BLOCK-----\n'
+        '\t\tVersion: GnuPG v2\n'
+        '\t\t-----END PGP PUBLIC KEY BLOCK-----"""\n'
+        '\t]\n'
+        '\tlicenseFileName = "sblic.af"\n'
+        '}\n'
+    )
+    f = _write(tmp_path, 'reference.conf', src)
+    elements = extract_elements(f, tmp_path)
+
+    qns = {el.qualified_name for el in elements}
+    assert any(qn.endswith('.activation.pub') for qn in qns), (
+        f"'activation.pub' must be catalogued even alongside path-concat "
+        f"values; got {sorted(qns)}"
+    )
+    # The path-built keys parse and are catalogued too.
+    assert any(qn.endswith('.eventslogger.file.dir.parent') for qn in qns), (
+        f"path-concatenation key missing from {sorted(qns)}"
+    )

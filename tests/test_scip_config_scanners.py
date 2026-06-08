@@ -265,6 +265,33 @@ class TestHoconScanner:
         keys = {v.key for v in values}
         assert 'name' in keys
 
+    def test_value_concatenation_is_skipped_not_truncated(
+        self, tmp_path: Path,
+    ) -> None:
+        """HOCON value concatenation (`"http://"${host}`,
+        `${base.dir}/log/events`) can't be resolved to a single flat
+        value here. The scanner must SKIP it, never store a truncated
+        first-atom value (`http://`) that would mislead sink resolution."""
+        from docgen.scip_config_scanners import scan_hocon
+
+        conf = tmp_path / 'app.conf'
+        _touch(
+            conf,
+            'plain = "kept"\n'
+            'endpoint = "http://"${host}\n'        # string + substitution
+            'logdir = ${base.dir}/log/events\n',   # substitution + path
+        )
+
+        values = scan_hocon(conf)
+        by_key = {v.key: v.value for v in values}
+        assert by_key.get('plain') == 'kept'
+        # Neither concatenation is stored — and crucially not as a truncated
+        # partial value.
+        assert 'endpoint' not in by_key, (
+            f"concatenation stored a partial value: {by_key.get('endpoint')!r}"
+        )
+        assert 'logdir' not in by_key
+
 
 # ---------------------------------------------------------------------------
 # Aggregator — walks source tree and dispatches by file type

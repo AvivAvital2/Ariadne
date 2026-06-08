@@ -271,6 +271,70 @@ def test_include_directive():
 
 
 # ---------------------------------------------------------------------------
+# Value concatenation — a substitution (or string) immediately followed by
+# more text on the same line is one concatenated value. Real reference.conf
+# files lean on this for path-building (`${base.dir}/log/events`); without
+# it the parser chokes on the `/` after `}` and the WHOLE file degrades to
+# file_index-only (so e.g. `activation.pub` never becomes a catalog element).
+# ---------------------------------------------------------------------------
+
+
+def test_value_concatenation_substitution_and_path():
+    """`${base.dir}/log/events` — substitution then unquoted path. This is
+    the exact construct that broke scalaproject's engine/reference.conf at
+    line 405 ("No terminal matches '/'")."""
+    from docgen.hocon_grammar import parse
+
+    parse('parent = ${base.dir}/log/events\n')
+
+
+def test_value_concatenation_forms():
+    """The common concatenation shapes seen in real configs."""
+    from docgen.hocon_grammar import parse
+
+    parse('a = ${x}/y/z\n')                 # sub + path
+    parse('b = ${a}/${b}/c\n')              # multiple subs + path
+    parse('url = "http://"${host}\n')       # string + sub
+    parse('current = ${eventslogger.file.dir.parent}/current\n')  # dotted sub + path
+
+
+def test_plus_equals_append_assignment():
+    """HOCON `+=` appends to a list (self-referential). Real reference.conf
+    files use it heavily (`mutatorBundleNames += "..."`, `whitelist += ...`);
+    the grammar must accept it as an assignment operator alongside `=`/`:`."""
+    from docgen.hocon_grammar import parse
+
+    parse('mutatorBundleNames += "com.example.Codecs"\n')
+    parse('whitelist += "127.0.0.1"\n')
+
+
+def test_quoted_key():
+    """HOCON keys may be quoted (`"name" = ...`), including inside objects
+    nested in arrays (`browsers = [{"name":"chrome"}]`)."""
+    from docgen.hocon_grammar import parse
+
+    parse('"name" = "chrome"\n')
+    parse('browsers = [{"name":"chrome"}]\n')
+
+
+def test_eventslogger_block_with_path_concatenation_parses():
+    """The eventslogger fixture that mirrors the lines that actually failed
+    in engine/reference.conf — substitution-built paths inside a block."""
+    from docgen.hocon_grammar import parse
+
+    src = (
+        'eventslogger.file.dir {\n'
+        '\tparent  = ${base.dir}/log/events\n'
+        '\tcurrent = ${eventslogger.file.dir.parent}/current\n'
+        '\tarchive = ${eventslogger.file.dir.parent}/archive\n'
+        '}\n'
+    )
+    tree = parse(src)
+    assert tree is not None
+    assert len(list(tree.children)) == 1
+
+
+# ---------------------------------------------------------------------------
 # End-to-end fixture: the activation block from engine/reference.conf
 # ---------------------------------------------------------------------------
 

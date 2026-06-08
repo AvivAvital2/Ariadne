@@ -21,6 +21,7 @@ search even when its content is malformed.
 from __future__ import annotations
 
 import hashlib
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,6 +30,8 @@ from docgen.hocon_grammar import parse as _parse
 
 if TYPE_CHECKING:
     from lark import Tree
+
+_logger = logging.getLogger(__name__)
 
 
 def _module_qn(path: Path, source_root: Path) -> str:
@@ -62,9 +65,13 @@ def _key_path_text(key_path_node: Tree) -> str:
     Handles unquoted KEY tokens (and ignores any whitespace tokens)."""
     parts: list[str] = []
     for child in key_path_node.children:
-        # Each child is a Token (KEY) or '.' separator.
+        # Each child is a Token (KEY or quoted STRING) or '.' separator.
         token_text = str(child).strip()
         if token_text and token_text != '.':
+            # Quoted keys (`"name"`) carry their quotes in the token; strip
+            # them so the qualified_name reads `parent.name`, not `parent."name"`.
+            if len(token_text) >= 2 and token_text[0] == '"' and token_text[-1] == '"':
+                token_text = token_text[1:-1]
             parts.append(token_text)
     return '.'.join(parts)
 
@@ -212,7 +219,16 @@ def _extract_hocon(
 
     try:
         tree = _parse(src)
-    except UnexpectedInput:
+    except UnexpectedInput as e:
+        # Don't mask it: a parse failure means this file degrades to
+        # file-index-only (no per-key catalog elements). Surface which file
+        # and where so a silently-uncatalogued config is visible — then
+        # return [] so one bad file never aborts the batch catalog-sync.
+        loc = f'line {e.line}, col {e.column}' if getattr(e, 'line', None) else 'unknown location'
+        _logger.warning(
+            'HOCON parse failed for %s (%s) — catalogued as file-index only, '
+            'no per-key elements extracted.', path, loc,
+        )
         return []
 
     src_lines = src.splitlines()

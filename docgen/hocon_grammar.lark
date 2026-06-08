@@ -11,9 +11,10 @@
 //   - Support triple-quoted strings (the form PGP key blocks live in).
 //
 // Non-goals:
-//   - HOCON-spec-perfect string concatenation rules. We accept a single
-//     value per assignment; concatenation of multiple unquoted tokens is
-//     out of scope. Common conf files don't rely on it.
+//   - RESOLVING value concatenation. We parse adjacent atoms
+//     (`${base.dir}/log/events`, `"http://"${host}`) so the entry is
+//     recognized and its line range captured, but we don't compute the
+//     concatenated string — the catalog never needs the resolved value.
 //   - Following includes (we record the directive only).
 //   - Resolving substitutions (we record `${var}` as a leaf value).
 
@@ -39,25 +40,40 @@ entry: include
 
 include: "include" string
 
-assignment: key_path EQ_OR_COLON value
+assignment: key_path ASSIGN_OP value
 
 object_block: key_path object
 
-key_path: KEY ("." KEY)*
+// Keys are unquoted identifiers OR quoted strings (`"name" = ...`, common
+// inside objects nested in arrays like `[{"name":"chrome"}]`). The extractor
+// strips the surrounding quotes when reconstructing the dotted path.
+key_path: (KEY | STRING) ("." (KEY | STRING))*
 
 object: "{" object_body "}"
 
 array: "[" array_body "]"
 array_body: _SEP* (value (_SEP+ value)*)? _SEP*
 
-// A value is one of the structured types or a scalar. We don't model
-// concatenation — assignments take exactly one value. This is enough
-// for ~95% of real config files in the wild.
-value: object
-     | array
-     | duration_value
-     | size_value
-     | scalar
+// A value is one or more atoms concatenated. Most values are a single
+// atom; HOCON "value concatenation" puts several adjacent atoms on one
+// line — path-building like `${base.dir}/log/events` (substitution +
+// unquoted) or `"http://"${host}` (string + substitution) is the common
+// case in real reference.conf files. We don't RESOLVE the concatenation:
+// the extractor slices each entry by its line range and never inspects
+// value internals, so it only needs to PARSE. Atoms are separated only by
+// ignored whitespace; an explicit `_SEP` (newline/comma) ends the value,
+// so concatenation never reaches across into the next entry.
+// `_value_atom` is inlined (leading underscore): a single-atom value keeps
+// the original tree shape (`value` -> one of object/array/scalar/…), so
+// every existing tree-walker that reads `value.children[0].data` is
+// unaffected. A concatenation simply yields several direct children.
+value: _value_atom+
+
+_value_atom: object
+           | array
+           | duration_value
+           | size_value
+           | scalar
 
 duration_value: NUMBER TIME_UNIT
 size_value: NUMBER SIZE_UNIT
@@ -77,7 +93,9 @@ string: STRING
 
 // Terminals -----------------------------------------------------------
 
-EQ_OR_COLON: "=" | ":"
+// Assignment operator: `=`, `:`, or `+=` (HOCON list-append). `+=` must
+// be listed first so the lexer prefers the 2-char match over bare `=`.
+ASSIGN_OP: "+=" | "=" | ":"
 
 // Triple-quoted: spans multiple lines, holds raw content (PGP blocks,
 // embedded scripts, multi-line text). MUST be matched before STRING so

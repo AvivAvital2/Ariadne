@@ -100,7 +100,9 @@ def _key_path_text(key_path_node) -> str:
     for child in key_path_node.children:
         token_text = str(child).strip()
         if token_text and token_text != '.':
-            parts.append(token_text)
+            # Quoted keys (`"name"`) carry quotes in the token; strip them so
+            # the dotted key reads `parent.name`, not `parent."name"`.
+            parts.append(_strip_quotes(token_text))
     return '.'.join(parts)
 
 
@@ -144,8 +146,14 @@ def _scalar_to_string(scalar_node) -> str | None:
 
 def _value_to_string(value_node) -> str | None:
     """Extract a scalar string from a ``value`` tree node, or None
-    if the value is structured (object/array) or a substitution."""
+    if the value is structured (object/array), a substitution, or a
+    concatenation."""
     if not value_node.children:
+        return None
+    # Value concatenation (`"http://"${host}`, `${base.dir}/log/events`)
+    # yields multiple atoms. We can't flatten it to one resolved value, so
+    # skip it rather than store a misleading first-atom truncation.
+    if len(value_node.children) != 1:
         return None
     inner = value_node.children[0]
     if not hasattr(inner, 'data'):
