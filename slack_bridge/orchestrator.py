@@ -29,6 +29,7 @@ async def answer_question(
     channel: str,
     thread_ts: str,
     text: str,
+    seed_turns: Sequence[Turn] | None = None,
 ) -> Any:
     """Run one turn for a thread, warming or cold-rebuilding context as needed.
 
@@ -36,11 +37,15 @@ async def answer_question(
     (evicted / post-restart / new) → rebuild context from the Slack thread and,
     if there are prior turns, seed them into the first prompt. Slack is the
     durable conversation store; we never rely on an on-disk SDK session.
+
+    ``seed_turns`` lets a caller that has *already* loaded the thread (the
+    follow-up gate fetches it to decide engagement) hand the transcript in so the
+    cold path doesn't fetch it a second time.
     """
     cold = thread_ts not in pool
     session = await pool.get_or_create(thread_ts)
     if cold:
-        turns = await reconstruct(slack, channel, thread_ts, bot_user_id)
+        turns = seed_turns if seed_turns is not None else await reconstruct(slack, channel, thread_ts, bot_user_id)
         prior = turns[:-1]  # everything before the just-asked question (the last turn)
         prompt = render_seed(prior) + text if prior else text
         return await session.ask(prompt)

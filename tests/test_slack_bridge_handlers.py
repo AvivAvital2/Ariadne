@@ -218,7 +218,8 @@ async def test_message_listener_channel_filters():
     cfg = bridge_config(channels=frozenset({'C1'}))
     reply = types.SimpleNamespace(text='ans', is_error=False, session_id='S')
 
-    # Not engaged (not in pool) → ignored; a fresh topic needs an @mention.
+    # A thread the bot never joined (no bot message in Slack) → ignored; a fresh
+    # topic needs an @mention. _FakeSlack() has no replies → no bot history.
     p1 = _FakePool(_FakeSession(reply), contains=False)
     await make_listeners(cfg, p1, 'UBOT')['message'](
         event={'channel': 'C1', 'thread_ts': 'T', 'user': 'U1', 'ts': 'T2', 'text': 'hello'}, client=_FakeSlack())
@@ -236,6 +237,64 @@ async def test_message_listener_channel_filters():
     await make_listeners(cfg, p3, 'UBOT')['message'](
         event={'channel': 'C1', 'thread_ts': 'T', 'user': 'U1', 'ts': 'T2', 'text': '<@UBOT> hi again'}, client=_FakeSlack())
     assert p3._session.asked == []
+
+
+async def test_followup_after_eviction_is_recognised_via_slack_not_the_pool():
+    """The reported bug. A thread's warm session is evicted (idle TTL, LRU, or a
+    bridge restart), then a human follows up — possibly hours later — WITHOUT an
+    @mention. Engagement is durable in Slack (the bot's prior answer lives in the
+    thread), so the bot still picks it up, cold-rebuilds from the thread, and
+    re-warms the cache for another cycle. Pool membership is NOT the engagement
+    test; the 1:1-vs-multi-human gate is recovered from Slack so it too survives
+    eviction."""
+    cfg = bridge_config(channels=frozenset({'C1'}))
+    reply = types.SimpleNamespace(text='ans', is_error=False, session_id='S')
+
+    # Evicted (contains=False) BUT the thread already holds the bot's earlier
+    # answer → engaged. The late follow-up is answered, seeded from the thread.
+    engaged = _FakeSlack(replies=[
+        {'user': 'UALICE', 'text': 'how does X work?'},
+        {'user': 'UBOT', 'text': 'X works like so.'},
+        {'user': 'UALICE', 'text': 'and what about Y?'},   # the late follow-up
+    ])
+    p1 = _FakePool(_FakeSession(reply), contains=False)
+    await make_listeners(cfg, p1, 'UBOT')['message'](
+        event={'channel': 'C1', 'thread_ts': 'TROOT', 'user': 'UALICE', 'ts': 'T9', 'text': 'and what about Y?'},
+        client=engaged)
+    assert p1._session.asked                                  # picked up despite eviction
+    assert 'X works like so.' in p1._session.asked[0]         # cold-rebuilt from Slack history
+
+    # A thread the bot never joined (no bot message) → still ignored.
+    stranger = _FakeSlack(replies=[
+        {'user': 'UALICE', 'text': 'hey folks'},
+        {'user': 'UBOB', 'text': 'what about Y?'},
+    ])
+    p2 = _FakePool(_FakeSession(reply), contains=False)
+    await make_listeners(cfg, p2, 'UBOT')['message'](
+        event={'channel': 'C1', 'thread_ts': 'TX', 'user': 'UBOB', 'ts': 'T9', 'text': 'what about Y?'},
+        client=stranger)
+    assert p2._session.asked == []                            # bot never spoke here → leave it alone
+
+    # Multi-human thread, evicted: the participant tally is recovered from Slack,
+    # so a follow-up that does NOT name the bot stays silent (gate preserved)…
+    multi = _FakeSlack(replies=[
+        {'user': 'UALICE', 'text': '<@UBOT> how does X work?'},
+        {'user': 'UBOT', 'text': 'X works like so.'},
+        {'user': 'UBOB', 'text': 'I disagree'},               # a second human
+        {'user': 'UALICE', 'text': 'thoughts?'},
+    ])
+    p3 = _FakePool(_FakeSession(reply), contains=False)
+    await make_listeners(cfg, p3, 'UBOT')['message'](
+        event={'channel': 'C1', 'thread_ts': 'TM', 'user': 'UALICE', 'ts': 'T9', 'text': 'thoughts?'},
+        client=multi)
+    assert p3._session.asked == []                            # 2 humans + not named → silent, even cold
+
+    # …but naming the bot summons it, evicted or not.
+    p4 = _FakePool(_FakeSession(reply), contains=False)
+    await make_listeners(cfg, p4, 'UBOT')['message'](
+        event={'channel': 'C1', 'thread_ts': 'TM', 'user': 'UALICE', 'ts': 'T9', 'text': 'Ariadne, thoughts?'},
+        client=multi)
+    assert p4._session.asked                                  # named → answered despite eviction
 
 
 def test_name_invoked_regex_matches_the_name_not_arbitrary_text():

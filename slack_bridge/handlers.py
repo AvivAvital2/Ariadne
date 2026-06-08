@@ -8,7 +8,7 @@ from slack_bridge.diagram import prepare_diagrams
 from slack_bridge.errors import to_user_message
 from slack_bridge.format import to_mrkdwn
 from slack_bridge.orchestrator import answer_question
-from slack_bridge.replay import PLACEHOLDER_PREFIX
+from slack_bridge.replay import PLACEHOLDER_PREFIX, load_thread
 
 _MENTION_RE = re.compile(r'<@[A-Z0-9]+>')
 # The bot's name, matched as a plain word (any case) so a multi-human thread
@@ -33,13 +33,19 @@ def _name_invoked(text: str) -> bool:
     return bool(_NAME_RE.search(text or ''))
 
 
-async def handle_event(*, cfg: Any, pool: Any, slack: Any, bot_user_id: str, ack: Any, event: dict) -> None:
+async def handle_event(
+    *, cfg: Any, pool: Any, slack: Any, bot_user_id: str, ack: Any, event: dict, seed_turns: Any = None
+) -> None:
     """Transport-agnostic handler for one inbound Slack message.
 
     Acks immediately (Slack's 3s window), enforces the allowlist, posts a
     placeholder, runs the turn via the orchestrator (warming/cold-rebuilding the
     thread as needed), then edits the placeholder into the answer. Errors and
     timeouts are surfaced honestly rather than masked.
+
+    ``seed_turns`` carries a thread transcript the caller already loaded (the
+    follow-up gate fetches it to decide engagement) so the cold path reuses it
+    instead of fetching the thread again.
     """
     await ack()
 
@@ -64,6 +70,7 @@ async def handle_event(*, cfg: Any, pool: Any, slack: Any, bot_user_id: str, ack
                 channel=channel,
                 thread_ts=thread_ts,
                 text=text,
+                seed_turns=seed_turns,
             ),
             timeout=cfg.turn_timeout_seconds,
         )
@@ -139,10 +146,11 @@ def make_listeners(cfg: Any, pool: Any, bot_user_id: str) -> dict[str, Any]:
         if thread_ts and user and user != bot_user_id:
             thread_humans.setdefault(thread_ts, set()).add(user)
 
-    async def _run(event: dict, client: Any) -> None:
+    async def _run(event: dict, client: Any, *, seed_turns: Any = None) -> None:
         _note(event.get('thread_ts') or event.get('ts'), event.get('user', ''))
         await handle_event(
-            cfg=cfg, pool=pool, slack=client, bot_user_id=bot_user_id, ack=_noop_ack, event=event
+            cfg=cfg, pool=pool, slack=client, bot_user_id=bot_user_id, ack=_noop_ack,
+            event=event, seed_turns=seed_turns,
         )
 
     async def on_mention(event: dict, client: Any) -> None:
@@ -158,20 +166,33 @@ def make_listeners(cfg: Any, pool: Any, bot_user_id: str) -> dict[str, Any]:
         if event.get('bot_id') or event.get('subtype'):
             return
         thread_ts = event.get('thread_ts')
-        # Only follow up inside a thread the bot is actively engaged in; a fresh
-        # topic must @mention the bot (that's on_mention's job).
-        if not thread_ts or thread_ts not in pool:
-            thread_humans.pop(thread_ts, None)
+        # A fresh top-level topic (no thread) must @mention the bot — on_mention's job.
+        if not thread_ts:
             return
         # An explicit @mention is on_mention's job too — don't answer twice.
         text = event.get('text', '')
         if f'<@{bot_user_id}>' in text:
             return
+        # Engagement is durable in SLACK, not in the warm pool. A pool hit is
+        # engaged by definition; on a miss (evicted by idle TTL / LRU, or a
+        # restart) ask Slack whether the bot has already answered in this thread.
+        # If so it stays engaged — the cold turn rebuilds from the thread and
+        # re-warms the cache for another cycle; if not, it's a thread the bot
+        # never joined, so leave it alone (a fresh topic must @mention).
+        seed_turns = None
+        if thread_ts not in pool:
+            ctx = await load_thread(client, event.get('channel', ''), thread_ts, bot_user_id)
+            if not ctx.bot_present:
+                return
+            # Recover the participant set from Slack so the 1:1-vs-multi-human
+            # gate survives eviction (the in-memory tally died with the session).
+            thread_humans[thread_ts] = set(ctx.humans)
+            seed_turns = ctx.turns
         # Ingest the participant (replay keeps the full thread as context), then
         # answer only in a 1:1 correspondence, or when the bot is named.
         _note(thread_ts, event.get('user', ''))
         if len(thread_humans.get(thread_ts, set())) <= 1 or _name_invoked(text):
-            await _run(event, client)
+            await _run(event, client, seed_turns=seed_turns)
 
     async def on_command(ack: Any, command: dict, client: Any) -> None:
         await ack()
