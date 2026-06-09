@@ -59,8 +59,8 @@ Write a **minimal** config — *not* the build box's `ariadne.yaml`. Its `exclud
 default_source: ariadne
 sources:
   ariadne: .          # path is vestigial for DB-only tools (see below)
-  coderbot: .
-  mps: .
+  projecta: .
+  projectb: .
 defaults:
   db_path: ariadne.db
   provider: anthropic       # so ariadne_ask synthesizes with Claude
