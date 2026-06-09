@@ -33,6 +33,30 @@ def _name_invoked(text: str) -> bool:
     return bool(_NAME_RE.search(text or ''))
 
 
+def _help_text(cfg: Any) -> str:
+    """Usage shown for an empty question (bare ``/ariadne`` or a lone @mention).
+
+    Sent immediately — no 'Searching…' placeholder, no agent turn — so the user
+    learns how to interact instead of waiting on a no-op search.
+    """
+    lines = [
+        '👋 *Ask me about the team’s codebases* — I answer from the Ariadne docs '
+        '(read-only; I don’t change code).',
+        '*Tell me which project you mean* — if you don’t, I’ll ask before answering.',
+        '• `/ariadne in <project>, <your question>` — e.g. '
+        '`/ariadne in <project>, how does the auth flow work?`',
+        '• *Across projects:* `/ariadne how does <project-a> work with <project-b>?`',
+        '• *Altitude is optional* — answers are in depth by default; add e.g. '
+        '“for a product manager” or “from 10k feet” to change the level.',
+        '• *Diagrams:* if the docs cover it, ask me to “diagram …” and I’ll render it inline.',
+        '• You can also @mention me or DM me with a question.',
+    ]
+    sources = sorted(getattr(cfg, 'source_descriptions', {}) or {})
+    if sources:
+        lines.append('I can answer about: ' + ', '.join(f'`{s}`' for s in sources) + '.')
+    return '\n'.join(lines)
+
+
 async def handle_event(
     *, cfg: Any, pool: Any, slack: Any, bot_user_id: str, ack: Any, event: dict, seed_turns: Any = None
 ) -> None:
@@ -57,10 +81,16 @@ async def handle_event(
         await slack.chat_postMessage(channel=channel, thread_ts=thread_ts, text=_NOT_ALLOWED)
         return
 
+    text = _clean_text(event.get('text', ''))
+    if not text:
+        # Empty question (bare `/ariadne` or a lone @mention): reply with usage
+        # right away — no "Searching…" placeholder, no agent turn.
+        await slack.chat_postMessage(channel=channel, thread_ts=thread_ts, text=_help_text(cfg))
+        return
+
     placeholder = await slack.chat_postMessage(
         channel=channel, thread_ts=thread_ts, text=_PLACEHOLDER_TEXT
     )
-    text = _clean_text(event.get('text', ''))
     try:
         reply = await asyncio.wait_for(
             answer_question(
@@ -196,6 +226,11 @@ def make_listeners(cfg: Any, pool: Any, bot_user_id: str) -> dict[str, Any]:
 
     async def on_command(ack: Any, command: dict, client: Any) -> None:
         await ack()
+        text = _clean_text(command.get('text', ''))
+        if not text:
+            # Bare `/ariadne` -> usage help immediately (no echo, no thread, no agent).
+            await client.chat_postMessage(channel=command['channel_id'], text=_help_text(cfg))
+            return
         echo = await client.chat_postMessage(
             channel=command['channel_id'],
             text=f'<@{command.get("user_id", "")}> asked: {command.get("text", "")}',

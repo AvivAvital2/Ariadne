@@ -392,3 +392,45 @@ async def test_diagram_in_reply_is_rendered_to_png_and_uploaded():
     assert slack.uploaded[0]['file'][:8] == b'\x89PNG\r\n\x1a\n'   # a real PNG
     assert slack.uploaded[0]['thread_ts'] == 'T1'
     assert '```dot' not in slack.updated[-1][2]                   # raw DOT replaced by the image
+
+
+async def test_empty_question_replies_usage_without_placeholder_or_agent():
+    """A bare summon (empty after stripping the @mention) gets usage help
+    immediately — never the 'Searching the docs…' placeholder, never an agent turn."""
+    pool = _FakePool(_FakeSession(types.SimpleNamespace(text='x', is_error=False, session_id='S')), contains=True)
+    slack = _FakeSlack()
+    cfg = bridge_config(channels=frozenset({'C1'}))
+    event = {'user': 'U1', 'channel': 'C1', 'ts': 'T1', 'text': '<@UBOT>   '}
+
+    await handle_event(cfg=cfg, pool=pool, slack=slack, bot_user_id='UBOT', ack=_noop_ack, event=event)
+
+    assert pool._session.asked == []
+    assert slack.updated == []
+    assert len(slack.posted) == 1
+    help_text = slack.posted[0][2]
+    assert 'Searching' not in help_text and '🔎' not in help_text
+    assert '/ariadne' in help_text
+    low = help_text.lower()
+    assert 'project' in low                                   # #1 name the project
+    assert 'across' in low                                    # #4 cross-project asking
+    assert 'product manager' in low or 'developer' in low     # #2 audience/scope
+    assert 'diagram' in low                                   # #3 diagrams when docs allow
+
+
+async def test_empty_slash_command_replies_usage_immediately():
+    """Bare /ariadne with no text -> usage help right away: no 'asked:' echo, no
+    placeholder, no agent turn."""
+    pool = _FakePool(_FakeSession(types.SimpleNamespace(text='x', is_error=False, session_id='S')), contains=True)
+    slack = _FakeSlack()
+    cfg = bridge_config(channels=frozenset({'C1'}))
+    L = make_listeners(cfg, pool, 'UBOT')
+
+    await L['command'](ack=_noop_ack, command={'user_id': 'U1', 'channel_id': 'C1', 'text': '  '}, client=slack)
+
+    assert pool._session.asked == []
+    assert slack.updated == []
+    assert len(slack.posted) == 1
+    text = slack.posted[0][2]
+    assert 'asked:' not in text
+    assert 'Searching' not in text and '🔎' not in text
+    assert '/ariadne' in text
