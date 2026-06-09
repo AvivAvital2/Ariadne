@@ -92,19 +92,21 @@ def _activate_yaml(yaml_path: Path) -> None:
 def test_cmd_index_invokes_all_persist_steps_in_dependency_order(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """The 10-step persist chain runs in the order the dependency
+    """The 12-step persist chain runs in the order the dependency
     graph requires:
 
-      1. persist_all_sources       (scip_symbols → enables steps 5–10)
+      1. persist_all_sources       (scip_symbols → enables steps 7–12)
       2. persist_api_endpoints     (Swagger → api_endpoints)
       3. persist_string_literals   (req'd by route extractors below)
-      4. persist_akka_http_endpoints
-      5. persist_python_routes
-      6. persist_express_routes
-      7. persist_python_http_clients
-      8. persist_js_http_clients
-      9. persist_scala_http_clients
-      10. persist_url_resolver     (joins clients to endpoints)
+      4. persist_config_values     (HOCON/YAML/dotenv key→value)
+      5. persist_config_reads      (getter call sites; needs 3 + 4)
+      6. persist_akka_http_endpoints
+      7. persist_python_routes
+      8. persist_express_routes
+      9. persist_python_http_clients
+      10. persist_js_http_clients
+      11. persist_scala_http_clients
+      12. persist_url_resolver     (joins clients to endpoints)
 
     Every wrapper records its name when called. The recorded order
     must match the contract.
@@ -141,6 +143,8 @@ def test_cmd_index_invokes_all_persist_steps_in_dependency_order(
         'persist_all_sources',
         'persist_api_endpoints',
         'persist_string_literals',
+        'persist_config_values',
+        'persist_config_reads',
         'persist_akka_http_endpoints',
         'persist_python_routes',
         'persist_express_routes',
@@ -204,6 +208,8 @@ def test_cmd_index_skips_persist_api_endpoints_when_no_swagger_declared(
         'persist_all_sources',
         'persist_api_endpoints',
         'persist_string_literals',
+        'persist_config_values',
+        'persist_config_reads',
         'persist_akka_http_endpoints',
         'persist_python_routes',
         'persist_express_routes',
@@ -265,6 +271,8 @@ def test_cmd_index_dry_run_skips_entire_persist_chain(
         'persist_all_sources',
         'persist_api_endpoints',
         'persist_string_literals',
+        'persist_config_values',
+        'persist_config_reads',
         'persist_akka_http_endpoints',
         'persist_python_routes',
         'persist_express_routes',

@@ -611,8 +611,12 @@ async def ariadne_config_usage(
     """Bridge a config key to the code that reads it.
 
     Returns the key's literal default (from the catalog) plus the code sites
-    where the key appears as a string literal (approximate, confidence
-    'string-match'). Use for 'where is <lever> read / what is its default'.
+    that read it. Read sites come from the call-site-verified ``config_reads``
+    index when available — each with its resolved value and per-site
+    'config-resolved'/'string-match' confidence, including split-path
+    ``getConfig("a").getString("b")`` reads — falling back to a literal
+    string-match for keys not yet in that index. Use for 'where is <lever>
+    read / what is its default'.
     """
     from config import get_config
     from docgen.catalog_lookup import config_usage

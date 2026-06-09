@@ -273,3 +273,265 @@ class TestEdgeCases:
             source_text=text, line=1, language='cobol',
         )
         assert r_unknown.kind == 'other'
+
+
+class TestReceiverChains:
+    """``getConfig("a").getString("b")`` reconstructs the dotted key
+    ``a.b`` across scala/python/js. Split one-branch-per-test so a
+    regression isolates: each case exercises a distinct arc of the
+    receiver-chain walk (chain hit, deeper nesting, plain-identifier
+    receiver, bare-name getter, a non-``getConfig`` call in the chain,
+    a ``getConfig`` with a non-literal / empty arg, and a value getter
+    whose own arg is dynamic)."""
+
+    def _key(self, text: str, language: str) -> str:
+        from docgen.scip_definition_inspector import inspect_definition_rhs
+
+        r = inspect_definition_rhs(
+            source_text=text, line=1, language=language,
+        )
+        assert r.kind == 'getter_call', f'{language}: {text!r} -> {r.kind}'
+        return r.config_key
+
+    def _kind(self, text: str, language: str) -> str:
+        from docgen.scip_definition_inspector import inspect_definition_rhs
+
+        return inspect_definition_rhs(
+            source_text=text, line=1, language=language,
+        ).kind
+
+    # ---- Scala ----
+    def test_scala_two_level_chain(self) -> None:
+        assert self._key(
+            'val f = cfg.getConfig("featureflags").getBoolean("enabled")\n',
+            'scala',
+        ) == 'featureflags.enabled'
+
+    def test_scala_nested_chain(self) -> None:
+        assert self._key(
+            'val t = cfg.getConfig("svc").getConfig("cache").getInt("ttl")\n',
+            'scala',
+        ) == 'svc.cache.ttl'
+
+    def test_scala_plain_identifier_receiver_stays_bare(self) -> None:
+        assert self._key('val s = cfg.getString("plain")\n', 'scala') == 'plain'
+
+    def test_scala_bare_name_getter_stays_bare(self) -> None:
+        # No receiver object at all — callee is a plain identifier.
+        assert self._key('val s = getString("plain")\n', 'scala') == 'plain'
+
+    def test_scala_non_getconfig_call_in_chain_adds_no_segment(self) -> None:
+        assert self._key(
+            'val b = cfg.lookup("a").getString("b")\n', 'scala',
+        ) == 'b'
+
+    def test_scala_getconfig_dynamic_arg_adds_no_segment(self) -> None:
+        assert self._key(
+            'val b = cfg.getConfig(section).getString("b")\n', 'scala',
+        ) == 'b'
+
+    def test_scala_value_getter_with_dynamic_arg_is_other(self) -> None:
+        assert self._kind('val s = cfg.getString(name)\n', 'scala') == 'other'
+
+    # ---- Python ----
+    def test_python_two_level_chain(self) -> None:
+        assert self._key(
+            'f = cfg.getConfig("featureflags").getBoolean("enabled")\n',
+            'python',
+        ) == 'featureflags.enabled'
+
+    def test_python_plain_receiver_stays_bare(self) -> None:
+        assert self._key('s = cfg.getString("plain")\n', 'python') == 'plain'
+
+    def test_python_value_getter_with_dynamic_arg_is_other(self) -> None:
+        assert self._kind('s = cfg.getString(name)\n', 'python') == 'other'
+
+    # ---- JavaScript ----
+    def test_js_two_level_chain(self) -> None:
+        assert self._key(
+            "const f = cfg.getConfig('featureflags').getBoolean('enabled');\n",
+            'javascript',
+        ) == 'featureflags.enabled'
+
+    def test_js_plain_receiver_stays_bare(self) -> None:
+        assert self._key(
+            "const s = cfg.getString('plain');\n", 'javascript',
+        ) == 'plain'
+
+    def test_js_bare_name_getter_is_other(self) -> None:
+        # Bare-name call (identifier callee) is not a recognized getter
+        # in JS — only member-expression callees are.
+        assert self._kind("const s = getString('plain');\n", 'javascript') == 'other'
+
+    def test_js_non_getconfig_call_in_chain_adds_no_segment(self) -> None:
+        assert self._key(
+            "const b = cfg.lookup('a').getBoolean('b');\n", 'javascript',
+        ) == 'b'
+
+    def test_js_getconfig_dynamic_arg_adds_no_segment(self) -> None:
+        assert self._key(
+            "const b = cfg.getConfig(section).getBoolean('b');\n", 'javascript',
+        ) == 'b'
+
+    def test_js_getconfig_empty_args_adds_no_segment(self) -> None:
+        assert self._key(
+            "const b = cfg.getConfig().getBoolean('b');\n", 'javascript',
+        ) == 'b'
+
+    def test_js_value_getter_with_dynamic_arg_is_other(self) -> None:
+        assert self._kind("const s = cfg.getString(name);\n", 'javascript') == 'other'
+
+
+class TestRhsClassificationArcs:
+    """Completes branch coverage of the per-language RHS classifiers
+    that the chain feature reworked: non-getter RHS shapes (dynamic
+    subscript, template strings, non-expression values) must classify
+    as ``other`` / ``literal`` so the getter-call path stays precise."""
+
+    def _kind(self, text: str, language: str) -> str:
+        from docgen.scip_definition_inspector import inspect_definition_rhs
+
+        return inspect_definition_rhs(
+            source_text=text, line=1, language=language,
+        ).kind
+
+    def test_python_non_string_subscript_is_other(self) -> None:
+        assert self._kind('x = obj[123]\n', 'python') == 'other'
+
+    def test_python_non_expression_rhs_is_other(self) -> None:
+        assert self._kind('x = 1 + 2\n', 'python') == 'other'
+
+    def test_js_plain_template_literal_is_literal(self) -> None:
+        assert self._kind('const x = `plain`;\n', 'javascript') == 'literal'
+
+    def test_js_interpolated_template_is_other(self) -> None:
+        assert self._kind('const x = `v=${y}`;\n', 'javascript') == 'other'
+
+    def test_js_dynamic_subscript_is_other(self) -> None:
+        assert self._kind('const x = config[idx];\n', 'javascript') == 'other'
+
+    def test_js_non_expression_rhs_is_other(self) -> None:
+        assert self._kind('const x = 1 + 2;\n', 'javascript') == 'other'
+
+    def test_scala_non_call_non_string_rhs_is_other(self) -> None:
+        assert self._kind('val x = 42\n', 'scala') == 'other'
+
+
+class TestBatchInspection:
+    """``inspect_definitions_at_lines`` classifies many lines from a
+    SINGLE parse — the linear-time scaffold behind config-read
+    extraction. Parse-count assertions pin the performance contract so a
+    regression to per-line re-parsing fails the suite; the equivalence
+    test pins that it cannot diverge from the single-line API."""
+
+    def _count(self, monkeypatch, attr):
+        import docgen.scip_definition_inspector as insp
+        calls = {'n': 0}
+        if attr == 'SgRoot':
+            real = insp.SgRoot
+
+            def counting(text, lang):
+                calls['n'] += 1
+                return real(text, lang)
+
+            monkeypatch.setattr(insp, 'SgRoot', counting)
+        else:
+            real = insp.ast.parse
+
+            def counting(*a, **k):
+                calls['n'] += 1
+                return real(*a, **k)
+
+            monkeypatch.setattr(insp.ast, 'parse', counting)
+        return calls
+
+    def test_scala_multiple_lines_from_one_parse(self, monkeypatch) -> None:
+        from docgen.scip_definition_inspector import inspect_definitions_at_lines
+
+        calls = self._count(monkeypatch, 'SgRoot')
+        text = (
+            'val a = cfg.getString("k.one")\n'
+            'val b = "plain"\n'
+            'val c = cfg.getConfig("grp").getInt("two")\n'
+        )
+        out = inspect_definitions_at_lines(
+            source_text=text, lines=(1, 2, 3), language='scala',
+        )
+        assert calls['n'] == 1  # one parse for three lines, not three
+        assert out[1].kind == 'getter_call' and out[1].config_key == 'k.one'
+        assert out[2].kind == 'literal'
+        assert out[3].kind == 'getter_call' and out[3].config_key == 'grp.two'
+
+    def test_python_multiple_lines_from_one_parse(self, monkeypatch) -> None:
+        from docgen.scip_definition_inspector import inspect_definitions_at_lines
+
+        calls = self._count(monkeypatch, 'ast')
+        text = 'a = config.get("A")\nb = "lit"\nc = compute(1)\n'
+        out = inspect_definitions_at_lines(
+            source_text=text, lines=(1, 2, 3), language='python',
+        )
+        assert calls['n'] == 1
+        assert out[1].kind == 'getter_call' and out[1].config_key == 'A'
+        assert out[2].kind == 'literal'
+        assert out[3].kind == 'other'
+
+    def test_line_without_assignment_is_omitted(self, monkeypatch) -> None:
+        from docgen.scip_definition_inspector import inspect_definitions_at_lines
+
+        text = '# just a comment\nx = config.get("K")\n'
+        out = inspect_definitions_at_lines(
+            source_text=text, lines=(1, 2), language='python',
+        )
+        assert 1 not in out  # no assignment on the comment line
+        assert out[2].kind == 'getter_call'
+
+    def test_unknown_language_returns_empty_map(self) -> None:
+        from docgen.scip_definition_inspector import inspect_definitions_at_lines
+
+        out = inspect_definitions_at_lines(
+            source_text='x = "v"\n', lines=(1,), language='cobol',
+        )
+        assert out == {}
+
+    def test_matches_single_line_inspection(self) -> None:
+        # The scaffold must never diverge from the single-line API.
+        from docgen.scip_definition_inspector import (
+            inspect_definition_rhs,
+            inspect_definitions_at_lines,
+        )
+
+        text = (
+            'val a = cfg.getString("one")\n'
+            'val b = "lit"\n'
+            'val c = other(1)\n'
+            'val d = cfg.getConfig("x").getInt("y")\n'
+        )
+        lines = range(1, 5)
+        batch = inspect_definitions_at_lines(
+            source_text=text, lines=lines, language='scala',
+        )
+        for ln in lines:
+            single = inspect_definition_rhs(
+                source_text=text, line=ln, language='scala',
+            )
+            assert batch.get(
+                ln, single.__class__(kind='other'),
+            ) == single, f'divergence at line {ln}'
+
+    def test_python_annassign_without_initializer_is_other(self) -> None:
+        # AnnAssign with no value -> rhs is None -> 'other'.
+        from docgen.scip_definition_inspector import inspect_definition_rhs
+
+        r = inspect_definition_rhs(
+            source_text='x: int\n', line=1, language='python',
+        )
+        assert r.kind == 'other'
+
+    def test_js_declaration_without_initializer_is_other(self) -> None:
+        # `let x;` -> variable_declarator with no RHS -> 'other'.
+        from docgen.scip_definition_inspector import inspect_definition_rhs
+
+        r = inspect_definition_rhs(
+            source_text='let x;\n', line=1, language='javascript',
+        )
+        assert r.kind == 'other'

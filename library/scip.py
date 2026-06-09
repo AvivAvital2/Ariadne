@@ -237,12 +237,29 @@ CREATE INDEX IF NOT EXISTS idx_http_client_calls_source   ON http_client_calls(s
 CREATE INDEX IF NOT EXISTS idx_http_client_calls_consumer ON http_client_calls(consumer_symbol_id);
 CREATE INDEX IF NOT EXISTS idx_http_client_calls_file     ON http_client_calls(source_name, call_site_file);
 '''
+_CONFIG_READS_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS config_reads (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_name TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    file        TEXT NOT NULL,
+    line_start  INTEGER NOT NULL,
+    col_start   INTEGER NOT NULL,
+    value       TEXT,
+    confidence  TEXT NOT NULL,
+    UNIQUE(source_name, file, line_start, col_start, key)
+)
+'''
+
+_CONFIG_READS_INDEXES = '''
+CREATE INDEX IF NOT EXISTS idx_config_reads_source_key ON config_reads(source_name, key);
+'''
 
 
 def init_scip_schema(conn: 'Connection') -> None:
     """Create the SCIP tables (cross-source graph + API surface +
-    config-value index + string-literal index + process_invocations)
-    and their indexes if missing.
+    config-value index + config-read index + string-literal index +
+    process_invocations) and their indexes if missing.
 
     Idempotent — safe to call on an existing DB. Used by Library's
     __attrs_post_init__ so every fresh open of ariadne.db has the SCIP
@@ -260,6 +277,9 @@ def init_scip_schema(conn: 'Connection') -> None:
     # Layer C config-value index (Phase 2q)
     conn.execute(_CONFIG_VALUES_SCHEMA)
     conn.executescript(_CONFIG_VALUES_INDEXES)
+    # Config-read index (Tier 2 config↔code bridge)
+    conn.execute(_CONFIG_READS_SCHEMA)
+    conn.executescript(_CONFIG_READS_INDEXES)
     # Layer C string-literal index (Phase 2p)
     conn.execute(_STRING_LITERALS_SCHEMA)
     conn.executescript(_STRING_LITERALS_INDEXES)

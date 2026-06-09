@@ -20,6 +20,7 @@ Read API:
 from __future__ import annotations
 
 from pathlib import Path
+from attrs import frozen
 from typing import TYPE_CHECKING
 
 from docgen.scip_config_scanners import ConfigValue
@@ -127,10 +128,94 @@ def query_config_values_for_source(
         )
         for row in cur.fetchall()
     ]
+@frozen
+class ConfigRead:
+    """One code site that reads a config key (a Typesafe Config getter
+    call) — the read-side analog of :class:`ConfigValue`. ``value`` is the
+    resolved default from ``config_values`` (``None`` when the key is read
+    but never declared); ``confidence`` is ``'config-resolved'`` for a
+    verified getter call or ``'string-match'`` for the
+    unsupported-language fallback. Produced by
+    ``scip_config_usage_extractor.extract_config_reads`` and persisted to
+    the ``config_reads`` table by :func:`persist_config_reads`."""
+    file: Path
+    line: int        # 1-indexed
+    col: int         # 0-indexed
+    key: str
+    value: str | None
+    confidence: str
+def persist_config_reads(
+    *,
+    source_name: str,
+    config_reads: 'list[ConfigRead]',
+    conn: 'Connection',
+) -> int:
+    """Persist config-read sites to ariadne.db, replacing the source's
+    prior rows.
+
+    Empty input is a valid signal — it clears any pre-existing rows for
+    the source (an extract that found no reads). Mirrors
+    :func:`persist_config_values`. Returns the number of rows inserted.
+    """
+    conn.execute(
+        'DELETE FROM config_reads WHERE source_name = ?',
+        (source_name,),
+    )
+
+    if not config_reads:
+        conn.commit()
+        return 0
+
+    rows = [
+        (
+            source_name,
+            r.key,
+            str(r.file),
+            r.line,
+            r.col,
+            r.value,
+            r.confidence,
+        )
+        for r in config_reads
+    ]
+    conn.executemany(
+        'INSERT INTO config_reads '
+        '(source_name, key, file, line_start, col_start, value, confidence) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+        rows,
+    )
+    conn.commit()
+    return len(rows)
+
+
+def query_config_reads_by_key(
+    *,
+    source_name: str,
+    key: str,
+    conn: 'Connection',
+) -> list[ConfigRead]:
+    """Return all config-read sites for ``(source_name, key)``. Multiple
+    matches are the norm — one key is typically read from several call
+    sites. Empty list if no match."""
+    cur = conn.execute(
+        'SELECT file, line_start, col_start, key, value, confidence '
+        'FROM config_reads '
+        'WHERE source_name = ? AND key = ?',
+        (source_name, key),
+    )
+    return [
+        ConfigRead(
+            file=Path(row[0]),
+            line=row[1],
+            col=row[2],
+            key=row[3],
+            value=row[4],
+            confidence=row[5],
+        )
+        for row in cur.fetchall()
+    ]
 
 
 __all__ = [
-    'persist_config_values',
-    'query_config_values_by_key',
-    'query_config_values_for_source',
+    'persist_config_reads', 'persist_config_values', 'query_config_reads_by_key', 'query_config_values_by_key', 'query_config_values_for_source'
 ]

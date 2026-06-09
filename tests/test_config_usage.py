@@ -134,3 +134,77 @@ def test_get_element_body_reads_file_range(library, tmp_path) -> None:
     assert out['found'] is True
     assert out['body'] == 'b = 2'
     assert out['body_line_count'] == 1
+
+
+def _add_config_reads(library, source, rows):
+    """rows: list of (file, line, col, key, value, confidence)."""
+    from docgen.scip_config_index import persist_config_reads
+    from docgen.scip_config_usage_extractor import ConfigRead
+
+    with library._conn_provider.acquire() as conn:
+        persist_config_reads(
+            source_name=source,
+            config_reads=[
+                ConfigRead(
+                    file=Path(f), line=ln, col=c, key=k,
+                    value=v, confidence=conf,
+                )
+                for (f, ln, c, k, v, conf) in rows
+            ],
+            conn=conn,
+        )
+        conn.commit()
+
+
+def test_prefers_config_reads_over_string_match(library) -> None:
+    from docgen.catalog_lookup import config_usage
+
+    _add_config_element(
+        library, 'src1', 'pkg.conf.app.svc.timeout', 'timeout = 30',
+        'conf/app.conf', 12,
+    )
+    # The same site appears both as a bare string-literal match (Tier 1)
+    # and as a resolved config_reads row (Tier 2). Tier 2 wins, no dup.
+    _add_literals(library, 'src1', [('reader.scala', 53, 'svc.timeout')])
+    _add_config_reads(
+        library, 'src1',
+        [('reader.scala', 53, 8, 'svc.timeout', '30', 'config-resolved')],
+    )
+
+    out = config_usage(library, 'src1', 'svc.timeout')
+    assert out['found'] is True
+    assert out['confidence'] == 'config-resolved'
+    assert out['read_count'] == 1  # not duplicated across the two sources
+    assert out['read_sites'][0]['confidence'] == 'config-resolved'
+    assert out['read_sites'][0]['value'] == '30'
+
+
+def test_dedup_read_sites_by_file_line(library) -> None:
+    from docgen.catalog_lookup import config_usage
+
+    _add_config_element(library, 'src1', 'pkg.conf.svc.k', 'k = 1', 'conf/app.conf', 1)
+    # Two config_reads rows at the same (file, line) — e.g. a split-path
+    # chain whose two segments are separate literals on one line.
+    _add_config_reads(library, 'src1', [
+        ('reader.scala', 7, 4, 'svc.k', '1', 'config-resolved'),
+        ('reader.scala', 7, 30, 'svc.k', '1', 'config-resolved'),
+    ])
+    out = config_usage(library, 'src1', 'svc.k')
+    assert out['read_count'] == 1  # collapsed by (file, line)
+
+
+def test_mixed_per_site_confidence(library) -> None:
+    from docgen.catalog_lookup import config_usage
+
+    _add_config_element(library, 'src1', 'pkg.conf.svc.k', 'k = 1', 'conf/app.conf', 1)
+    # One verified getter call + one unsupported-language string match.
+    _add_config_reads(library, 'src1', [
+        ('a.scala', 1, 0, 'svc.k', '1', 'config-resolved'),
+        ('b.rb', 2, 0, 'svc.k', '1', 'string-match'),
+    ])
+    out = config_usage(library, 'src1', 'svc.k')
+    assert out['confidence'] == 'config-resolved'  # config_reads is the source
+    assert out['read_count'] == 2
+    by_file = {s['file']: s['confidence'] for s in out['read_sites']}
+    assert by_file['a.scala'] == 'config-resolved'
+    assert by_file['b.rb'] == 'string-match'

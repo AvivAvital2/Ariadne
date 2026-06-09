@@ -1395,7 +1395,7 @@ def cmd_index(
     phase_summary: list | None = None,
 ) -> int:
     """Run SCIP indexers per the manifest, merge intermediates into
-    ``<source>/.ariadne/index.scip``, then run the 10-step persist
+    ``<source>/.ariadne/index.scip``, then run the 12-step persist
     chain that fills ``library_scip`` tables.
 
     Persist chain (dependency-correct order, end of every successful
@@ -1407,19 +1407,23 @@ def cmd_index(
        specs (only when source declares ``swagger_paths``)
     3. ``persist_string_literals`` → required by route extractors
        below to look up literal path values by SCIP position
-    4. ``persist_akka_http_endpoints`` → ``api_endpoints`` (pattern,
+    4. ``persist_config_values`` → ``config_values`` (HOCON / YAML /
+       dotenv key→value defaults)
+    5. ``persist_config_reads`` → ``config_reads`` (config-getter call
+       sites resolved to their keys + values; needs steps 3 + 4)
+    6. ``persist_akka_http_endpoints`` → ``api_endpoints`` (pattern,
        Scala Akka HTTP)
-    5. ``persist_python_routes`` → ``api_endpoints`` (pattern,
+    7. ``persist_python_routes`` → ``api_endpoints`` (pattern,
        Flask / FastAPI)
-    6. ``persist_express_routes`` → ``api_endpoints`` (pattern,
+    8. ``persist_express_routes`` → ``api_endpoints`` (pattern,
        Express / Koa)
-    7. ``persist_python_http_clients`` → ``http_client_calls``
+    9. ``persist_python_http_clients`` → ``http_client_calls``
        (Tier 4 — ``httpx`` / ``requests`` / ``urllib``)
-    8. ``persist_js_http_clients`` → ``http_client_calls``
-       (``fetch`` / ``axios``)
-    9. ``persist_scala_http_clients`` → ``http_client_calls``
-       (Akka HTTP / sttp)
-    10. ``persist_url_resolver`` → ``api_calls`` (joins client
+    10. ``persist_js_http_clients`` → ``http_client_calls``
+        (``fetch`` / ``axios``)
+    11. ``persist_scala_http_clients`` → ``http_client_calls``
+        (Akka HTTP / sttp)
+    12. ``persist_url_resolver`` → ``api_calls`` (joins client
         URLs to server endpoints, closing the cross-language tracing
         loop for ``ariadne_trace_flow``)
 
@@ -1775,6 +1779,8 @@ def cmd_index(
             persist_akka_http_endpoints,
             persist_all_sources,
             persist_api_endpoints,
+            persist_config_reads,
+            persist_config_values,
             persist_express_routes,
             persist_js_http_clients,
             persist_python_http_clients,
@@ -1826,6 +1832,26 @@ def cmd_index(
         if literals and not getattr(args, 'quiet', False):
             console.print(
                 f'[green]Indexed {literals} string literal(s) → '
+                f'library_scip[/green]',
+            )
+
+        # Phase 2q — populate ``config_values`` (HOCON / YAML / dotenv
+        # key->value) so Layer C can resolve config-getter arguments to
+        # their configured values. Previously never wired, so the table
+        # stayed empty.
+        config_vals = persist_config_values(Path(cfg.db_path), source_pairs)
+        if config_vals and not getattr(args, 'quiet', False):
+            console.print(
+                f'[green]Indexed {config_vals} config value(s) → '
+                f'library_scip[/green]',
+            )
+        # Config↔code bridge (Tier 2) — enumerate config-getter call
+        # sites into ``config_reads``. Needs ``string_literals`` and
+        # ``config_values`` (both persisted just above).
+        config_reads = persist_config_reads(Path(cfg.db_path), source_pairs)
+        if config_reads and not getattr(args, 'quiet', False):
+            console.print(
+                f'[green]Indexed {config_reads} config read(s) → '
                 f'library_scip[/green]',
             )
 

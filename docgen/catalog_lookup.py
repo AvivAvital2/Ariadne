@@ -162,6 +162,19 @@ def get_element_body(
     info['body'] = '\n'.join(body_lines)
     info['body_line_count'] = len(body_lines)
     return info
+def _dedup_read_sites(sites):
+    """De-dup read-site dicts by ``(file, line)``, keeping first-seen
+    order. A key read several times on the same line (e.g. a split-path
+    chain whose segments are separate literals) collapses to one site."""
+    seen: set[tuple[Any, Any]] = set()
+    out: list[dict[str, Any]] = []
+    for s in sites:
+        loc = (s['file'], s['line'])
+        if loc in seen:
+            continue
+        seen.add(loc)
+        out.append(s)
+    return out
 
 
 def config_usage(
@@ -169,13 +182,20 @@ def config_usage(
     source_name: str,
     key: str,
 ) -> dict[str, Any]:
-    """Bridge a Typesafe Config key to its literal default (from the catalog) and
-    the code sites that read it (from string_literals).
+    """Bridge a Typesafe Config key to its literal default (from the catalog)
+    and the code sites that read it.
 
-    Tier 1 string-match join: a config key that appears verbatim as a code string
-    literal is an approximate read site (confidence 'string-match'). See
-    designs/config-code-bridge/tier1-string-join.md (Feature 2).
+    Prefers the Tier 2 ``config_reads`` index — call-site-verified getter
+    reads (chain-aware), each carrying its own resolved ``value`` and
+    per-site ``confidence`` (``'config-resolved'`` or, for
+    unsupported-language files, ``'string-match'``). When a key has no
+    ``config_reads`` rows (e.g. the index predates the config-read pass),
+    falls back to the Tier 1 string-literal value-equality join
+    (``confidence='string-match'``). Read sites are de-duped by
+    ``(file, line)``. See designs/config-code-bridge/tier2-resolution.md
+    (Feature 6).
     """
+    from docgen.scip_config_index import query_config_reads_by_key
     from docgen.scip_string_literal_index import query_string_literals_by_value
 
     definitions: list[dict[str, Any]] = []
@@ -196,13 +216,31 @@ def config_usage(
             })
 
     with library._conn_provider.acquire() as conn:
-        literals = query_string_literals_by_value(
-            source_name=source_name, value=key, conn=conn,
+        reads = query_config_reads_by_key(
+            source_name=source_name, key=key, conn=conn,
         )
-    read_sites = [
-        {'file': str(lit.file), 'line': lit.line_start, 'owning_symbol_id': lit.owning_symbol_id}
-        for lit in literals
-    ]
+        if reads:
+            read_sites = _dedup_read_sites(
+                {
+                    'file': str(r.file), 'line': r.line,
+                    'value': r.value, 'confidence': r.confidence,
+                }
+                for r in reads
+            )
+            confidence = 'config-resolved'
+        else:
+            literals = query_string_literals_by_value(
+                source_name=source_name, value=key, conn=conn,
+            )
+            read_sites = _dedup_read_sites(
+                {
+                    'file': str(lit.file), 'line': lit.line_start,
+                    'owning_symbol_id': lit.owning_symbol_id,
+                    'confidence': 'string-match',
+                }
+                for lit in literals
+            )
+            confidence = 'string-match'
 
     notes: list[str] = []
     if not read_sites:
@@ -216,6 +254,6 @@ def config_usage(
         'definitions': definitions,
         'read_sites': read_sites,
         'read_count': len(read_sites),
-        'confidence': 'string-match',
+        'confidence': confidence,
         'notes': notes,
     }

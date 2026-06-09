@@ -209,6 +209,77 @@ def persist_string_literals(
     return total
 
 
+def persist_config_values(
+    db_path: 'Path',
+    sources: 'Iterable[tuple[str, Path]]',
+) -> int:
+    """For each ``(source_name, source_root)``, ingest HOCON / YAML / dotenv
+    config values from the source tree into the ``config_values`` table (Phase 2q).
+
+    This is the key->value index that Layer C's ``resolve_arg_value`` resolves
+    config-getter arguments against. It was previously never called, so
+    ``config_values`` stayed empty; wiring it activates config resolution for the
+    sink extractors. Sources with no config files contribute 0.
+
+    Returns the total number of config-value rows inserted across all sources.
+    """
+    from docgen.scip_config_value_extractor import ingest_config_values
+    from library import Library
+
+    library = Library(db_path)
+    total = 0
+    try:
+        for source_name, source_root in sources:
+            with library._conn_provider.acquire() as conn:
+                count = ingest_config_values(
+                    source_name=source_name,
+                    source_root=source_root,
+                    conn=conn,
+                )
+                conn.commit()
+                total += count
+    finally:
+        library.close()
+    return total
+def persist_config_reads(
+    db_path: 'Path',
+    sources: 'Iterable[tuple[str, Path]]',
+) -> int:
+    """For each ``(source_name, source_root)``, enumerate config-getter
+    read sites (``extract_config_reads``) and persist them to the
+    ``config_reads`` table.
+
+    Depends on ``string_literals`` (the candidate set) and
+    ``config_values`` (value resolution) already being populated, so this
+    must run after ``persist_string_literals`` and ``persist_config_values``
+    in the index loop. The extractor reads source files by the absolute
+    paths recorded in ``string_literals``; ``source_root`` is unused but
+    kept for a uniform per-source signature. Sources with no reads
+    contribute 0 (and have their prior rows cleared).
+
+    Returns the total number of config-read rows persisted across all sources.
+    """
+    from docgen.scip_config_index import persist_config_reads as persist_rows
+    from docgen.scip_config_usage_extractor import extract_config_reads
+    from library import Library
+
+    library = Library(db_path)
+    total = 0
+    try:
+        for source_name, _source_root in sources:
+            with library._conn_provider.acquire() as conn:
+                reads = extract_config_reads(
+                    source_name=source_name, conn=conn,
+                )
+                total += persist_rows(
+                    source_name=source_name, config_reads=reads, conn=conn,
+                )
+                conn.commit()
+    finally:
+        library.close()
+    return total
+
+
 def persist_url_resolver(
     db_path: 'Path',
     sources: 'Iterable[tuple[str, Path]]',
@@ -462,14 +533,5 @@ def persist_akka_http_endpoints(
 
 
 __all__ = [
-    'persist_akka_http_endpoints',
-    'persist_all_sources',
-    'persist_api_endpoints',
-    'persist_express_routes',
-    'persist_js_http_clients',
-    'persist_python_http_clients',
-    'persist_python_routes',
-    'persist_scala_http_clients',
-    'persist_string_literals',
-    'persist_url_resolver',
+    'persist_akka_http_endpoints', 'persist_all_sources', 'persist_api_endpoints', 'persist_config_reads', 'persist_config_values', 'persist_express_routes', 'persist_js_http_clients', 'persist_python_http_clients', 'persist_python_routes', 'persist_scala_http_clients', 'persist_string_literals', 'persist_url_resolver'
 ]
