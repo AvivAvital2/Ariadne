@@ -600,6 +600,37 @@ async def ariadne_body(
 
 
 @mcp.tool(annotations=ToolAnnotations(
+    title='Find where a config key is read',
+    readOnlyHint=True,
+    openWorldHint=False,
+))
+async def ariadne_config_usage(
+    key: str,
+    source: str | None = None,
+) -> dict:
+    """Bridge a config key to the code that reads it.
+
+    Returns the key's literal default (from the catalog) plus the code sites
+    where the key appears as a string literal (approximate, confidence
+    'string-match'). Use for 'where is <lever> read / what is its default'.
+    """
+    from config import get_config
+    from docgen.catalog_lookup import config_usage
+    from library import Library
+
+    cfg = get_config()
+    source_name = source or cfg.default_source
+    if source_name is None:
+        return {'error': 'no_source', 'message': 'No source specified and no default_source in config'}
+
+    library = Library(cfg.db_path)
+    try:
+        return config_usage(library, source_name, key)
+    finally:
+        library.close()
+
+
+@mcp.tool(annotations=ToolAnnotations(
     title='Cross-cutting Themes',
     readOnlyHint=True,
     openWorldHint=False,

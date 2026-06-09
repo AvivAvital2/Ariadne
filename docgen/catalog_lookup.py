@@ -131,7 +131,7 @@ def list_elements_in_file(
     return result
 
 
-__all__ = ['fuzzy_suggestions', 'get_element_body', 'list_elements_in_file', 'lookup_symbol']
+__all__ = ['config_usage', 'fuzzy_suggestions', 'get_element_body', 'list_elements_in_file', 'lookup_symbol']
 
 
 def get_element_body(
@@ -162,3 +162,60 @@ def get_element_body(
     info['body'] = '\n'.join(body_lines)
     info['body_line_count'] = len(body_lines)
     return info
+
+
+def config_usage(
+    library: "Library",
+    source_name: str,
+    key: str,
+) -> dict[str, Any]:
+    """Bridge a Typesafe Config key to its literal default (from the catalog) and
+    the code sites that read it (from string_literals).
+
+    Tier 1 string-match join: a config key that appears verbatim as a code string
+    literal is an approximate read site (confidence 'string-match'). See
+    designs/config-code-bridge/tier1-string-join.md (Feature 2).
+    """
+    from docgen.scip_string_literal_index import query_string_literals_by_value
+
+    definitions: list[dict[str, Any]] = []
+    for d in library.list_documents(content_type='catalog'):
+        md = d.metadata or {}
+        if md.get('source_name') != source_name or md.get('kind') != 'element':
+            continue
+        if md.get('subtype') != 'hocon_key':
+            continue
+        qn = md.get('qualified_name') or ''
+        if qn == key or qn.endswith('.' + key):
+            loc = md.get('location') or {}
+            definitions.append({
+                'qualified_name': qn,
+                'file': (d.source_files[0] if d.source_files else None),
+                'line': loc.get('line_start'),
+                'default_value': md.get('signature'),
+            })
+
+    with library._conn_provider.acquire() as conn:
+        literals = query_string_literals_by_value(
+            source_name=source_name, value=key, conn=conn,
+        )
+    read_sites = [
+        {'file': str(lit.file), 'line': lit.line_start, 'owning_symbol_id': lit.owning_symbol_id}
+        for lit in literals
+    ]
+
+    notes: list[str] = []
+    if not read_sites:
+        notes.append(
+            'no read sites found - the key may be read via a split/relative path '
+            '(getConfig("a").getString("b")), built dynamically, or in an unindexed file.'
+        )
+    return {
+        'found': bool(definitions),
+        'key': key,
+        'definitions': definitions,
+        'read_sites': read_sites,
+        'read_count': len(read_sites),
+        'confidence': 'string-match',
+        'notes': notes,
+    }

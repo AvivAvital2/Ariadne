@@ -3,8 +3,8 @@ from __future__ import annotations
 # Read-only Ariadne MCP tools the Slack bot may call. Names verified against the
 # registered ``@mcp.tool`` functions in ``mcp_server*.py``. All are retrieval or
 # synthesis only. ``ariadne_ask`` performs LLM synthesis and therefore needs an
-# ANTHROPIC_API_KEY scoped to Ariadne's subprocess; the rest need only
-# OPENAI_API_KEY (embeddings) or no key.
+# ANTHROPIC_API_KEY scoped to Ariadne's subprocess (see designs/slack-bridge.md,
+# "Secrets handling"); the rest need only OPENAI_API_KEY (embeddings) or no key.
 READ_ONLY_TOOLS: tuple[str, ...] = (
     'mcp__ariadne__ariadne_search',
     'mcp__ariadne__ariadne_read',
@@ -18,6 +18,7 @@ READ_ONLY_TOOLS: tuple[str, ...] = (
     'mcp__ariadne__ariadne_impact_radius',
     'mcp__ariadne__ariadne_coverage',
     'mcp__ariadne__ariadne_source_path',
+    'mcp__ariadne__ariadne_config_usage',
     'mcp__ariadne__ariadne_ask',
 )
 

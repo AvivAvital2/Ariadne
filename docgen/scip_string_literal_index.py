@@ -258,3 +258,25 @@ __all__ = [
     'query_string_literals_by_symbol',
     'query_string_literals_in_file',
 ]
+def query_string_literals_by_value(
+    *,
+    source_name: str,
+    value: str,
+    conn: 'Connection',
+) -> list[StringLiteral]:
+    """Return every StringLiteral in ``source_name`` whose value equals
+    ``value`` exactly, ordered by (file, line).
+
+    The code-side half of the Tier 1 config-code bridge: a config key that
+    appears verbatim as a code string literal is an approximate read site for
+    that key (confidence 'string-match'). See
+    designs/config-code-bridge/tier1-string-join.md (Feature 1).
+    """
+    cur = conn.execute(
+        'SELECT file, line_start, col_start, value, owning_symbol_id '
+        'FROM string_literals '
+        'WHERE source_name = ? AND value = ? '
+        'ORDER BY file, line_start',
+        (source_name, value),
+    )
+    return [_row_to_literal(row) for row in cur.fetchall()]
