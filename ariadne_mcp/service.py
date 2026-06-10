@@ -121,6 +121,8 @@ class AriadneService(
     def clear_cache(self) -> None:
         """Invalidate all cached query results (in-memory and persistent)."""
         self._query_cache.clear()
+        if hasattr(self, '_embedding_matrix_cache'):
+            del self._embedding_matrix_cache
         if self._library is not None:
             try:
                 self.library.cache_clear()

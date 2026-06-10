@@ -92,6 +92,8 @@ class SearchMixin:
 
         ``source`` selects which source's closure scopes the search;
         if omitted it resolves from cwd then ``config.default_source``.
+        See ``designs/directional-closure-scoping.md`` for the closure
+        rule.
 
         ``role`` (default ``'developer'``) gates whether
         ``content_type='audience_response'`` rows participate. When
@@ -343,28 +345,16 @@ class SearchMixin:
         return None
 
     async def _rank_ids_by_embedding(self, doc_ids: list[str], query: str, limit: int) -> list[tuple[str, float]]:
-        """Rank document IDs by embedding similarity without loading full content.
-
-        Returns list of (doc_id, score) tuples.
-        """
+        """Rank document IDs by embedding similarity, via the strategy chosen for the candidate count."""
         try:
-            import numpy as np
-
-            from search import batch_dot_similarity, top_k_indices
+            from library.embedding_ranking import select_ranker
 
             query_embedding = await self.embedding_service.embed(query)
-
-            # Load only embeddings for candidate IDs
-            embeddings_map = self.library.get_embeddings_for_ids(doc_ids)
-            if not embeddings_map:
-                return [(did, 0.0) for did in self._rank_by_query_ids(doc_ids, query, limit)]
-
-            ordered_ids = [did for did in doc_ids if did in embeddings_map]
-            emb_matrix = np.stack([embeddings_map[did] for did in ordered_ids])
-            similarities = batch_dot_similarity(query_embedding, emb_matrix)
-            top_indices = top_k_indices(similarities, limit)
-
-            return [(ordered_ids[i], float(similarities[i])) for i in top_indices]
+            ranker = select_ranker(len(doc_ids), self._get_embedding_matrix, self.library)
+            ranked = ranker.rank(query_embedding, doc_ids, limit)
+            if ranked:
+                return ranked
+            return [(did, 0.0) for did in self._rank_by_query_ids(doc_ids, query, limit)]
         except Exception:
             _logger.debug('Embedding ranking failed, falling back to text matching', exc_info=True)
             return [(did, 0.0) for did in self._rank_by_query_ids(doc_ids, query, limit)]
@@ -473,3 +463,20 @@ class SearchMixin:
             result[doc_id] = relevant
 
         return result
+    
+    def _get_embedding_matrix(self):
+        """Load + freshness-check the shared embedding matrix; None falls back to SQLite."""
+        from pathlib import Path
+
+        from library.embedding_matrix import EmbeddingMatrix
+
+        if not hasattr(self, '_embedding_matrix_cache'):
+            matrix_dir = Path(self.library._conn_provider.path).parent / '.ariadne'
+            self._embedding_matrix_cache = EmbeddingMatrix.load(matrix_dir)
+        matrix = self._embedding_matrix_cache
+        if matrix is None:
+            return None
+        with self.library._conn_provider.acquire() as conn:
+            if not matrix.is_fresh(conn):
+                return None
+        return matrix

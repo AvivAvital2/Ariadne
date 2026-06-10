@@ -695,12 +695,15 @@ async def cmd_rebuild(args: argparse.Namespace) -> int:
 
 
 async def _rebuild_embeddings(library: 'Library') -> None:
-    """Rebuild all embeddings."""
+    """Rebuild all embeddings, then refresh the shared embedding matrix."""
     from writer import LibraryWriter
 
     async with LibraryWriter(library) as writer:
         count = await writer.rebuild_all_embeddings()
         console.print(f'Updated {count} documents')
+
+    from library.embedding_matrix import ensure_matrix
+    ensure_matrix(library)
 
 
 def cmd_stats(args: argparse.Namespace) -> int:

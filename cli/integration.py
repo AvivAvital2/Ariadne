@@ -458,6 +458,27 @@ def cmd_config(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_embedding_matrix_on_startup() -> None:
+    """Build or refresh the shared embedding matrix once at serve startup so the
+    first queries hit the fast path instead of the per-query SQLite load.
+
+    Degrades to the SQLite ranking fallback (with a logged warning) if it cannot
+    build — it never blocks serving.
+    """
+    import logging
+
+    try:
+        from ariadne_mcp.service import AriadneService
+        from library.embedding_matrix import ensure_matrix
+
+        ensure_matrix(AriadneService.get().library)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            'Embedding matrix unavailable at startup; serving with the SQLite fallback',
+            exc_info=True,
+        )
+
+
 def cmd_mcp(args: argparse.Namespace) -> int:
     """Start the MCP server."""
     if args.directory:
@@ -468,6 +489,8 @@ def cmd_mcp(args: argparse.Namespace) -> int:
         os.chdir(Path(__file__).resolve().parent)
 
     import ariadne_mcp.server as mcp_server
+
+    _build_embedding_matrix_on_startup()
     mcp_server.mcp.run(transport='stdio')
     return 0
 
