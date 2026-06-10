@@ -238,3 +238,76 @@ def test_cmd_build_matrix_pregenerates_artifact(tmp_path: Path) -> None:
             assert matrix.is_fresh(conn)
     finally:
         served.close()
+
+
+def _spy_build(monkeypatch: pytest.MonkeyPatch) -> list:
+    import library.embedding_matrix as em
+
+    builds: list = []
+    real = em.build_doc_embedding_matrix
+    monkeypatch.setattr(
+        em, 'build_doc_embedding_matrix',
+        lambda library, out: builds.append(out) or real(library, out),
+    )
+    return builds
+
+
+def _seed_matrix(tmp_path: Path):
+    """A DB with one embedded doc + its freshly-built matrix. Returns (db, artifact)."""
+    import argparse
+
+    from cli import core as cli_core
+    from library.embedding_matrix import ARTIFACT_NAME
+
+    db = tmp_path / 'ariadne.db'
+    src = Library(db)
+    _add(src, 'd1', [1.0, 0.0, 0.0, 0.0])
+    src.close()
+    cli_core.cmd_build_matrix(argparse.Namespace(db=str(db), recreate=False, yes=False))
+    return db, tmp_path / '.ariadne' / ARTIFACT_NAME
+
+
+def test_recreate_forces_rebuild_even_when_fresh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+
+    from cli import core as cli_core
+
+    db, artifact = _seed_matrix(tmp_path)
+    builds = _spy_build(monkeypatch)
+    assert cli_core.cmd_build_matrix(argparse.Namespace(db=str(db), recreate=True, yes=True)) == 0
+    assert len(builds) == 1 and artifact.exists()   # rebuilt despite being fresh; no prompt
+
+
+def test_recreate_declined_leaves_matrix_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+
+    from cli import core as cli_core
+
+    db, artifact = _seed_matrix(tmp_path)
+    builds = _spy_build(monkeypatch)
+    monkeypatch.setattr(cli_core.console, 'input', lambda *a, **k: 'n')
+    assert cli_core.cmd_build_matrix(argparse.Namespace(db=str(db), recreate=True, yes=False)) == 0
+    assert builds == [] and artifact.exists()        # declined → not removed, not rebuilt
+
+
+def test_recreate_confirmed_removes_and_rebuilds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+
+    from cli import core as cli_core
+
+    db, artifact = _seed_matrix(tmp_path)
+    builds = _spy_build(monkeypatch)
+    monkeypatch.setattr(cli_core.console, 'input', lambda *a, **k: 'y')
+    assert cli_core.cmd_build_matrix(argparse.Namespace(db=str(db), recreate=True, yes=False)) == 0
+    assert len(builds) == 1 and artifact.exists()    # confirmed → rebuilt
+
+
+def test_build_matrix_with_no_embeddings_is_a_noop(tmp_path: Path) -> None:
+    import argparse
+
+    from cli import core as cli_core
+
+    db = tmp_path / 'ariadne.db'
+    Library(db).close()  # schema only, no embedded docs
+    # Returns cleanly via the "nothing to build" branch (count == 0).
+    assert cli_core.cmd_build_matrix(argparse.Namespace(db=str(db), recreate=False, yes=False)) == 0

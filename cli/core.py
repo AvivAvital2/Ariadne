@@ -229,7 +229,9 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     tag_parser.add_argument('--clear', action='store_true', help='Clear all branch/status metadata')
     
     # build-matrix
-    subparsers.add_parser('build-matrix', help='Pre-generate the embedding matrix artifact from the current DB (optional; copy it next to ariadne.db on the serving box)')
+    build_matrix_parser = subparsers.add_parser('build-matrix', help='Pre-generate the embedding matrix artifact from the current DB (optional; copy it next to ariadne.db on the serving box)')
+    build_matrix_parser.add_argument('--recreate', action='store_true', help='Remove the existing matrix and rebuild it (forces a fresh build; prompts unless --yes)')
+    build_matrix_parser.add_argument('--yes', '-y', action='store_true', help='Skip the --recreate confirmation prompt')
 
 
 # ---------------------------------------------------------------------------
@@ -692,13 +694,26 @@ def cmd_build_matrix(args: argparse.Namespace) -> int:
     re-embedding, no API calls). Run it on the build box, then copy the artifact
     to the serving box alongside ``ariadne.db``; the server loads it instead of
     building. The matrix is optional — without it, ranking uses the SQLite path.
+
+    ``--recreate`` removes the existing artifact and rebuilds unconditionally
+    (forces a fresh build, and recovers a corrupt file); it prompts for
+    confirmation unless ``--yes``.
     """
-    from library.embedding_matrix import ARTIFACT_NAME, ensure_matrix, matrix_dir_for
+    from library.embedding_matrix import ARTIFACT_NAME, META_NAME, ensure_matrix, matrix_dir_for
 
     library = get_library(args.db)
     try:
+        matrix_dir = matrix_dir_for(library)
+        artifact = matrix_dir / ARTIFACT_NAME
+        if getattr(args, 'recreate', False) and artifact.exists():
+            if not getattr(args, 'yes', False) and not console.input(
+                f'Remove the existing embedding matrix at {artifact} and rebuild it? [y/N] '
+            ).strip().lower().startswith('y'):
+                console.print('[yellow]Cancelled — existing matrix left in place.[/yellow]')
+                return 0
+            artifact.unlink()
+            (matrix_dir / META_NAME).unlink(missing_ok=True)
         matrix = ensure_matrix(library)
-        artifact = matrix_dir_for(library) / ARTIFACT_NAME
         count = matrix.M.shape[0] if matrix is not None else 0
         if count == 0:
             console.print('[yellow]No embeddings in the database — nothing to build.[/yellow]')
