@@ -5,6 +5,7 @@
 #   bridge process : CLAUDE_CODE_OAUTH_TOKEN, SLACK_BOT_TOKEN, SLACK_APP_TOKEN
 #                    (must NOT have ANTHROPIC_API_KEY — that would make the agent metered)
 #   Ariadne subprocess (scoped) : OPENAI_API_KEY, ARIADNE_ANTHROPIC_API_KEY
+# See designs/slack-bridge.md ("Secrets handling").
 
 allowed_users: []        # Slack user IDs (U0123…); an allow-listed user may use the bot anywhere, incl. DMs
 allowed_channels: []     # Slack channel IDs (C0ENG…); opens the whole channel
@@ -13,7 +14,7 @@ allowed_channels: []     # Slack channel IDs (C0ENG…); opens the whole channel
 pool:
   max_size: 50           # max concurrent warm sessions (each holds an Ariadne MCP subprocess)
   idle_ttl_seconds: 480  # evict a thread's session after this much idle time
-  turn_timeout_seconds: 120
+  turn_timeout_seconds: 240  # hard cap per turn; a "still working" notice posts at the built-in 120s soft point, then the same turn keeps running to here
 
 enable_feedback: false   # opt-in: allow the bot to write ariadne_log_hit/miss (usage_events)
 

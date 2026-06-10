@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import re
 from typing import Any
 
@@ -20,6 +21,49 @@ _NOT_ALLOWED = (
     "Sorry — you're not set up to use this bot yet. "
     'Ask an admin to add you (or this channel) to the allowlist.'
 )
+
+
+_SLOW_BEFORE = [
+    "This is taking longer than I expected",
+    "This one's a bit involved",
+    "This is a meatier question than usual",
+    "There's a fair bit to sift through here",
+    "This is running a little long",
+    "Bigger than it first looked",
+    "This one needs some real digging",
+    "Still piecing this together",
+    "Lots of ground to cover here",
+    "This is a deep one",
+    "This is taking more time than usual",
+    "There's a lot to work through",
+    "This one's keeping me busy",
+    "Turns out this is non-trivial",
+    "Still chasing this down",
+]
+
+_SLOW_AFTER = [
+    "hang on, I'm still digging",
+    "bear with me, I'm still on it",
+    "give me a moment to finish",
+    "still searching, almost there",
+    "hang tight, nearly done",
+    "I haven't forgotten you, still going",
+    "stay with me, I'm getting there",
+    "just need a little longer",
+    "still pulling the pieces together",
+    "won't be much longer",
+    "let me keep at it",
+    "I'm still on the case",
+    "nearly there, thanks for waiting",
+    "almost done now",
+    "still crunching, hang on",
+]
+
+
+def _slow_notice() -> str:
+    """A varied 'still working' line for the soft-timeout notice, mixed locally
+    from two phrase pools (no LLM) so the user sees the turn is still alive."""
+    return f'⏳ {random.choice(_SLOW_BEFORE)} — {random.choice(_SLOW_AFTER)}.'
 
 
 def _clean_text(text: str) -> str:
@@ -91,21 +135,31 @@ async def handle_event(
     placeholder = await slack.chat_postMessage(
         channel=channel, thread_ts=thread_ts, text=_PLACEHOLDER_TEXT
     )
-    try:
-        reply = await asyncio.wait_for(
-            answer_question(
-                pool=pool,
-                slack=slack,
-                bot_user_id=bot_user_id,
-                channel=channel,
-                thread_ts=thread_ts,
-                text=text,
-                seed_turns=seed_turns,
-            ),
-            timeout=cfg.turn_timeout_seconds,
+    task = asyncio.ensure_future(
+        answer_question(
+            pool=pool,
+            slack=slack,
+            bot_user_id=bot_user_id,
+            channel=channel,
+            thread_ts=thread_ts,
+            text=text,
+            seed_turns=seed_turns,
         )
-        answer = (getattr(reply, 'text', '') or '').strip() or '(no answer returned)'
-    except Exception as exc:  # noqa: BLE001 — surface the failure to the user, don't mask it
+    )
+    try:
+        try:
+            # Soft deadline: shield the task so a timeout HERE does not cancel it.
+            # The same turn keeps running on the same session/context.
+            reply = await asyncio.wait_for(asyncio.shield(task), cfg.soft_timeout_seconds)
+        except asyncio.TimeoutError:
+            # Still alive: tell the user, then give the running turn the rest of its
+            # hard budget to finish. It is NOT restarted.
+            await slack.chat_update(channel=channel, ts=placeholder["ts"], text=_slow_notice())
+            reply = await asyncio.wait_for(
+                task, max(0.0, cfg.turn_timeout_seconds - cfg.soft_timeout_seconds),
+            )
+        answer = (getattr(reply, "text", "") or "").strip() or "(no answer returned)"
+    except Exception as exc:  # noqa: BLE001 -- surface honestly (timeout included); never mask
         answer = to_user_message(exc)
 
     # Render any DOT diagrams to PNGs off the event loop (dot is a subprocess).

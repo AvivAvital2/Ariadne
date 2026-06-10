@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 
 import types
 
@@ -434,3 +435,54 @@ async def test_empty_slash_command_replies_usage_immediately():
     assert 'asked:' not in text
     assert 'Searching' not in text and '🔎' not in text
     assert '/ariadne' in text
+
+
+class _SlowSession:
+    """Session whose ask() sleeps a controllable amount before replying, to
+    exercise the soft/hard timeout split. Records the call BEFORE sleeping, so a
+    cancelled (hard-timed-out) turn still proves it ran once — not restarted."""
+
+    def __init__(self, reply, *, delay):
+        self._reply = reply
+        self._delay = delay
+        self.asked = []
+
+    async def ask(self, text):
+        self.asked.append(text)
+        await asyncio.sleep(self._delay)
+        return self._reply
+
+
+async def test_slow_turn_posts_still_working_notice_then_answers_same_run():
+    """Past the soft deadline the bot posts a 'still working' notice and lets the
+    SAME turn finish on the same context (not a restart) within the hard cap."""
+    reply = types.SimpleNamespace(text='the answer', is_error=False, session_id='S')
+    pool = _FakePool(_SlowSession(reply, delay=0.3), contains=True)
+    slack = _FakeSlack()
+    cfg = bridge_config(channels=frozenset({'C1'}), soft_timeout_seconds=0.05, turn_timeout_seconds=5.0)
+    event = {'user': 'U1', 'channel': 'C1', 'ts': 'T1', 'text': '<@UBOT> how does it work?'}
+
+    await handle_event(cfg=cfg, pool=pool, slack=slack, bot_user_id='UBOT', ack=_noop_ack, event=event)
+
+    assert pool._session.asked == ['how does it work?']        # ran once — same turn, not restarted
+    notices = [t for _, _, t in slack.updated if t.startswith('⏳')]
+    assert len(notices) == 1                                   # one 'still working' notice
+    assert ' — ' in notices[0]                                 # composed shape, not a fixed string
+    assert slack.updated[-1][2] == 'the answer'                # real answer still landed
+
+
+async def test_turn_exceeding_hard_cap_notices_then_times_out():
+    """Past the hard cap the bot cancels and surfaces the timeout message — but
+    it still posted the 'still working' notice first, and ran the turn once."""
+    reply = types.SimpleNamespace(text='late', is_error=False, session_id='S')
+    pool = _FakePool(_SlowSession(reply, delay=5.0), contains=True)
+    slack = _FakeSlack()
+    cfg = bridge_config(channels=frozenset({'C1'}), soft_timeout_seconds=0.05, turn_timeout_seconds=0.3)
+    event = {'user': 'U1', 'channel': 'C1', 'ts': 'T1', 'text': '<@UBOT> big question'}
+
+    await handle_event(cfg=cfg, pool=pool, slack=slack, bot_user_id='UBOT', ack=_noop_ack, event=event)
+
+    assert pool._session.asked == ['big question']             # ran once, not restarted
+    notices = [t for _, _, t in slack.updated if t.startswith('⏳')]
+    assert len(notices) == 1                                   # notice posted before giving up
+    assert 'too long' in slack.updated[-1][2].lower()          # final = timeout message

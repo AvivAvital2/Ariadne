@@ -19,7 +19,8 @@ class BridgeConfig:
     """Operational config for the Slack bridge. Holds NO secrets.
 
     Secrets (``OPENAI_API_KEY``/``ANTHROPIC_API_KEY``/Slack & OAuth tokens) come
-    from the process environment / secret store at runtime. The token fields here are
+    from the process environment / secret store at runtime — see
+    ``designs/slack-bridge.md`` ("Secrets handling"). The token fields here are
     only the non-secret Slack token *handles* the app needs to start; in
     production they too should be injected from the environment.
     """
@@ -32,7 +33,8 @@ class BridgeConfig:
     model: str | None = None
     max_size: int = 50
     idle_ttl_seconds: float = 480.0
-    turn_timeout_seconds: float = 120.0
+    turn_timeout_seconds: float = 240.0
+    soft_timeout_seconds: float = 120.0
     enable_feedback: bool = False
     source_descriptions: Mapping[str, str] = field(factory=dict)
     source_aliases: Mapping[str, Sequence[str]] = field(factory=dict)
@@ -71,7 +73,7 @@ class BridgeConfig:
             model=data.get('model') or os.environ.get('ARIADNE_SLACK_MODEL'),
             max_size=int(pool.get('max_size', 50)),
             idle_ttl_seconds=float(pool.get('idle_ttl_seconds', 480.0)),
-            turn_timeout_seconds=float(pool.get('turn_timeout_seconds', 120.0)),
+            turn_timeout_seconds=float(pool.get('turn_timeout_seconds', 240.0)),
             enable_feedback=bool(data.get('enable_feedback', False)),
             source_descriptions=data.get('source_descriptions') or {},
             source_aliases=data.get('source_aliases') or {},
