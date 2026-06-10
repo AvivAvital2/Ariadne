@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import logging
 
 import types
 
@@ -486,3 +487,36 @@ async def test_turn_exceeding_hard_cap_notices_then_times_out():
     notices = [t for _, _, t in slack.updated if t.startswith('⏳')]
     assert len(notices) == 1                                   # notice posted before giving up
     assert 'too long' in slack.updated[-1][2].lower()          # final = timeout message
+
+
+class _TimeoutSession:
+    """ask() raises a TimeoutError fast (no sleep) — a deeper SDK/MCP timeout that
+    ENDS the turn quickly, NOT a slow turn hitting our soft deadline."""
+
+    def __init__(self):
+        self.asked = []
+
+    async def ask(self, text):
+        self.asked.append(text)
+        raise TimeoutError('mcp tool call timed out')
+
+
+async def test_fast_internal_timeout_is_not_mistaken_for_soft_deadline(caplog):
+    """A TimeoutError raised by the turn ITSELF (deeper layer) must NOT trigger the
+    soft-deadline 'still working' notice/extension — and the real error must be
+    logged, not silently swallowed. (The bug: wait_for conflated the two, so any
+    inner TimeoutError flashed the notice then failed fast regardless of the cap.)"""
+    pool = _FakePool(_TimeoutSession(), contains=True)
+    slack = _FakeSlack()
+    # Generous deadlines: if these were ever hit, the test would be slow. It isn't —
+    # the turn fails instantly, proving the budget was never the gate.
+    cfg = bridge_config(channels=frozenset({'C1'}), soft_timeout_seconds=30.0, turn_timeout_seconds=60.0)
+    event = {'user': 'U1', 'channel': 'C1', 'ts': 'T1', 'text': '<@UBOT> q'}
+
+    with caplog.at_level(logging.ERROR):
+        await handle_event(cfg=cfg, pool=pool, slack=slack, bot_user_id='UBOT', ack=_noop_ack, event=event)
+
+    assert pool._session.asked == ['q']                                  # ran once
+    assert not [t for _, _, t in slack.updated if t.startswith('⏳')]     # NO false 'still working'
+    assert 'too long' in slack.updated[-1][2].lower()                    # honest timeout message
+    assert any(r.exc_info for r in caplog.records)                       # real error logged, not masked

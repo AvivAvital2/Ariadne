@@ -28,7 +28,7 @@ def test_from_env_loads_tokens_from_env_and_rest_from_yaml(tmp_path, monkeypatch
     cfg_file.write_text(
         'allowed_users: [U1, U2]\n'
         'allowed_channels: [C1]\n'
-        'pool: {max_size: 7, idle_ttl_seconds: 60, turn_timeout_seconds: 30}\n'
+        'pool: {max_size: 7, idle_ttl_seconds: 60, turn_timeout_seconds: 30, soft_timeout_seconds: 15}\n'
         'enable_feedback: true\n'
         'source_descriptions:\n  projecta: First project\n'
         'source_aliases:\n  projecta: [proja]\n'
@@ -48,7 +48,7 @@ def test_from_env_loads_tokens_from_env_and_rest_from_yaml(tmp_path, monkeypatch
     # Operational config comes from the yaml file.
     assert cfg.allowed_users == frozenset({'U1', 'U2'})
     assert cfg.allowed_channels == frozenset({'C1'})
-    assert (cfg.max_size, cfg.idle_ttl_seconds, cfg.turn_timeout_seconds) == (7, 60.0, 30.0)
+    assert (cfg.max_size, cfg.idle_ttl_seconds, cfg.turn_timeout_seconds, cfg.soft_timeout_seconds) == (7, 60.0, 30.0, 15.0)
     assert cfg.enable_feedback is True
     assert cfg.source_descriptions['projecta'] == 'First project'
     assert cfg.source_aliases['projecta'] == ['proja']

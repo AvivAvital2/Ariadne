@@ -16,5 +16,5 @@ def to_user_message(exc: BaseException) -> str:
             'Which one should I look in?'
         )
     if isinstance(exc, TimeoutError):  # asyncio.TimeoutError is this on 3.11+
-        return 'That took too long — try narrowing the question and I will retry.'
+        return 'That took too long — try narrowing the question.'
     return f'Ariadne returned an error: {exc}'

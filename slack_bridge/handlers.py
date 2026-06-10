@@ -10,6 +10,10 @@ from slack_bridge.errors import to_user_message
 from slack_bridge.format import to_mrkdwn
 from slack_bridge.orchestrator import answer_question
 from slack_bridge.replay import PLACEHOLDER_PREFIX, load_thread
+import contextlib
+import logging
+
+_logger = logging.getLogger(__name__)
 
 _MENTION_RE = re.compile(r'<@[A-Z0-9]+>')
 # The bot's name, matched as a plain word (any case) so a multi-human thread
@@ -147,19 +151,32 @@ async def handle_event(
         )
     )
     try:
-        try:
-            # Soft deadline: shield the task so a timeout HERE does not cancel it.
-            # The same turn keeps running on the same session/context.
-            reply = await asyncio.wait_for(asyncio.shield(task), cfg.soft_timeout_seconds)
-        except asyncio.TimeoutError:
-            # Still alive: tell the user, then give the running turn the rest of its
-            # hard budget to finish. It is NOT restarted.
-            await slack.chat_update(channel=channel, ts=placeholder["ts"], text=_slow_notice())
-            reply = await asyncio.wait_for(
-                task, max(0.0, cfg.turn_timeout_seconds - cfg.soft_timeout_seconds),
+        # Soft deadline. Use asyncio.wait (NOT wait_for): it reports whether the
+        # turn is still running and never turns the turn's OWN exception into our
+        # timeout. wait_for would re-raise a TimeoutError the turn itself threw as
+        # if it were our soft deadline — flashing the notice and failing fast,
+        # bypassing the whole budget. We distinguish "still running" from "finished
+        # (maybe with an error)" explicitly.
+        done, _ = await asyncio.wait({task}, timeout=cfg.soft_timeout_seconds)
+        if not done:
+            # Genuinely still running: tell the user, then give it the rest of the
+            # hard budget — the SAME turn, not a restart.
+            await slack.chat_update(channel=channel, ts=placeholder['ts'], text=_slow_notice())
+            done, _ = await asyncio.wait(
+                {task}, timeout=max(0.0, cfg.turn_timeout_seconds - cfg.soft_timeout_seconds),
             )
-        answer = (getattr(reply, "text", "") or "").strip() or "(no answer returned)"
+        if not done:
+            # Hard cap exceeded — genuinely too long. Cancel and surface the timeout
+            # (an expected give-up, not an error worth a traceback).
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+            answer = to_user_message(TimeoutError())
+        else:
+            reply = await task  # the real result — or re-raises the turn's real error
+            answer = (getattr(reply, 'text', '') or '').strip() or '(no answer returned)'
     except Exception as exc:  # noqa: BLE001 -- surface honestly (timeout included); never mask
+        _logger.exception('Slack turn failed (channel=%s thread=%s)', channel, thread_ts)
         answer = to_user_message(exc)
 
     # Render any DOT diagrams to PNGs off the event loop (dot is a subprocess).

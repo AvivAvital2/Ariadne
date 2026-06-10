@@ -74,6 +74,7 @@ class BridgeConfig:
             max_size=int(pool.get('max_size', 50)),
             idle_ttl_seconds=float(pool.get('idle_ttl_seconds', 480.0)),
             turn_timeout_seconds=float(pool.get('turn_timeout_seconds', 240.0)),
+            soft_timeout_seconds=float(pool.get('soft_timeout_seconds', 120.0)),
             enable_feedback=bool(data.get('enable_feedback', False)),
             source_descriptions=data.get('source_descriptions') or {},
             source_aliases=data.get('source_aliases') or {},
