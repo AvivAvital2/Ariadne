@@ -151,6 +151,42 @@ sudo systemctl restart ariadne-slack
 
 Replacing `ariadne.db` resets `usage_events` on the box. If you want the hit/miss/score telemetry preserved across a refresh, export it before the swap with `ariadne usage --export-report <file>` (see the analytics-report flow in the README).
 
+If you ship the optional embedding matrix (see below), rebuild and re-ship it in the same step — a matrix that no longer matches the DB is ignored (the bot falls back to SQLite ranking until you refresh it).
+
+## Embedding matrix (optional — faster semantic ranking)
+
+Ariadne can rank search candidates against a memory-mapped embedding matrix
+instead of loading each candidate's embedding from SQLite per query. On a large
+knowledge base this cuts the dominant cost of a cold query from **seconds to
+~100 ms**. It is **entirely optional** — without the matrix, ranking uses the
+SQLite path and the bot behaves exactly as before.
+
+The matrix is a derived artifact, `.ariadne/doc_embeddings.npy` (~1 GB for ~80k
+docs), built from the embeddings already in `ariadne.db` — no re-embedding, no
+API calls. Follow the serve/build split: **build it on the build box and ship
+it** (don't build it on a small serving box — the build briefly needs ~2× the
+matrix size in RAM):
+
+```bash
+# build box — after generating the DB:
+ariadne build-matrix                  # writes .ariadne/doc_embeddings.npy (+ .meta.json)
+rsync /path/to/.ariadne/doc_embeddings.* serving-box:/opt/ariadne/.ariadne/
+# serving box:
+sudo systemctl restart ariadne-slack
+```
+
+- The server **loads** the matrix; by default it never builds one. It
+  freshness-checks the file against the DB, so a matrix that doesn't match the
+  shipped `ariadne.db` is ignored and ranking falls back to SQLite — never
+  wrong, just not accelerated. **Rebuild and re-ship the matrix whenever you
+  ship a new `ariadne.db`** (or delete the stale file).
+- **Add or remove it any time:** copy the file in and restart to turn the
+  speedup on; delete it and restart to turn it off.
+- **Building on the serving box is opt-in and off by default.** Only sensible on
+  a roomy, non-pooled box (the build can spike ~2 GB RAM). To enable it, set
+  `ARIADNE_BUILD_MATRIX_ON_STARTUP=1` in `slack.env`; leave it unset to keep
+  startup load-only.
+
 ## Security notes
 
 - **Outbound-only** (Socket Mode) — no inbound ports to open.

@@ -227,6 +227,9 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help='Source name to scope the lookup (falls back to cwd, then default_source)',
     )
     tag_parser.add_argument('--clear', action='store_true', help='Clear all branch/status metadata')
+    
+    # build-matrix
+    subparsers.add_parser('build-matrix', help='Pre-generate the embedding matrix artifact from the current DB (optional; copy it next to ariadne.db on the serving box)')
 
 
 # ---------------------------------------------------------------------------
@@ -677,6 +680,33 @@ def cmd_import_(args: argparse.Namespace) -> int:
 
         return 0
 
+    finally:
+        library.close()
+
+
+def cmd_build_matrix(args: argparse.Namespace) -> int:
+    """Pre-generate the shared embedding-matrix artifact from the current DB.
+
+    Builds (or refreshes, if stale) ``.ariadne/doc_embeddings.npy`` next to the
+    database — a cheap, local read of the embeddings already stored (no
+    re-embedding, no API calls). Run it on the build box, then copy the artifact
+    to the serving box alongside ``ariadne.db``; the server loads it instead of
+    building. The matrix is optional — without it, ranking uses the SQLite path.
+    """
+    from library.embedding_matrix import ARTIFACT_NAME, ensure_matrix, matrix_dir_for
+
+    library = get_library(args.db)
+    try:
+        matrix = ensure_matrix(library)
+        artifact = matrix_dir_for(library) / ARTIFACT_NAME
+        count = matrix.M.shape[0] if matrix is not None else 0
+        if count == 0:
+            console.print('[yellow]No embeddings in the database — nothing to build.[/yellow]')
+            return 0
+        size_mb = artifact.stat().st_size / 1_000_000
+        console.print(f'[green]Embedding matrix ready:[/green] {artifact} ({size_mb:.0f} MB, {count} docs)')
+        console.print('Copy this file to the serving box alongside ariadne.db.')
+        return 0
     finally:
         library.close()
 
@@ -2244,6 +2274,7 @@ HANDLERS = {
     'export': lambda args: cmd_export(args),
     'import': lambda args: cmd_import_(args),
     'rebuild': lambda args: asyncio.run(cmd_rebuild(args)),
+    'build-matrix': lambda args: cmd_build_matrix(args),
     'stats': lambda args: cmd_stats(args),
     'status': lambda args: cmd_status(args),
     'usage': lambda args: cmd_usage(args),

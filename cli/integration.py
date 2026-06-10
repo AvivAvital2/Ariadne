@@ -459,9 +459,9 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 
 def _build_embedding_matrix_on_startup() -> None:
-    """Build or refresh the shared embedding matrix once at serve startup so the
-    first queries hit the fast path instead of the per-query SQLite load.
+    """Build or refresh the shared embedding matrix once at serve startup.
 
+    Off by default (see cmd_mcp); enabled via ARIADNE_BUILD_MATRIX_ON_STARTUP.
     Degrades to the SQLite ranking fallback (with a logged warning) if it cannot
     build — it never blocks serving.
     """
@@ -480,7 +480,13 @@ def _build_embedding_matrix_on_startup() -> None:
 
 
 def cmd_mcp(args: argparse.Namespace) -> int:
-    """Start the MCP server."""
+    """Start the MCP server.
+
+    Building the embedding matrix at startup is OFF by default — the server only
+    loads a pre-generated matrix (see ``ariadne build-matrix``). Set
+    ARIADNE_BUILD_MATRIX_ON_STARTUP=1 to build it on startup instead (not advised
+    on small or pooled boxes — the build can spike ~2 GB RAM).
+    """
     if args.directory:
         os.chdir(args.directory)
     else:
@@ -490,7 +496,8 @@ def cmd_mcp(args: argparse.Namespace) -> int:
 
     import ariadne_mcp.server as mcp_server
 
-    _build_embedding_matrix_on_startup()
+    if os.environ.get('ARIADNE_BUILD_MATRIX_ON_STARTUP', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
+        _build_embedding_matrix_on_startup()
     mcp_server.mcp.run(transport='stdio')
     return 0
 

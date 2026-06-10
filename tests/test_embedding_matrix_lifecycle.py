@@ -177,9 +177,7 @@ def test_build_on_startup_degrades_on_error(lib: Library, monkeypatch: pytest.Mo
     _build_embedding_matrix_on_startup()
 
 
-def test_cmd_mcp_triggers_startup_build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import argparse
-
+def _spy_cmd_mcp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict:
     import ariadne_mcp.server as server
     from cli import integration as integ
 
@@ -188,8 +186,55 @@ def test_cmd_mcp_triggers_startup_build(monkeypatch: pytest.MonkeyPatch, tmp_pat
                         lambda: calls.__setitem__('startup', calls['startup'] + 1))
     monkeypatch.setattr(server.mcp, 'run', lambda **k: calls.__setitem__('run', calls['run'] + 1))
     monkeypatch.chdir(tmp_path)
+    return calls
+
+
+def test_cmd_mcp_skips_build_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import argparse
+
+    from cli import integration as integ
+
+    monkeypatch.delenv('ARIADNE_BUILD_MATRIX_ON_STARTUP', raising=False)
+    calls = _spy_cmd_mcp(monkeypatch, tmp_path)
 
     rc = integ.cmd_mcp(argparse.Namespace(directory=str(tmp_path)))
 
     assert rc == 0
-    assert calls == {'startup': 1, 'run': 1}  # built before serving
+    assert calls == {'startup': 0, 'run': 1}  # default: no build, just serve
+
+
+def test_cmd_mcp_builds_when_opted_in(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import argparse
+
+    from cli import integration as integ
+
+    monkeypatch.setenv('ARIADNE_BUILD_MATRIX_ON_STARTUP', '1')
+    calls = _spy_cmd_mcp(monkeypatch, tmp_path)
+
+    rc = integ.cmd_mcp(argparse.Namespace(directory=str(tmp_path)))
+
+    assert rc == 0
+    assert calls == {'startup': 1, 'run': 1}  # opted in: builds then serves
+
+
+def test_cmd_build_matrix_pregenerates_artifact(tmp_path: Path) -> None:
+    import argparse
+
+    from cli.core import cmd_build_matrix
+
+    db = tmp_path / 'ariadne.db'
+    src = Library(db)
+    _add(src, 'd1', [1.0, 0.0, 0.0, 0.0])
+    src.close()
+
+    rc = cmd_build_matrix(argparse.Namespace(db=str(db)))
+    assert rc == 0
+
+    served = Library(db)
+    try:
+        matrix = EmbeddingMatrix.load(matrix_dir_for(served))
+        assert matrix is not None
+        with served._conn_provider.acquire() as conn:
+            assert matrix.is_fresh(conn)
+    finally:
+        served.close()
