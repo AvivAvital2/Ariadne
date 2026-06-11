@@ -289,10 +289,16 @@ def make_listeners(cfg: Any, pool: Any, bot_user_id: str) -> dict[str, Any]:
             # gate survives eviction (the in-memory tally died with the session).
             thread_humans[thread_ts] = set(ctx.humans)
             seed_turns = ctx.turns
-        # Ingest the participant (replay keeps the full thread as context), then
-        # answer only in a 1:1 correspondence, or when the bot is named.
+        # Ingest the participant (replay keeps the full thread as context).
         _note(thread_ts, event.get('user', ''))
-        if len(thread_humans.get(thread_ts, set())) <= 1 or _name_invoked(text):
+        # Answer a 1:1 correspondence automatically, or whenever the bot is named.
+        # But an @mention of another *user* (a bot @mention already returned above)
+        # means the message is addressed to THEM, not Ariadne — don't barge in, even
+        # while the thread still looks 1:1 (the tagged person hasn't posted yet, so
+        # they're absent from the human tally).
+        one_on_one = len(thread_humans.get(thread_ts, set())) <= 1
+        addresses_another_user = bool(_MENTION_RE.search(text))
+        if _name_invoked(text) or (one_on_one and not addresses_another_user):
             await _run(event, client, seed_turns=seed_turns)
 
     async def on_command(ack: Any, command: dict, client: Any) -> None:

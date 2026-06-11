@@ -177,9 +177,11 @@ async def test_message_listener_answers_dms_and_ignores_noise():
 
 
 async def test_thread_followups_one_on_one_then_multiparty_name_gate():
-    """1:1 thread → follow-ups answered without an @mention. Once a SECOND
-    human joins, the bot still ingests every message (replay captures it) but
-    only ANSWERS ones that name 'Ariadne' — a cheap regex gate, no LLM."""
+    """1:1 thread → follow-ups answered without an @mention, UNLESS the message
+    @mentions another *user* (then it's addressed to them, not Ariadne, so the
+    bot stays out). Once a SECOND human joins, the bot still ingests every
+    message (replay captures it) but only ANSWERS ones that name 'Ariadne' — a
+    cheap regex gate, no LLM."""
     cfg = bridge_config(channels=frozenset({'C1'}))
     reply = types.SimpleNamespace(text='ans', is_error=False, session_id='S')
     pool = _FakePool(_FakeSession(reply), contains=True)   # thread is engaged
@@ -198,6 +200,16 @@ async def test_thread_followups_one_on_one_then_multiparty_name_gate():
         event={'channel': 'C1', 'thread_ts': 'TROOT', 'user': 'UALICE', 'ts': 'T2', 'text': 'and what about Y?'},
         client=slack)
     assert asked[-1] == 'and what about Y?'
+
+    # Still 1:1, but Alice tags a COLLEAGUE (not the bot). The tagged person
+    # hasn't posted, so the thread still LOOKS 1:1 — yet the message is addressed
+    # to THEM, so the bot must stay out instead of barging in.
+    n = len(asked)
+    await L['message'](
+        event={'channel': 'C1', 'thread_ts': 'TROOT', 'user': 'UALICE', 'ts': 'T2B',
+               'text': '<@UCAROL> can you confirm this?'},
+        client=slack)
+    assert len(asked) == n   # @another-human → not for the bot → silent
 
     # Bob pitches in WITHOUT the name → ingested, NOT answered.
     n = len(asked)
