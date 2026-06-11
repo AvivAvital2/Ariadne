@@ -47,5 +47,5 @@ ariadne_staleness.db
 # Runtime artifacts
 ariadne_runs/
 .coverage
-ONE_PAGER.md
-ARCHITECTURE.md
+/ONE_PAGER.md
+/ARCHITECTURE.md
