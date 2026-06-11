@@ -40,6 +40,9 @@ dependencies = [
     "claude-agent-sdk>=0.2.87",
     "aiohttp>=3.13.5",
     "tiktoken>=0.13.0",
+    # Textual backs the interactive `ariadne dry-run --interactive` explorer
+    # (full-screen tree of per-directory generate cost). Tested on 8.2.5.
+    "textual>=5.0",
 ]
 
 [project.optional-dependencies]
