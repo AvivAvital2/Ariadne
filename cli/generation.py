@@ -4342,7 +4342,7 @@ HANDLERS = {
     'body': lambda args: cmd_body(args),
     'themes': lambda args: cmd_themes(args),
     'diff-docs': lambda args: cmd_diff_docs(args),
-    'batch': lambda args: __import__('cli.batch').cmd_batch(args),
+    'batch': lambda args: __import__('cli.batch', fromlist=['cmd_batch']).cmd_batch(args),
 }
 def _prompt_ignore_staleness(source_name) -> bool:
     """Ask (TTY only) whether to exempt a source from staleness checks --
