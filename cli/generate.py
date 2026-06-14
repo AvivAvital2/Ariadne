@@ -95,6 +95,34 @@ def resolve_provider(
     return explicit or inferred or 'openai'
 
 
+def resolve_batch_strategy(args, cfg):
+    """Resolve the configured provider's BatchStrategy for a CLI batch command.
+
+    Picks the provider (:func:`resolve_provider`), maps it to its API-key env
+    var, and builds the strategy via ``make_batch_strategy``. Returns
+    ``(strategy, provider, key_env)``; ``strategy`` is None when ``key_env`` is
+    unset, so the caller can print a command-specific hint. Shared by
+    ``catalog-describe --batch/--resume`` and ``themes build --batch`` so the
+    provider → key-env → strategy mapping lives in one place.
+    """
+    import os
+
+    from docgen.llm.factory import make_batch_strategy
+
+    model = getattr(args, 'model', None) or cfg.model
+    provider = resolve_provider(
+        cli_provider=getattr(args, 'provider', None),
+        cfg_provider=getattr(cfg, 'provider', None),
+        model=model,
+    )
+    key_env = 'OPENAI_API_KEY' if provider == 'openai' else 'ANTHROPIC_API_KEY'
+    api_key = os.environ.get(key_env, '')
+    if not api_key:
+        return None, provider, key_env
+    strategy = make_batch_strategy(provider, model=model, api_key=api_key)
+    return strategy, provider, key_env
+
+
 # ---------------------------------------------------------------------------
 # Batch dispatch feature flag — apply post-resolution
 # ---------------------------------------------------------------------------
