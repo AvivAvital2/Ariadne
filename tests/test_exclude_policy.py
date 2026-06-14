@@ -37,6 +37,8 @@ from pathlib import Path
 
 import pytest
 
+from config import DEFAULT_EXCLUDE_FILE_PATTERNS
+
 
 class TestDefaultFileExcludePatterns:
     """Companion to DEFAULT_EXCLUDE_POLICY (dirs): the canonical default for
@@ -48,6 +50,25 @@ class TestDefaultFileExcludePatterns:
     def test_default_includes_vendored_installers(self) -> None:
         from config import DEFAULT_EXCLUDE_FILE_PATTERNS
         assert '**/get-pip.py' in DEFAULT_EXCLUDE_FILE_PATTERNS
+
+    def test_default_excludes_macos_ds_store(self) -> None:
+        """macOS Finder metadata (``.DS_Store``) is in the canonical
+        file-exclude list, and the per-file predicate the walks apply
+        (``path.match`` against each pattern on the absolute
+        ``dirpath / filename``) flags a ``.DS_Store`` path while leaving
+        real source untouched.
+
+        Deliberately NOT asserted through ``find_catalog_files`` /
+        ``find_python_files``: those drop ``.DS_Store`` on the extension
+        pre-filter (suffix ``''`` is not in ``CATALOG_EXTS``) *before* the
+        pattern check, so a walk-based assertion would pass even with the
+        pattern absent — a false guard. This pins the pattern itself.
+        """
+        ds_store = Path('/repo/src/.DS_Store')
+        source = Path('/repo/src/module.py')
+        assert '**/.DS_Store' in DEFAULT_EXCLUDE_FILE_PATTERNS
+        assert any(ds_store.match(p) for p in DEFAULT_EXCLUDE_FILE_PATTERNS)
+        assert not source.match('**/.DS_Store')
 
     def test_find_catalog_files_excludes_get_pip_by_default(
         self, tmp_path: Path,
