@@ -30,7 +30,7 @@ def get_library(db_path: Path | None = None) -> 'Library':
 
 
 # Re-exports — the ``generate`` command's helpers and entry point now live
-# in cli_generate.py. Kept importable from here for backwards-compatibility
+# in cli/generate.py. Kept importable from here for backwards-compatibility
 # with tests and external callers.
 from cli.generate import (  # noqa: E402
     cmd_generate,
@@ -39,11 +39,11 @@ from cli.generate import (  # noqa: E402
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
     """Register generation commands."""
-    # generate — now lives in cli_generate.py
+    # generate — now lives in cli/generate.py
     from cli.generate import register_generate_parser
     register_generate_parser(subparsers)
 
-    # batch — pending-batch management (lives in cli_batch.py).
+    # batch — pending-batch management (lives in cli/batch.py).
     from cli.batch import register_batch_parser
     register_batch_parser(subparsers)
 
@@ -2085,7 +2085,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
     # regex). Those are the analyzed codebase's lint issues — not Ariadne's —
     # and would otherwise leak into dry-run output as "<unknown>:NNN
     # SyntaxWarning". Mirrors the filter cmd_generate installs for the same
-    # reason (cli_generate.py); must be set before any parse path runs.
+    # reason (cli/generate.py); must be set before any parse path runs.
     warnings.filterwarnings('ignore', category=SyntaxWarning)
 
     from cli.core import cmd_discover, cmd_index
@@ -2093,7 +2093,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
     # Late import so monkeypatches to ``config.get_config`` in tests
     # take effect inside this command. Without this, the
     # module-level ``from config import get_config`` reference at the
-    # top of cli_generation.py captures the original function at
+    # top of cli/generation.py captures the original function at
     # import time and ignores monkeypatches done after that.
     import config as _config_module
     cfg = _config_module.get_config()

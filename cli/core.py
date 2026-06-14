@@ -1306,7 +1306,7 @@ class _SubprocessMerger:
 
 
 def _default_indexer_registry() -> dict:
-    """Lazy-load adapters so cli_core's import doesn't pull docgen at
+    """Lazy-load adapters so cli.core's import doesn't pull docgen at
     module init (avoids circular imports — adapters import IndexerResult
     from this module). Tests bypass this by passing their own registry."""
     from docgen.scip_indexers import (
