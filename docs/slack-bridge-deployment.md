@@ -158,6 +158,18 @@ Replacing `ariadne.db` resets `usage_events` on the box. If you want the hit/mis
 
 If you ship the optional embedding matrix (see below), rebuild and re-ship it in the same step — a matrix that no longer matches the DB is ignored (the bot falls back to SQLite ranking until you refresh it).
 
+## Testimonials (best-of showcase)
+
+The bridge keeps an all-time **top-20 of the highest-scored Q&A** in `.ariadne/local/` — a store that is **swap-proof** (it's gitignored and lives outside `ariadne.db`, so a knowledge-base refresh can't wipe it). Scored answers are captured **live** as they happen (when `enable_feedback` is on), and you can **backfill from existing history**:
+
+```bash
+ariadne-slack scan            # walk public channels, snapshot the top scored Q&A
+ariadne-slack scan --limit 200   # cap how many past pairs to process (newest first)
+ariadne testimonials             # read the store; --export DIR also copies any images out
+```
+
+`scan` only reads **public channels the bot is a member of** — DMs and private channels are never touched. It reads the scores Ariadne already logged in `usage_events` (joining each to its answer by time), so it **runs no agent turn and costs nothing**. It's idempotent — re-running never duplicates an entry (deduped by the source message). Because scores live in `usage_events` (wiped on a DB swap), **run `scan` before you refresh `ariadne.db`** if you want history captured.
+
 ## Embedding matrix (optional — faster semantic ranking)
 
 Ariadne can rank search candidates against a memory-mapped embedding matrix

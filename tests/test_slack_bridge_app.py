@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+import testimonials
 from slack_bridge import app
 from slack_bridge.agent_factory import AgentCredentialError
 from slack_bridge.pool import SessionPool
@@ -25,7 +26,64 @@ def test_main_refuses_to_start_when_anthropic_key_is_in_the_bridge_env(monkeypat
     monkeypatch.setenv('ANTHROPIC_API_KEY', 'anthropic-x')   # would flip the agent to metered
 
     with pytest.raises(AgentCredentialError):
-        app.main()
+        app.main([])   # bare serve path → hits the cost gate
+
+
+def test_scan_subcommand_runs_the_backfill_past_the_agent_cost_gate(monkeypatch):
+    # `scan` reads scores from the DB and never runs the agent, so it must NOT
+    # invoke the serve-time credential gate; it must route to the backfill with
+    # the parsed --limit.
+    creds_checked: list[bool] = []
+    monkeypatch.setattr(app, 'assert_agent_credentials',
+                        lambda env: creds_checked.append(True))
+    monkeypatch.setattr(app.BridgeConfig, 'from_env',
+                        classmethod(lambda cls: bridge_config()))
+    ran: dict = {}
+
+    async def fake_run_scan(cfg, *, max_pairs=None):
+        ran['max_pairs'] = max_pairs
+
+    monkeypatch.setattr(app, '_run_scan', fake_run_scan)
+
+    assert app._parse_args([]).command is None            # bare → serve
+    args = app._parse_args(['scan', '--limit', '5'])
+    assert (args.command, args.limit) == ('scan', 5)
+
+    app.main(['scan', '--limit', '5'])
+    assert ran == {'max_pairs': 5}
+    assert creds_checked == []                            # gate never consulted for scan
+
+
+async def test_run_scan_opens_the_db_and_backfills(monkeypatch, tmp_path):
+    captured: dict = {}
+
+    async def fake_scan(slack, conn, *, store_dir, bot_user_id, max_pairs=None):
+        captured.update(store_dir=store_dir, bot_user_id=bot_user_id,
+                        max_pairs=max_pairs, slack=slack)
+        return 3
+
+    monkeypatch.setattr('slack_bridge.scan.scan', fake_scan)
+
+    class _FakeClient:
+        async def auth_test(self):
+            return {'user_id': 'UBOT'}
+
+    monkeypatch.setattr(app, '_make_web_client', lambda token: _FakeClient())
+    (tmp_path / 'ariadne.db').touch()
+
+    n = await app._run_scan(bridge_config(ariadne_dir=tmp_path), max_pairs=7)
+    assert n == 3
+    assert captured['bot_user_id'] == 'UBOT'
+    assert captured['max_pairs'] == 7
+    assert captured['store_dir'] == testimonials.local_dir(tmp_path)
+    assert isinstance(captured['slack'], _FakeClient)
+
+
+def test_make_web_client_builds_a_real_async_client():
+    pytest.importorskip('slack_sdk.web.async_client')
+    from slack_sdk.web.async_client import AsyncWebClient
+
+    assert isinstance(app._make_web_client('xoxb-test'), AsyncWebClient)
 
 
 def test_make_app_and_register_listeners_exercise_the_real_bolt_api():

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 import os
+import sqlite3
 import time
+from pathlib import Path
 from typing import Any
 
+import testimonials
 from slack_bridge.agent_factory import assert_agent_credentials, make_runner_factory
 from slack_bridge.config import BridgeConfig
 from slack_bridge.handlers import make_listeners
@@ -67,9 +71,61 @@ async def _run(cfg: BridgeConfig) -> None:
         evictor.cancel()
 
 
-def main() -> None:
+def _make_web_client(token: str) -> Any:
+    """The Slack Web API client used by the scan (slack_sdk imported lazily)."""
+    from slack_sdk.web.async_client import AsyncWebClient
+
+    return AsyncWebClient(token=token)
+
+
+async def _run_scan(cfg: BridgeConfig, *, max_pairs: int | None = None) -> int:
+    """Backfill the local best-of store from the bot's public channel history.
+
+    Reads the scores Ariadne already logged in ``ariadne.db`` and snapshots the
+    top Q&A into the swap-proof store — no agent turn, so no LLM cost.
+    """
+    from slack_bridge.scan import scan
+
+    client = _make_web_client(cfg.slack_bot_token)
+    bot_user_id = (await client.auth_test())['user_id']
+    store_dir = testimonials.local_dir(cfg.ariadne_dir)
+    conn = sqlite3.connect(Path(cfg.ariadne_dir) / 'ariadne.db')
+    try:
+        recorded = await scan(
+            client, conn, store_dir=store_dir,
+            bot_user_id=bot_user_id, max_pairs=max_pairs)
+    finally:
+        conn.close()
+    _logger.info('Backfilled %d testimonial(s) from public channels into %s',
+                 recorded, store_dir)
+    return recorded
+
+
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    """``ariadne-slack`` (serve) or ``ariadne-slack scan [--limit N]`` (backfill)."""
+    parser = argparse.ArgumentParser(
+        prog='ariadne-slack',
+        description='Run the Ariadne Slack bridge, or backfill its testimonials.')
+    sub = parser.add_subparsers(dest='command')
+    scan_p = sub.add_parser(
+        'scan',
+        help='Backfill the best-of store from public channel history (no agent run)')
+    scan_p.add_argument(
+        '--limit', type=int, default=None,
+        help='Max past Q&A pairs to process, newest first (default: all)')
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
     """Console entry point (``ariadne-slack`` / ``python -m slack_bridge``)."""
     logging.basicConfig(level=logging.INFO)
+    args = _parse_args(argv)
+    if args.command == 'scan':
+        # The backfill only reads scores from the DB — it never runs the agent,
+        # so the serve-time cost gate (which forbids ANTHROPIC_API_KEY) doesn't
+        # apply here.
+        asyncio.run(_run_scan(BridgeConfig.from_env(), max_pairs=args.limit))
+        return
     # Fail fast on the cost invariant before doing any work: the bridge process
     # must carry CLAUDE_CODE_OAUTH_TOKEN and must NOT carry ANTHROPIC_API_KEY.
     assert_agent_credentials(os.environ)

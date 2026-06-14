@@ -6,6 +6,7 @@ import types
 
 import pytest
 
+import testimonials
 from slack_bridge.diagram import dot_available
 from slack_bridge.handlers import (
     command_to_event,
@@ -21,6 +22,7 @@ class _FakeSlack:
         self.posted = []    # list of (channel, thread_ts, text)
         self.updated = []   # list of (channel, ts, text)
         self.uploaded = []  # list of files_upload_v2 call dicts
+        self.permalinks = []
         self._replies = replies or []
         self._n = 0
 
@@ -39,6 +41,9 @@ class _FakeSlack:
         self.uploaded.append(
             {'channel': channel, 'thread_ts': thread_ts, 'file': file, 'filename': filename}
         )
+    async def chat_getPermalink(self, *, channel, message_ts):  # noqa: N802
+        self.permalinks.append((channel, message_ts))
+        return {'ok': True, 'permalink': f'https://slack.example/{channel}/{message_ts}'}
 
 
 class _FakeSession:
@@ -595,3 +600,51 @@ def test_is_dm_message_accepts_file_share():
     assert not is_dm_message(
         {'channel_type': 'im', 'bot_id': 'B1', 'subtype': 'file_share'}
     )
+async def test_bridge_records_a_testimonial_only_for_scored_turns(monkeypatch, tmp_path):
+    """Evolving: a scored turn with feedback on writes the best-of testimonial to
+    the local store with the right fields; a feedback-off turn and a no-score turn
+    write nothing."""
+    store = testimonials.local_dir(tmp_path)
+    reply = types.SimpleNamespace(text='the answer', is_error=False, session_id='S', score=9)
+
+    async def fake_aq(**kw):
+        return reply
+
+    monkeypatch.setattr('slack_bridge.handlers.answer_question', fake_aq)
+
+    async def run(*, feedback, slack=None):
+        cfg = bridge_config(channels=frozenset({'C1'}), enable_feedback=feedback, ariadne_dir=tmp_path)
+        await handle_event(
+            cfg=cfg, pool=_FakePool(_FakeSession(None)), slack=slack or _FakeSlack(),
+            bot_user_id='UBOT', ack=_noop_ack,
+            event={'user': 'U1', 'channel': 'C1', 'ts': 'T1', 'text': '<@UBOT> what is this?'},
+        )
+
+    # Demand 1 — scored turn, feedback on: testimonial written faithfully.
+    await run(feedback=True)
+    kept = testimonials.top(store)
+    assert len(kept) == 1
+    assert (kept[0].score, kept[0].question, kept[0].answer) == (9, 'what is this?', 'the answer')
+    assert kept[0].duration_seconds >= 0
+    assert kept[0].permalink                       # captured via chat.getPermalink
+
+    # Demand 2 — feedback off: no capture.
+    await run(feedback=False)
+    assert len(testimonials.top(store)) == 1
+
+    # Demand 3 — feedback on but the agent reported no score: no capture.
+    reply.score = None
+    await run(feedback=True)
+    assert len(testimonials.top(store)) == 1
+
+    # Demand 4 — a permalink-fetch failure must NOT cost the testimonial.
+    reply.score = 8
+    flaky = _FakeSlack()
+
+    async def _boom(**kw):
+        raise RuntimeError('slack hiccup')
+
+    flaky.chat_getPermalink = _boom
+    await run(feedback=True, slack=flaky)
+    kept = testimonials.top(store)
+    assert any(t.score == 8 and t.permalink is None for t in kept)
