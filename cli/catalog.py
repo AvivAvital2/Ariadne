@@ -356,18 +356,38 @@ async def cmd_catalog_describe(args: argparse.Namespace) -> int:
         # an existing pending batch (same source+model) without
         # re-submitting.
         if getattr(args, 'batch', False) or getattr(args, 'resume', False):
-            from cli.generate import resolve_batch_strategy
+            import os
 
-            strategy, batch_provider, key_env = resolve_batch_strategy(
-                args, cfg,
+            from cli.generate import resolve_provider
+            from docgen.llm.factory import make_batch_strategy
+
+            model = args.model or cfg.model
+            # Batch dispatch picks the resolved provider's batch backend —
+            # Anthropic's Message Batches or OpenAI's Batch API, both 24h /
+            # ~50% off — so a gpt-* model batches via OpenAI instead of
+            # crashing on a hardcoded AnthropicProvider. The matching API key
+            # is required (make_batch_strategy raises for a provider with no
+            # batch backend).
+            batch_provider = resolve_provider(
+                cli_provider=getattr(args, 'provider', None),
+                cfg_provider=getattr(cfg, 'provider', None),
+                model=model,
             )
-            if strategy is None:
+            key_env = (
+                'OPENAI_API_KEY' if batch_provider == 'openai'
+                else 'ANTHROPIC_API_KEY'
+            )
+            api_key = os.environ.get(key_env, '')
+            if not api_key:
                 console.print(
                     f'[red]{key_env} is not set. Export it before using '
                     f'--batch or --resume with the {batch_provider} '
                     f'provider.[/red]',
                 )
                 return 1
+            provider = make_batch_strategy(
+                batch_provider, model=model, api_key=api_key,
+            )
             provider_label = {
                 'openai': 'OpenAI', 'anthropic': 'Anthropic',
             }.get(batch_provider, batch_provider)
@@ -446,7 +466,7 @@ async def cmd_catalog_describe(args: argparse.Namespace) -> int:
                 async with LibraryWriter(library) as writer:
                     result = await describe_source_elements_batched(
                         library, writer, source_name,
-                        strategy=strategy,
+                        provider=provider,
                         model=args.model or cfg.model,
                         force=args.force,
                         resume=getattr(args, 'resume', False),

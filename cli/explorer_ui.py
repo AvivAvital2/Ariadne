@@ -10,12 +10,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from cli.explorer_themes import (
-    ALLOWED_THEME_NAMES,
-    CURATED_THEMES,
-    EXPLORER_DEFAULT_THEME,
-)
-
 
 def _explorer_theme_path() -> Path:
     """User-global file storing the explorer's chosen palette (XDG-aware, so
@@ -24,20 +18,16 @@ def _explorer_theme_path() -> Path:
     return Path(base) / 'ariadne' / 'ui.json'
 
 
-def _load_explorer_theme(default: str = EXPLORER_DEFAULT_THEME) -> str:
-    """The persisted explorer theme, or ``default`` when unset/unknown.
-
-    Only the curated set (plus the ``ansi-dark`` terminal-default passthrough)
-    is honoured; a name outside ``ALLOWED_THEME_NAMES`` — e.g. a stale built-in
-    that's no longer offered — falls back to ``default``.
-    """
+def _load_explorer_theme(default: str = 'ansi-dark') -> str:
+    """The persisted explorer theme, or ``default`` when unset/unknown."""
     import json
 
+    from textual.theme import BUILTIN_THEMES
     try:
         name = json.loads(_explorer_theme_path().read_text()).get('explorer_theme')
     except (OSError, ValueError):
         return default
-    return name if name in ALLOWED_THEME_NAMES else default
+    return name if name in BUILTIN_THEMES else default
 
 
 def _save_explorer_theme(name: str) -> None:
@@ -62,7 +52,7 @@ def _make_theme_picker(app):
     from textual.widgets import OptionList
     from textual.widgets.option_list import Option
 
-    names = [n for n in sorted(app.available_themes) if n in ALLOWED_THEME_NAMES]
+    names = sorted(app.available_themes)
     original = app.theme
 
     class _ThemePicker(ModalScreen):
@@ -85,84 +75,22 @@ def _make_theme_picker(app):
 
         def on_option_list_option_highlighted(self, event) -> None:
             app.theme = event.option_id          # live preview while browsing
-            app._recolor()                       # repaint the tree in the new palette
 
         def on_option_list_option_selected(self, event) -> None:
             app.theme = event.option_id
             _save_explorer_theme(event.option_id)
-            app._recolor()
             app.sub_title = app._theme_subtitle()
             self.dismiss()
 
         def action_cancel(self) -> None:
             app.theme = original                  # revert the preview
-            app._recolor()
             app.sub_title = app._theme_subtitle()
             self.dismiss()
 
     return _ThemePicker()
 
 
-def _make_staleness_modal(source_name):
-    """A yes/no modal asking whether to mark ``source_name`` staleness-exempt.
-
-    Shown on Apply during onboarding (after the user has worked the tree), so the
-    file browser — not a separate CLI prompt — owns this bit of ariadne.yaml. The
-    copy states *why* it's asked and *what changes*, in plain terms. Module-level
-    so it's headless-testable via ``App.run_test()``; resolves to ``True`` (mark
-    exempt) / ``False`` (keep checks) via ``dismiss``.
-    """
-    from textual.binding import Binding
-    from textual.containers import Horizontal, Vertical
-    from textual.screen import ModalScreen
-    from textual.widgets import Button, Static
-
-    class _StalenessModal(ModalScreen[bool]):
-        CSS = """
-        _StalenessModal { align: center middle; }
-        #box { width: 68; height: auto; border: round $panel; padding: 1 2;
-               background: $surface; }
-        #q { padding-bottom: 1; }
-        #actions { height: auto; align-horizontal: center; }
-        #actions Button { margin: 0 1; }
-        """
-        BINDINGS = [
-            Binding('y', 'yes', 'Exempt'),
-            Binding('n,escape', 'no', 'Keep checks'),
-        ]
-
-        def compose(self):
-            with Vertical(id='box'):
-                yield Static(
-                    f"Mark [b]{source_name}[/] staleness-exempt?\n"
-                    f"[$text-muted]Rarely-updated repos (e.g. release-only) trigger a "
-                    f"constant 'stale → regenerate' nag. Marking it exempt silences "
-                    f"that and reuses the existing index instead of re-indexing on "
-                    f"every change.[/]",
-                    id='q')
-                with Horizontal(id='actions'):
-                    yield Button('Exempt (y)', id='yes', variant='primary')
-                    yield Button('Keep checks (n)', id='no')
-
-        def on_mount(self) -> None:
-            self.query_one('#no', Button).focus()   # safe default: keep checks
-
-        def on_button_pressed(self, event) -> None:
-            self.dismiss(event.button.id == 'yes')
-
-        def action_yes(self) -> None:
-            self.dismiss(True)
-
-        def action_no(self) -> None:
-            self.dismiss(False)
-
-    return _StalenessModal()
-
-
-def _make_explorer_tui_app(
-    state, *, doc_types=(), selected=None, recost=None,
-    offer_staleness=False, staleness_source=None, staleness_exempt=False,
-):
+def _make_explorer_tui_app(state, *, doc_types=(), selected=None, recost=None):
     """Build the full-screen Textual explorer backing :func:`run_explorer_tui`.
 
     The whole source tree, expandable inline (Space/Enter on a dir), each row
@@ -229,52 +157,18 @@ def _make_explorer_tui_app(
         rc = state.cost_of(state.root.rel_path)
         return rc.total if rc else 0.0
 
-    # Concrete hex per render role, refreshed from the live theme by the app
-    # (``_recolor``). Tree labels are Rich markup (``Text.from_markup``), where
-    # Textual's ``$theme`` variables don't resolve — so we read the active
-    # theme's colours and inline them. A value of ``None`` means "no usable
-    # colour" (the ansi terminal-default), and the row falls back to the old
-    # attribute-only rendering.
-    palette: dict = {}
-
-    def _theme_colors(theme) -> dict:
-        def _hexish(c):
-            return c if (isinstance(c, str) and c.startswith('#')) else None
-
-        muted = None
-        if theme.variables:
-            muted = _hexish(theme.variables.get('text-muted'))
-        return {
-            'dir': _hexish(theme.primary),   # directory names — the accent
-            'cost': _hexish(theme.warning),  # the $ amount stands out
-            'muted': muted,                  # %/docs metadata
-            'low': _hexish(theme.success),   # cheap end of the cost gradient
-            'mid': _hexish(theme.warning),
-            'high': _hexish(theme.error),    # expensive end
-        }
-
     def _bar(value, width=12):
-        # ncdu-style gauge: the filled run is coloured by how big this node's
-        # cost is relative to the whole tree (green → cheap, yellow → notable,
-        # red → expensive), the remainder dimmed. Colourless themes (ansi) fall
-        # back to a monochrome bar.
+        # Filled portion in the default foreground, the remainder dimmed — a
+        # quiet, monochrome gauge rather than a bright accent bar.
         gt = _grand_total()
         if gt <= 0:
             return f'[dim]{"╌" * width}[/dim]'
-        frac = value / gt
-        filled = max(0, min(width, round(width * frac)))
-        color = (
-            palette.get('high') if frac > 0.33
-            else palette.get('mid') if frac > 0.10
-            else palette.get('low')
-        )
-        head = f'[{color}]{"━" * filled}[/]' if color else '━' * filled
-        return f'{head}[dim]{"╌" * (width - filled)}[/dim]'
+        filled = max(0, min(width, round(width * value / gt)))
+        return f'{"━" * filled}[dim]{"╌" * (width - filled)}[/dim]'
 
     def _label(node):
-        # Rich markup (Tree labels use Text.from_markup). Colours come from the
-        # active theme via ``palette``; directory names take the accent, the $
-        # amount the cost colour, the %/docs metadata the muted colour.
+        # Rich markup (Tree labels use Text.from_markup) — attribute-only, no
+        # colour; emphasis via weight/dim so the muted theme palette carries it.
         gt = _grand_total()
         cost = state.cost_of(node.rel_path)
         docs = cost.docs if cost else 0
@@ -284,20 +178,10 @@ def _make_explorer_tui_app(
         # Expandable dirs get a 2-cell "▶ " toggle from Tree; leaves get none,
         # so pad leaves by 2 to keep the bar/$ columns aligned across rows.
         pad = '' if (node.is_dir and node.children) else '  '
-
-        dirc, costc, mutedc = (
-            palette.get('dir'), palette.get('cost'), palette.get('muted'))
-        dollar_part = (
-            f'[{costc} b]${dollars:>7.2f}[/]' if costc
-            else f'[b]${dollars:>7.2f}[/b]')
-        meta_part = (
-            f'[{mutedc}]{pct:>3.0f}%   {docs:>4} docs[/]' if mutedc
-            else f'[dim]{pct:>3.0f}%   {docs:>4} docs[/dim]')
-        if node.is_dir:
-            name_part = f'[{dirc} b]{name}[/]' if dirc else f'[b]{name}[/b]'
-        else:
-            name_part = name
-        body = f'{pad}{_bar(dollars)}  {dollar_part}  {meta_part}  {name_part}'
+        body = (
+            f'{pad}{_bar(dollars)}  [b]${dollars:>7.2f}[/b]  '
+            f'[dim]{pct:>3.0f}%   {docs:>4} docs[/dim]  {name}'
+        )
         if state.is_excluded(node.rel_path):
             return f'[dim strike]{body}[/dim strike]'
         return body
@@ -333,12 +217,6 @@ def _make_explorer_tui_app(
             self._selected = set(doc_types if selected is None else selected)
             self._recost = recost
             self._built = False  # NB: 'App._ready' is reserved by Textual
-            # Staleness modal (onboarding only): offered on Apply unless the
-            # source is already exempt. ``staleness_exempt`` carries both the
-            # source's current state in and the user's choice out.
-            self._offer_staleness = offer_staleness
-            self._staleness_source = staleness_source
-            self.staleness_exempt = staleness_exempt
 
         @property
         def selected_doc_types(self) -> tuple:
@@ -368,13 +246,9 @@ def _make_explorer_tui_app(
             return f'{self._state.root.name}   ·   theme: {self.theme}  (t to change)'
 
         def on_mount(self) -> None:
-            # Offer the curated, high-contrast set (vibrant palettes vendored
-            # from iTerm2-Color-Schemes), open on the saved choice or a vibrant
-            # default, and seed the render palette. 't' / Ctrl+P swap + persist.
-            for theme in CURATED_THEMES:
-                self.register_theme(theme)
+            # Restore the user's chosen palette ('ansi-dark' = the terminal's
+            # own colours, the default). 't' cycles the curated set + persists.
             self.theme = _load_explorer_theme()
-            palette.update(_theme_colors(self.current_theme))
             self.title = 'ariadne · dry-run explorer'
             self.sub_title = self._theme_subtitle()
             if has_doc_types:
@@ -402,10 +276,9 @@ def _make_explorer_tui_app(
                 self._relabel(child)
 
         def _update_total(self) -> None:
-            # Static uses Textual content markup, so theme variables ($success,
-            # $warning, $text-muted) resolve here — unlike the Rich-markup tree
-            # labels, which inline concrete hex from ``palette``. Kept cost reads
-            # green, excluded cost amber, so the keep/exclude split pops.
+            # Static uses Textual content markup, so theme variables resolve
+            # here (unlike the Rich-markup tree labels). Kept monochrome +
+            # muted: bold numbers, dimmed labels, no saturated colour.
             t = self._state.live_total()
             tail = (
                 f'     [$text-muted]types:[/] {", ".join(self.selected_doc_types) or "(none)"}'
@@ -414,21 +287,11 @@ def _make_explorer_tui_app(
             )
             self.query_one('#total', Static).update(
                 f'[$text-muted]keep[/]  [b]{t.kept_docs}[/b] docs · '
-                f'[$success b]${t.kept_cost:.2f}[/]'
+                f'[b]${t.kept_cost:.2f}[/b]'
                 f'     [$text-muted]exclude[/]  [b]{t.excluded_docs}[/b] docs · '
-                f'[$warning b]${t.excluded_cost:.2f}[/]'
+                f'[b]${t.excluded_cost:.2f}[/b]'
                 f'{tail}'
             )
-
-        def _recolor(self) -> None:
-            # Re-read the active theme's colours and repaint the tree + total.
-            # Driven by the theme picker (live preview / commit / cancel) so the
-            # whole UI tracks the previewed palette, not just the chrome.
-            palette.clear()
-            palette.update(_theme_colors(self.current_theme))
-            if self._built:
-                self._relabel(self.query_one(Tree).root)
-                self._update_total()
 
         def action_back(self) -> None:
             # ← : collapse an expanded directory, else jump the cursor to the
@@ -490,19 +353,8 @@ def _make_explorer_tui_app(
             self.search_themes()
 
         def action_apply(self) -> None:
-            # Offer the staleness question as a pop-up here (after the user has
-            # worked the tree) rather than as a pre-browser CLI prompt. Skip it
-            # when not offered, or when the source is already exempt.
-            if self._offer_staleness and not self.staleness_exempt:
-                def _done(exempt) -> None:
-                    self.staleness_exempt = bool(exempt)
-                    self.applied = True
-                    self.exit()
-                self.push_screen(
-                    _make_staleness_modal(self._staleness_source), _done)
-            else:
-                self.applied = True
-                self.exit()
+            self.applied = True
+            self.exit()
 
         def action_cancel(self) -> None:
             self.exit()
@@ -510,28 +362,19 @@ def _make_explorer_tui_app(
     return _ExplorerTuiApp(state)
 
 
-async def run_explorer_tui(
-    state, *, doc_types=(), selected=None, recost=None,
-    offer_staleness=False, staleness_source=None, staleness_exempt=False,
-):
+async def run_explorer_tui(state, *, doc_types=(), selected=None, recost=None):
     """Full-screen Textual explorer for ``ariadne dry-run --interactive``:
     x toggles an exclude, a applies & quits, q cancels (raises
     ``KeyboardInterrupt``); Space/Enter expand dirs; 1-9 toggle a doc type when
     the doc-type panel is shown. Returns the **app** so the caller can read the
-    final ``selected_doc_types`` (and ``staleness_exempt``). Logic is
-    headless-tested via ``_make_explorer_tui_app`` + ``App.run_test()``.
-
-    ``offer_staleness`` (onboarding only) pops a staleness-exemption modal on
-    Apply for ``staleness_source``; ``staleness_exempt`` is the source's current
-    state, and the app reports the chosen value back on the same attribute.
+    final ``selected_doc_types``. Logic is headless-tested via
+    ``_make_explorer_tui_app`` + ``App.run_test()``.
 
     Async because ``cmd_dry_run`` already runs under ``asyncio.run`` — use
     ``run_async()`` rather than ``app.run()`` (which would nest event loops).
     """
     app = _make_explorer_tui_app(
-        state, doc_types=doc_types, selected=selected, recost=recost,
-        offer_staleness=offer_staleness, staleness_source=staleness_source,
-        staleness_exempt=staleness_exempt)
+        state, doc_types=doc_types, selected=selected, recost=recost)
     await app.run_async()
     if not app.applied:
         raise KeyboardInterrupt

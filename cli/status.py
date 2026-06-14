@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.table import Table
 
-import testimonials
 from config import get_config
 
 if TYPE_CHECKING:
@@ -55,10 +54,6 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
                               help='Show per-document serve counts')
     usage_parser.add_argument('--top-served', type=int, default=None,
                               help='Show top N most-served documents')
-    usage_parser.add_argument('--export-report', metavar='PATH', default=None,
-                              help='Write a portable analytics report (usage + '
-                                   'misses + doc signals) to PATH as JSON, for '
-                                   'shipping off-box before replacing the database')
 
     # gaps
     gaps_parser = subparsers.add_parser('gaps', help='Show documentation gap analysis')
@@ -69,15 +64,6 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
 
     # vacuum
     subparsers.add_parser('vacuum', help='Optimize database file size')
-    testimonials_parser = subparsers.add_parser(
-        'testimonials',
-        help='Show the top-scored Q&A testimonials (the local best-of store)')
-    testimonials_parser.add_argument('--limit', '-n', type=int, default=20,
-        help='Max testimonials to show (capped at 20)')
-    testimonials_parser.add_argument('--dir', default=None,
-        help='Ariadne working dir holding .ariadne/local/ (default: cwd)')
-    testimonials_parser.add_argument('--export', metavar='PATH', default=None,
-        help='Copy stored images into PATH (for the showcase)')
 
 
 def cmd_stats(args: argparse.Namespace) -> int:
@@ -351,18 +337,6 @@ def cmd_usage(args: argparse.Namespace) -> int:
     library = get_library(args.db)
 
     try:
-        if getattr(args, 'export_report', None):
-            from analytics_report import build_analytics_report
-
-            report = build_analytics_report(library, days=args.days)
-            Path(args.export_report).write_text(report.to_json())
-            console.print(
-                f'[green]Wrote analytics report to {args.export_report}[/green] '
-                f'({report.usage_summary["total_calls"]} calls, '
-                f'{report.usage_summary["total_misses"]} misses, last {args.days}d)'
-            )
-            return 0
-
         stats = library.get_usage_stats(days=args.days, tool_name=args.tool)
 
         table = Table(title=f'Ariadne Usage (last {args.days} days)')
@@ -490,38 +464,6 @@ def cmd_vacuum(args: argparse.Namespace) -> int:
 
     finally:
         library.close()
-def cmd_testimonials(args: argparse.Namespace) -> int:
-    """Show the local best-of Q&A testimonials (highest-scored, all-time)."""
-    import shutil
-
-    base = Path(args.dir) if getattr(args, 'dir', None) else Path.cwd()
-    limit = min(getattr(args, 'limit', None) or testimonials.MAX_KEEP, testimonials.MAX_KEEP)
-    entries = testimonials.top(testimonials.local_dir(base), limit=limit)
-    if not entries:
-        console.print('[yellow]No testimonials recorded yet.[/yellow]')
-        return 0
-    for i, t in enumerate(entries, 1):
-        console.print()
-        console.print(
-            f'[bold cyan]#{i}  score {t.score}/10[/bold cyan]  '
-            f'[dim]{t.duration_seconds:.1f}s[/dim]')
-        if t.permalink:
-            console.print(f'[dim]{t.permalink}[/dim]')
-        console.print(f'[bold]Q:[/bold] {t.question}')
-        console.print(f'[bold]A:[/bold] {t.answer}')
-        if t.images:
-            console.print(f'[dim]({len(t.images)} image(s))[/dim]')
-    export = getattr(args, 'export', None)
-    if export:
-        dest = Path(export)
-        dest.mkdir(parents=True, exist_ok=True)
-        copied = 0
-        for t in entries:
-            for img in t.images:
-                shutil.copy(img, dest / f'{t.path.name}-{img.name}')
-                copied += 1
-        console.print(f'[green]Exported {copied} image(s) to {dest}[/green]')
-    return 0
 
 
 HANDLERS = {
@@ -530,5 +472,4 @@ HANDLERS = {
     'usage': lambda args: cmd_usage(args),
     'gaps': lambda args: cmd_gaps(args),
     'vacuum': lambda args: cmd_vacuum(args),
-    'testimonials': lambda args: cmd_testimonials(args),
 }
