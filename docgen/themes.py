@@ -26,6 +26,7 @@ from llm import chat_complete
 from schema import _now_iso
 
 if TYPE_CHECKING:
+    from docgen.llm.batch import BatchStrategy
     from library import Library
     from writer import LibraryWriter
 
@@ -347,7 +348,7 @@ async def generate_themes(
 async def generate_themes_batched(
     library: "Library",
     writer: "LibraryWriter",
-    provider: object,
+    strategy: object,
     *,
     model: str | None = None,
     max_calls: int | None = None,
@@ -357,17 +358,18 @@ async def generate_themes_batched(
     """Batched twin of :func:`generate_themes`.
 
     Builds every dirty theme's prompt up front and submits them as a
-    SINGLE Anthropic Message Batch — ≈50% cheaper than the live
-    per-theme ``chat_complete`` path, and it doesn't run as a
-    synchronous full-price spike after generation 'completes'. Each
-    result is persisted with the same logic as the live path
+    SINGLE provider batch — ≈50% cheaper than the live per-theme
+    ``chat_complete`` path, and it doesn't run as a synchronous
+    full-price spike after generation 'completes'. Each result is
+    persisted with the same logic as the live path
     (:func:`_apply_theme_response`).
 
-    ``provider`` must expose ``submit_batch`` / ``poll_batch`` /
-    ``fetch_batch_results`` (AnthropicProvider's batch surface). Same
+    ``strategy`` is a ``BatchStrategy`` (``AnthropicBatchStrategy`` /
+    ``OpenAIBatchStrategy``, built by ``make_batch_strategy``) exposing
+    ``submit_batch`` / ``poll_batch`` / ``fetch_batch_results``. Same
     return shape as :func:`generate_themes`.
     """
-    from docgen.llm.anthropic import BatchRequest
+    from docgen.llm.batch import BatchRequest
 
     dirty = library.get_dirty_themes()
     total_dirty = len(dirty)
@@ -399,17 +401,17 @@ async def generate_themes_batched(
 
     if on_stage is not None:
         on_stage('submit', 0, len(requests))
-    submission = await provider.submit_batch(requests)
+    submission = await strategy.submit_batch(requests)
 
     def _poll(processing: int, succeeded: int, errored: int) -> None:
         if on_stage is not None:
             on_stage('processing', succeeded + errored, len(requests))
 
-    await provider.poll_batch(submission.batch_id, on_progress=_poll)
+    await strategy.poll_batch(submission.batch_id, on_progress=_poll)
 
     if on_stage is not None:
         on_stage('download', 0, len(requests))
-    results = await provider.fetch_batch_results(submission.batch_id)
+    results = await strategy.fetch_batch_results(submission.batch_id)
 
     completed = 0
     for cid_str, req in reqs_by_cid.items():
@@ -595,6 +597,7 @@ async def refresh_themes(
     enabled: bool = True,
     cluster_kwargs: dict | None = None,
     summarize_kwargs: dict | None = None,
+    batch_strategy: "BatchStrategy | None" = None,
 ) -> dict:
     """Re-run the Leiden clustering EVERY time over the current semantic graph,
     then summarize only the themes whose membership changed.
@@ -645,8 +648,18 @@ async def refresh_themes(
         changed = len(changed_ids)
 
     cluster_themes(library, **cluster_kwargs)
-
-    summary = await generate_themes(library, writer, **summarize_kwargs)
+    if batch_strategy is not None:
+        # Batch has no per-call fan-out, so the live-only `concurrency`
+        # knob is dropped; everything else forwards unchanged.
+        _bk = {
+            k: v for k, v in summarize_kwargs.items()
+            if k != 'concurrency'
+        }
+        summary = await generate_themes_batched(
+            library, writer, batch_strategy, **_bk,
+        )
+    else:
+        summary = await generate_themes(library, writer, **summarize_kwargs)
     touched = summary["summarized"] + summary["incoherent"] + summary["failed"]
     summary["path"] = (
         "initial_build" if first_build else ("rebuilt" if touched else "noop")

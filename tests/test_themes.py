@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from docgen import themes
 from library import Library
 from writer import LibraryWriter
 
@@ -608,3 +609,58 @@ class TestGenerateThemesBatched:
         assert result['total_dirty'] == len(dirty_before)
         # All themes now clean + coherent, just like the live path.
         assert library.get_dirty_themes() == []
+    @pytest.mark.asyncio
+    async def test_refresh_routes_summarize_through_batch_strategy(
+        self, library: Library, mocked_embedding, monkeypatch,
+    ) -> None:
+        """refresh_themes(batch_strategy=...) must summarize dirty themes via
+    the batched twin (passing the strategy through), never the live
+    per-theme generate_themes. The live-only ``concurrency`` knob is
+    dropped from the batched call. This is the seam that
+    ``ariadne themes build --batch`` relies on.
+    """
+        seen = {'live': 0, 'batched': 0, 'strategy': None, 'kwargs': None}
+
+        async def fake_live(lib, wr, **kwargs):
+            seen['live'] += 1
+            return {
+                'summarized': 0, 'incoherent': 0, 'failed': 0,
+                'total_dirty': 0,
+            }
+
+        async def fake_batched(lib, wr, strategy, **kwargs):
+            seen['batched'] += 1
+            seen['strategy'] = strategy
+            seen['kwargs'] = kwargs
+            return {
+                'summarized': 2, 'incoherent': 0, 'failed': 0,
+                'total_dirty': 2,
+            }
+
+        monkeypatch.setattr('docgen.themes.generate_themes', fake_live)
+        monkeypatch.setattr(
+            'docgen.themes.generate_themes_batched', fake_batched,
+        )
+        # Routing test — don't couple to real clustering / graph params.
+        monkeypatch.setattr(
+            'docgen.graph_builder.build_semantic_edges', lambda *a, **k: None,
+        )
+        monkeypatch.setattr('docgen.themes.cluster_themes', lambda *a, **k: None)
+
+        _populate_two_clusters(library)
+        sentinel = object()
+        async with LibraryWriter(library) as writer:
+            summary = await themes.refresh_themes(
+                library, writer,
+                batch_strategy=sentinel,
+                summarize_kwargs={'concurrency': 6},
+            )
+
+        assert seen['batched'] == 1, 'must summarize via the batched twin'
+        assert seen['live'] == 0, 'live path must not run under --batch'
+        assert seen['strategy'] is sentinel
+        assert 'concurrency' not in seen['kwargs'], (
+            'concurrency is a live-only knob; batch has no per-call fan-out'
+        )
+        assert summary['summarized'] == 2
+        assert summary['path'] == 'initial_build'
