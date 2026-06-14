@@ -20,12 +20,18 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
+import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from rich.console import Console
 
 import cli.batch as cli_batch
+import config as config_module
+from cli.main import main
+from config import Config
 from docgen.staleness import StalenessTracker
 
 
@@ -149,3 +155,48 @@ class TestBatchClear:
         out = captured_console.getvalue()
         # Either 'No such' or the literal id appears in the warning.
         assert 'nonexistent' in out or 'no such' in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# dispatch wiring
+# ---------------------------------------------------------------------------
+#
+# Regression guard: the `batch` handler routed through
+# ``__import__('cli.batch').cmd_batch`` — but ``__import__('cli.batch')``
+# returns the top-level ``cli`` package, so ``.cmd_batch`` is AttributeError.
+# The cmd_batch_* tests above never exercised the dispatch path, so it hid.
+
+
+@pytest.fixture
+def tmp_staleness_config(tmp_path):
+    """Point the global config at a tmp staleness DB. Monkeypatch-free:
+    swap the cached singleton + $ARIADNE_CONFIG and restore on teardown.
+    """
+    cfg_file = tmp_path / 'ariadne.yaml'
+    cfg_file.write_text(
+        f'staleness_db_path: {tmp_path / "stale.db"}\nsources: {{}}\n'
+    )
+    old_env = os.environ.get('ARIADNE_CONFIG')
+    old_singleton = config_module._global_config
+    os.environ['ARIADNE_CONFIG'] = str(cfg_file)
+    config_module._global_config = Config(cfg_file)
+    try:
+        yield
+    finally:
+        config_module._global_config = old_singleton
+        if old_env is None:
+            os.environ.pop('ARIADNE_CONFIG', None)
+        else:
+            os.environ['ARIADNE_CONFIG'] = old_env
+
+
+def test_batch_list_dispatches_through_main(tmp_staleness_config, capsys):
+    """`ariadne batch list` must run end-to-end through main()'s dispatch
+    (registration -> assembled HANDLERS -> cmd_batch), not crash in the
+    wiring. Empty staleness DB -> exit 0 + empty-state message.
+    """
+    with mock.patch.object(sys, 'argv', ['ariadne', 'batch', 'list']):
+        rc = main()
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert 'No pending batches' in out
