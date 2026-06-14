@@ -56,35 +56,17 @@ def create_parser() -> argparse.ArgumentParser:
     # Register commands from each submodule
     from cli.analysis import register_commands as register_analysis
     from cli.callers import register_commands as register_callers
-    from cli.catalog import register_commands as register_catalog
     from cli.core import register_commands as register_core
     from cli.debug import register_commands as register_debug
-    from cli.dry_run import register_commands as register_dry_run
     from cli.generation import register_commands as register_generation
     from cli.graph import register_commands as register_graph
     from cli.health import register_commands as register_health
-    from cli.index import register_commands as register_index
     from cli.integration import register_commands as register_integration
-    from cli.lookup import register_commands as register_lookup
-    from cli.maintenance import register_commands as register_maintenance
-    from cli.onboard import register_commands as register_onboard
-    from cli.status import register_commands as register_status
-    from cli.sync import register_commands as register_sync
-    from cli.themes_cmd import register_commands as register_themes_cmd
     from cli.trace import register_commands as register_trace
 
     register_core(subparsers)
-    register_index(subparsers)
     register_generation(subparsers)
-    register_dry_run(subparsers)
-    register_onboard(subparsers)
-    register_themes_cmd(subparsers)
-    register_catalog(subparsers)
-    register_status(subparsers)
-    register_sync(subparsers)
-    register_maintenance(subparsers)
     register_integration(subparsers)
-    register_lookup(subparsers)
     register_analysis(subparsers)
     register_debug(subparsers)
     register_health(subparsers)
@@ -124,36 +106,18 @@ def main() -> int:
     # Assemble handler dict from submodules
     from cli.analysis import HANDLERS as ANALYSIS_HANDLERS
     from cli.callers import HANDLERS as CALLERS_HANDLERS
-    from cli.catalog import HANDLERS as CATALOG_HANDLERS
     from cli.core import HANDLERS as CORE_HANDLERS
     from cli.debug import HANDLERS as DEBUG_HANDLERS
-    from cli.dry_run import HANDLERS as DRY_RUN_HANDLERS
     from cli.generation import HANDLERS as GEN_HANDLERS
     from cli.graph import HANDLERS as GRAPH_HANDLERS
     from cli.health import HANDLERS as HEALTH_HANDLERS
-    from cli.index import HANDLERS as INDEX_HANDLERS
     from cli.integration import HANDLERS as INTEGRATION_HANDLERS
-    from cli.lookup import HANDLERS as LOOKUP_HANDLERS
-    from cli.maintenance import HANDLERS as MAINTENANCE_HANDLERS
-    from cli.onboard import HANDLERS as ONBOARD_HANDLERS
-    from cli.status import HANDLERS as STATUS_HANDLERS
-    from cli.sync import HANDLERS as SYNC_HANDLERS
-    from cli.themes_cmd import HANDLERS as THEMES_CMD_HANDLERS
     from cli.trace import HANDLERS as TRACE_HANDLERS
 
     handlers: dict = {}
     handlers.update(CORE_HANDLERS)
-    handlers.update(INDEX_HANDLERS)
     handlers.update(GEN_HANDLERS)
-    handlers.update(DRY_RUN_HANDLERS)
-    handlers.update(ONBOARD_HANDLERS)
-    handlers.update(THEMES_CMD_HANDLERS)
-    handlers.update(CATALOG_HANDLERS)
-    handlers.update(STATUS_HANDLERS)
-    handlers.update(SYNC_HANDLERS)
-    handlers.update(MAINTENANCE_HANDLERS)
     handlers.update(INTEGRATION_HANDLERS)
-    handlers.update(LOOKUP_HANDLERS)
     handlers.update(ANALYSIS_HANDLERS)
     handlers.update(DEBUG_HANDLERS)
     handlers.update(HEALTH_HANDLERS)
