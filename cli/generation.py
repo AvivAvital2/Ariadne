@@ -2693,6 +2693,12 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
         return 1
     model = args.model or cfg.model
 
+    # ---- Mark which other configured sources this project depends on
+    # (TTY only, not --approve). Persists depends_on to ariadne.yaml so the
+    # paid generate phase loads those sources' docs as context. ----
+    if not getattr(args, 'approve', False):
+        _select_onboard_dependencies(cfg, source_name)
+
     # ---- Offer the interactive exclude explorer before the preview ----
     # (TTY only, and not under --approve). On 'yes' the dry-run preview
     # opens the explorer, writes excludes, and re-estimates — so the preview
@@ -3466,6 +3472,74 @@ def _select_generate_doc_types(default_types: tuple[str, ...]) -> tuple[str, ...
     except Exception:
         return tuple(default_types)
     return tuple(chosen) if chosen else tuple(default_types)
+
+
+def _dependency_candidates(cfg, source_name: str) -> list[str]:
+    """Other configured sources that ``source_name`` could depend on.
+
+    Excludes the source itself and any source whose path is Ariadne's own
+    repo — its name collides with common packages and a documented project
+    never depends on the doc tool (the same rule the import auto-detector
+    uses). Sorted for a stable prompt order.
+    """
+    from config import _PACKAGE_ROOT
+
+    tool_root = Path(_PACKAGE_ROOT).resolve()
+    candidates = []
+    for name, path in cfg.get_all_source_paths().items():
+        if name == source_name:
+            continue
+        try:
+            if Path(path).resolve() == tool_root:
+                continue
+        except OSError:
+            pass
+        candidates.append(name)
+    return sorted(candidates)
+
+
+def _select_onboard_dependencies(cfg, source_name: str) -> None:
+    """Interactively mark which other sources ``source_name`` depends on and
+    persist the choice to ariadne.yaml.
+
+    Shows a checklist of the other configured sources, pre-checked with the
+    source's current ``depends_on`` so it doubles as an editor; the result is
+    written back via ``set_source_dependencies`` (so the paid generate phase
+    loads those sources' docs as context). No-op when there are no eligible
+    sources, or in a non-TTY / non-POSIX context, or if the picker is
+    cancelled (q / Ctrl-C) — onboarding continues either way.
+    """
+    import sys
+
+    candidates = _dependency_candidates(cfg, source_name)
+    if not candidates:
+        return
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return
+
+    current = list(cfg.get_source_dependencies(source_name))
+    options = [(name, name) for name in candidates]
+    preselected = {i for i, name in enumerate(candidates) if name in current}
+    try:
+        chosen = _arrow_key_multiselect(
+            options,
+            title=f'Which sources does {source_name} depend on?',
+            selected=preselected,
+        )
+    except (KeyboardInterrupt, Exception):
+        return  # cancelled / non-POSIX terminal — leave config untouched
+
+    if chosen == current:
+        return
+    if not cfg.set_source_dependencies(source_name, chosen):
+        console.print('[yellow]Could not save dependencies to config.[/yellow]')
+    elif chosen:
+        console.print(
+            f'[green]Saved dependencies for {source_name}: '
+            f'{", ".join(chosen)}[/green]',
+        )
+    else:
+        console.print(f'[green]Cleared dependencies for {source_name}.[/green]')
 
 
 async def cmd_catalog_describe(args: argparse.Namespace) -> int:
