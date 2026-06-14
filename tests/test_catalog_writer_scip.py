@@ -235,7 +235,7 @@ class TestSourceConfigWiring:
     ) -> None:
         import argparse
 
-        from cli.generation import cmd_catalog_sync
+        from cli.catalog import cmd_catalog_sync
 
         # Set up a fake source path with a scala file present.
         source_dir = tmp_path / 'scalaproject'
@@ -265,11 +265,11 @@ class TestSourceConfigWiring:
             }
         }
         cfg._config['default_source'] = 'scalaproject'
-        monkeypatch.setattr('cli.generation.get_config', lambda: cfg)
+        monkeypatch.setattr('cli.catalog.get_config', lambda: cfg)
 
         from unittest.mock import MagicMock
         monkeypatch.setattr(
-            'cli.generation.get_library', lambda *_a, **_k: MagicMock(),
+            'cli.catalog.get_library', lambda *_a, **_k: MagicMock(),
         )
 
         args = argparse.Namespace(
@@ -305,7 +305,7 @@ class TestCliExitCodeOnScipError:
         """
         import argparse
 
-        from cli.generation import cmd_catalog_sync
+        from cli.catalog import cmd_catalog_sync
         from docgen.catalog_writer import SyncSummary
         from docgen.scip_config import ScipUnavailableError
 
@@ -335,13 +335,13 @@ class TestCliExitCodeOnScipError:
         cfg = Config()
         cfg._config['sources'] = {'scalaproject': {'path': str(source_dir)}}
         cfg._config['default_source'] = 'scalaproject'
-        monkeypatch.setattr('cli.generation.get_config', lambda: cfg)
+        monkeypatch.setattr('cli.catalog.get_config', lambda: cfg)
 
         # get_library returns a mock.
         from unittest.mock import MagicMock
 
         monkeypatch.setattr(
-            'cli.generation.get_library', lambda *_a, **_k: MagicMock(),
+            'cli.catalog.get_library', lambda *_a, **_k: MagicMock(),
         )
 
         args = argparse.Namespace(
@@ -362,7 +362,7 @@ class TestCliExitCodeOnScipError:
         """No scip_errors → exit 0 (regression check on the new branch)."""
         import argparse
 
-        from cli.generation import cmd_catalog_sync
+        from cli.catalog import cmd_catalog_sync
         from docgen.catalog_writer import SyncSummary
 
         source_dir = tmp_path / 'scalaproject'
@@ -380,12 +380,12 @@ class TestCliExitCodeOnScipError:
         cfg = Config()
         cfg._config['sources'] = {'scalaproject': {'path': str(source_dir)}}
         cfg._config['default_source'] = 'scalaproject'
-        monkeypatch.setattr('cli.generation.get_config', lambda: cfg)
+        monkeypatch.setattr('cli.catalog.get_config', lambda: cfg)
 
         from unittest.mock import MagicMock
 
         monkeypatch.setattr(
-            'cli.generation.get_library', lambda *_a, **_k: MagicMock(),
+            'cli.catalog.get_library', lambda *_a, **_k: MagicMock(),
         )
 
         args = argparse.Namespace(

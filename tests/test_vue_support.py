@@ -98,7 +98,7 @@ class TestSyncAutoConfiguresVue:
     def test_changed_vue_file_triggers_config_only_discover(
         self, tmp_path: Path, _restore_global_config,
     ) -> None:
-        from cli.generation import _maybe_auto_discover_for_new_language
+        from cli.sync import _maybe_auto_discover_for_new_language
         from config import get_config
         from ruamel.yaml import YAML
 
@@ -127,7 +127,7 @@ class TestSyncAutoConfiguresVue:
     def test_already_declared_vue_source_is_a_noop(
         self, tmp_path: Path, _restore_global_config,
     ) -> None:
-        from cli.generation import _maybe_auto_discover_for_new_language
+        from cli.sync import _maybe_auto_discover_for_new_language
         from config import get_config
 
         src = tmp_path / 'webapp'
@@ -372,7 +372,7 @@ class _MappingAdapter:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(b'\x08\x01synthetic')
         mapping = output.with_name('vue-mapping-typescript.json')
-        from cli.core import IndexerResult
+        from cli.index import IndexerResult
         return IndexerResult(
             success=True, indexer_version='fake/0.1',
             vue_mapping_path=str(mapping),
@@ -389,7 +389,7 @@ class _CopyMerger:
 class TestCmdIndexWritesVueMapping:
     def test_manifest_entry_gains_vue_mapping(self, tmp_path: Path) -> None:
         import config as config_module
-        from cli.core import cmd_index
+        from cli.index import cmd_index
 
         # Source with a .vue and a typescript manifest entry.
         (tmp_path / 'Foo.vue').write_text('<script setup>const x=1</script>')

@@ -701,11 +701,11 @@ class TestDescribeBatched:
             lambda: Config(cfg_dir / 'ariadne.yaml'),
         )
         monkeypatch.setattr(
-            'cli.generation.get_library',
+            'cli.catalog.get_library',
             lambda *_a, **_kw: Library(tmp_path / 'library.db'),
         )
 
-        from cli.generation import cmd_catalog_describe
+        from cli.catalog import cmd_catalog_describe
 
         # Without --batch: live path runs.
         args = argparse.Namespace(
@@ -774,7 +774,7 @@ class TestDescribeBatched:
         source_dir = tmp_path / 'src' / 'product'
         source_dir.mkdir(parents=True)
         monkeypatch.setattr(
-            'cli.generation.get_library',
+            'cli.catalog.get_library',
             lambda *_a, **_kw: Library(tmp_path / 'library.db'),
         )
 
@@ -790,7 +790,7 @@ class TestDescribeBatched:
             fake_batched,
         )
 
-        from cli.generation import cmd_catalog_describe
+        from cli.catalog import cmd_catalog_describe
 
         # provider is set explicitly: cfg.provider defaults to 'openai', so a
         # claude model with no provider: would be a fail-fast mismatch in
@@ -807,7 +807,7 @@ class TestDescribeBatched:
             # import get_config``), so patch the name in *its* module, not
             # ``config.get_config`` (which would be a no-op here).
             monkeypatch.setattr(
-                'cli.generation.get_config',
+                'cli.catalog.get_config',
                 lambda: Config(cfg_dir / 'ariadne.yaml'),
             )
 

@@ -41,7 +41,7 @@ class _RecordingAdapter:
         self.runs.append(cwd)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(b'\x08\x01synthetic')
-        from cli.core import IndexerResult
+        from cli.index import IndexerResult
         return IndexerResult(success=True, indexer_version='fake/0.1')
 
 
@@ -78,7 +78,7 @@ def _patch_persist(monkeypatch) -> None:
 
 
 def test_cmd_index_skips_indexer_when_scip_is_fresh(tmp_path, monkeypatch):
-    from cli.core import cmd_index
+    from cli.index import cmd_index
     source_root = _setup(tmp_path)
     # A fresh merged artifact already exists (just written -> age ~0).
     (source_root / '.ariadne' / 'index.scip').write_bytes(b'\x08\x01existing')

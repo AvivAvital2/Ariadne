@@ -6,7 +6,7 @@ it can catch dependencies that surface only through an installed package. The
 note therefore appears for excluded-dir evidence and is absent for first-party
 imports.
 """
-from cli.generate import _excluded_evidence_note
+from cli.generate_cost import _excluded_evidence_note
 from docgen.dependency import DetectedDependency, ImportEvidence
 
 

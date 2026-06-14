@@ -302,7 +302,7 @@ def test_source_add_ignore_staleness_flag(monkeypatch, tmp_path):
 # --- Onboarding: offer to mark the source staleness-exempt ---
 
 def test_prompt_ignore_staleness_non_tty_returns_false(monkeypatch):
-    from cli.generation import _prompt_ignore_staleness
+    from cli.onboard import _prompt_ignore_staleness
 
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
@@ -310,7 +310,7 @@ def test_prompt_ignore_staleness_non_tty_returns_false(monkeypatch):
 
 
 def test_prompt_ignore_staleness_reads_yes_no(monkeypatch):
-    from cli.generation import _prompt_ignore_staleness
+    from cli.onboard import _prompt_ignore_staleness
 
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
@@ -321,7 +321,7 @@ def test_prompt_ignore_staleness_reads_yes_no(monkeypatch):
 
 
 def test_apply_onboard_staleness_choice_persists_on_yes(tmp_path):
-    from cli.generation import _apply_onboard_staleness_choice
+    from cli.onboard import _apply_onboard_staleness_choice
     from config import Config
 
     repo = tmp_path / "r"

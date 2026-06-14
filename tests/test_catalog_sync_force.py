@@ -102,7 +102,7 @@ def test_catalog_sync_parser_accepts_force_flag():
     """The CLI parser must register ``--force`` for catalog-sync."""
     import argparse
 
-    from cli.generation import register_commands
+    from cli.catalog import register_commands
 
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest='cmd')

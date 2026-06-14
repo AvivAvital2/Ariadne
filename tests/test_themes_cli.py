@@ -78,7 +78,7 @@ def library(tmp_path: Path):
 @pytest.fixture
 def patched_get_library(monkeypatch, library: Library):
     """Make cli_generation.get_library / get_config return our library."""
-    monkeypatch.setattr('cli.generation.get_library', lambda *_a, **_k: library)
+    monkeypatch.setattr('cli.themes_cmd.get_library', lambda *_a, **_k: library)
     return library
 
 
@@ -124,7 +124,7 @@ class TestThemesArgparse:
             parser.parse_args(['themes', 'show'])
 
     def test_themes_handler_in_handlers_map(self) -> None:
-        from cli.generation import HANDLERS
+        from cli.themes_cmd import HANDLERS
 
         assert 'themes' in HANDLERS
 
@@ -143,7 +143,7 @@ class TestThemesBuild:
         """
         import argparse
 
-        from cli.generation import cmd_themes
+        from cli.themes_cmd import cmd_themes
 
         called: list[dict] = []
 
@@ -186,7 +186,7 @@ class TestThemesBuild:
         """
         import argparse
 
-        from cli.generation import cmd_themes_build
+        from cli.themes_cmd import cmd_themes_build
 
         called: list[dict] = []
 
@@ -219,7 +219,7 @@ class TestThemesBuild:
         """
         import argparse
 
-        from cli.generation import cmd_themes
+        from cli.themes_cmd import cmd_themes
 
         async def boom(library, writer, **kwargs):
             raise RuntimeError('kaboom')
@@ -249,7 +249,7 @@ class TestThemesList:
     ) -> None:
         import argparse
 
-        from cli.generation import cmd_themes
+        from cli.themes_cmd import cmd_themes
 
         args = argparse.Namespace(
             themes_action='list',
@@ -267,7 +267,7 @@ class TestThemesList:
     ) -> None:
         import argparse
 
-        from cli.generation import cmd_themes
+        from cli.themes_cmd import cmd_themes
 
         _bootstrap_theme(
             patched_get_library, 'c1', members=['el1', 'el2'], title='Retry Logic',
@@ -294,7 +294,7 @@ class TestThemesList:
         """Default behavior matches plan §5.6: coherent_only=True."""
         import argparse
 
-        from cli.generation import cmd_themes
+        from cli.themes_cmd import cmd_themes
 
         _bootstrap_theme(
             patched_get_library, 'c1', members=['el1'],
@@ -331,7 +331,7 @@ class TestThemesShow:
     ) -> None:
         import argparse
 
-        from cli.generation import cmd_themes
+        from cli.themes_cmd import cmd_themes
 
         _bootstrap_theme(
             patched_get_library, 'c1', members=['el1'],
@@ -359,7 +359,7 @@ class TestThemesShow:
         """Unknown cluster_id is a user-facing error → non-zero exit."""
         import argparse
 
-        from cli.generation import cmd_themes
+        from cli.themes_cmd import cmd_themes
 
         args = argparse.Namespace(
             themes_action='show',
@@ -384,7 +384,7 @@ class TestThemesDispatcher:
     ) -> None:
         import argparse
 
-        from cli.generation import cmd_themes
+        from cli.themes_cmd import cmd_themes
 
         args = argparse.Namespace(
             themes_action=None,

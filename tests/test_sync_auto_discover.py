@@ -42,7 +42,7 @@ def test_new_language_in_changed_files_triggers_config_only_discover(
     """A source declared with no SCIP block and changed files containing
     .ts → sync's helper sees the gap, invokes discover (config-only),
     YAML grows the auto-managed block."""
-    from cli.generation import _maybe_auto_discover_for_new_language
+    from cli.sync import _maybe_auto_discover_for_new_language
 
     src = tmp_path / 'webapp'
     _touch(src / 'package.json', '{"name": "webapp"}')
@@ -74,7 +74,7 @@ def test_new_language_in_changed_files_triggers_config_only_discover(
 def test_already_declared_language_is_a_noop(tmp_path: Path) -> None:
     """When index_kinds.javascript:scip is already in YAML and a .ts
     file changes, nothing happens — sync stays fast."""
-    from cli.generation import _maybe_auto_discover_for_new_language
+    from cli.sync import _maybe_auto_discover_for_new_language
 
     src = tmp_path / 'webapp'
     _touch(src / 'package.json', '{"name": "webapp"}')
@@ -109,7 +109,7 @@ def test_no_scip_routable_files_is_a_noop(tmp_path: Path) -> None:
     """Changed files in non-SCIP-routable languages (Python, JSON,
     Markdown) don't trigger discover. Pairs with the trigger test —
     a fix that always-or-never invokes discover fails one half."""
-    from cli.generation import _maybe_auto_discover_for_new_language
+    from cli.sync import _maybe_auto_discover_for_new_language
 
     src = tmp_path / 'pyproject'
     _touch(src / 'pkg' / '__init__.py')
@@ -136,7 +136,7 @@ def test_no_config_path_is_silent_noop(tmp_path: Path) -> None:
     """When cfg has no on-disk yaml (in-memory Config), there's
     nothing to write back to. Helper returns silently rather than
     raising."""
-    from cli.generation import _maybe_auto_discover_for_new_language
+    from cli.sync import _maybe_auto_discover_for_new_language
     from config import Config
 
     src = tmp_path / 'webapp'
@@ -156,7 +156,7 @@ def test_java_files_trigger_both_scala_and_java_index_kinds(
 ) -> None:
     """A .java file in changed_files triggers index_kinds.java AND
     index_kinds.scala (scip-java emits one .scip covering both)."""
-    from cli.generation import _maybe_auto_discover_for_new_language
+    from cli.sync import _maybe_auto_discover_for_new_language
 
     src = tmp_path / 'jvmproject'
     _touch(src / 'build.sbt', 'name := "jvm"')

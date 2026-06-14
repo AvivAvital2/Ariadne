@@ -79,13 +79,13 @@ class TestCommitScope:
         return repo, c1, db, Library
 
     def test_never_synced_returns_none_scope_with_head(self, tmp_path: Path) -> None:
-        from cli.generate import _commit_scope
+        from cli.generate_cost import _commit_scope
         repo, c1, db, _ = self._setup(tmp_path)
         scope, head = _commit_scope(db, 'src', repo, force=False)
         assert scope is None and head == c1   # full first pass; baseline to set
 
     def test_synced_returns_changed_set(self, tmp_path: Path) -> None:
-        from cli.generate import _commit_scope
+        from cli.generate_cost import _commit_scope
         from library import Library
         repo, c1, db, _ = self._setup(tmp_path)
         with Library(db) as lib:
@@ -96,7 +96,7 @@ class TestCommitScope:
         assert scope == frozenset({'a.py'}) and head == c2
 
     def test_force_returns_none_scope_but_head(self, tmp_path: Path) -> None:
-        from cli.generate import _commit_scope
+        from cli.generate_cost import _commit_scope
         from library import Library
         repo, c1, db, _ = self._setup(tmp_path)
         with Library(db) as lib:
@@ -105,7 +105,7 @@ class TestCommitScope:
         assert scope is None and head == c1   # full pass, still promotable
 
     def test_non_git_returns_none_none(self, tmp_path: Path) -> None:
-        from cli.generate import _commit_scope
+        from cli.generate_cost import _commit_scope
         plain = tmp_path / 'plain'
         plain.mkdir()
         db = tmp_path / 'lib.db'

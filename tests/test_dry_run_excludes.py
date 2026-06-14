@@ -22,7 +22,7 @@ class _Cfg:
 
 
 def test_dry_run_discovery_honors_config_excludes(tmp_path):
-    from cli.generation import _discover_files_for_estimate
+    from cli.dry_run import _discover_files_for_estimate
 
     (tmp_path / 'app.py').write_text('x = 1\n')
     (tmp_path / 'pkg').mkdir()

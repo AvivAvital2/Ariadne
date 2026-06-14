@@ -38,13 +38,13 @@ async def test_dry_run_generate_estimate_uses_full_default_doc_types(
     )
 
     # Stub the free phases — we only care about the estimate's inputs.
-    monkeypatch.setattr('cli.core.cmd_discover', lambda a: 0)
-    monkeypatch.setattr('cli.core.cmd_index', lambda a, **k: 0)
+    monkeypatch.setattr('cli.index.cmd_discover', lambda a: 0)
+    monkeypatch.setattr('cli.index.cmd_index', lambda a, **k: 0)
 
     async def _catalog_sync(a):
         return 0
 
-    monkeypatch.setattr('cli.generation.cmd_catalog_sync', _catalog_sync)
+    monkeypatch.setattr('cli.dry_run.cmd_catalog_sync', _catalog_sync)
 
     # Capture the doc_types + caching flag handed to estimate_cost.
     captured: list[tuple] = []
@@ -62,7 +62,7 @@ async def test_dry_run_generate_estimate_uses_full_default_doc_types(
 
     monkeypatch.setattr('docgen.pricing.estimate_cost', fake_estimate)
 
-    from cli.generation import cmd_dry_run
+    from cli.dry_run import cmd_dry_run
 
     args = argparse.Namespace(
         source='src', model='claude-opus-4-7',
@@ -117,13 +117,13 @@ async def test_dry_run_generate_estimate_honors_explicit_types(
         config_module.Config(config_path=yaml_path),
     )
 
-    monkeypatch.setattr('cli.core.cmd_discover', lambda a: 0)
-    monkeypatch.setattr('cli.core.cmd_index', lambda a, **k: 0)
+    monkeypatch.setattr('cli.index.cmd_discover', lambda a: 0)
+    monkeypatch.setattr('cli.index.cmd_index', lambda a, **k: 0)
 
     async def _catalog_sync(a):
         return 0
 
-    monkeypatch.setattr('cli.generation.cmd_catalog_sync', _catalog_sync)
+    monkeypatch.setattr('cli.dry_run.cmd_catalog_sync', _catalog_sync)
 
     captured: list[tuple] = []
 
@@ -138,7 +138,7 @@ async def test_dry_run_generate_estimate_honors_explicit_types(
 
     monkeypatch.setattr('docgen.pricing.estimate_cost', fake_estimate)
 
-    from cli.generation import cmd_dry_run
+    from cli.dry_run import cmd_dry_run
 
     args = argparse.Namespace(
         source='src', model='claude-opus-4-7',

@@ -81,7 +81,7 @@ class TestManifestOutput:
     ) -> None:
         """A discover run produces .ariadne/manifest.json with the
         indexer entries from the discovery engine."""
-        from cli.core import cmd_discover
+        from cli.index import cmd_discover
 
         _activate_yaml(configured_yaml)
         rc = cmd_discover(_make_args(source='scalaproject'))
@@ -102,7 +102,7 @@ class TestManifestOutput:
         """Paths in manifest.json are relative to the source root —
         otherwise the file isn't portable across machines (e.g., when
         the same checkout sits at a different absolute path)."""
-        from cli.core import cmd_discover
+        from cli.index import cmd_discover
 
         _activate_yaml(configured_yaml)
         cmd_discover(_make_args(source='scalaproject'))
@@ -123,7 +123,7 @@ class TestManifestOutput:
         """A source with no detectable indexer markers writes a manifest
         with an empty indexers list. Discovery succeeds; the user is
         informed that nothing to index was found."""
-        from cli.core import cmd_discover
+        from cli.index import cmd_discover
 
         # Empty source dir
         empty_src = tmp_path / 'empty_source'
@@ -156,7 +156,7 @@ class TestGitignore:
     ) -> None:
         """If no .gitignore exists, create one containing ``.ariadne/``.
         """
-        from cli.core import cmd_discover
+        from cli.index import cmd_discover
 
         gitignore = scalaproject_layout / '.gitignore'
         assert not gitignore.exists()
@@ -173,7 +173,7 @@ class TestGitignore:
     ) -> None:
         """An existing .gitignore (with other entries) gets the
         ``.ariadne/`` line appended; existing entries preserved."""
-        from cli.core import cmd_discover
+        from cli.index import cmd_discover
 
         gitignore = scalaproject_layout / '.gitignore'
         gitignore.write_text(
@@ -194,7 +194,7 @@ class TestGitignore:
     ) -> None:
         """If .ariadne/ is already in .gitignore, don't add it again
         on re-discovery."""
-        from cli.core import cmd_discover
+        from cli.index import cmd_discover
 
         gitignore = scalaproject_layout / '.gitignore'
         gitignore.write_text('.ariadne/\n', encoding='utf-8')
@@ -218,7 +218,7 @@ class TestFlagsAndErrors:
     ) -> None:
         """--dry-run shows what WOULD be written but doesn't touch
         the filesystem (no manifest, no .gitignore changes)."""
-        from cli.core import cmd_discover
+        from cli.index import cmd_discover
 
         _activate_yaml(configured_yaml)
         rc = cmd_discover(_make_args(source='scalaproject', dry_run=True))
@@ -234,7 +234,7 @@ class TestFlagsAndErrors:
     ) -> None:
         """Asking discover to process a source that isn't in
         ariadne.yaml fails with a non-zero exit code."""
-        from cli.core import cmd_discover
+        from cli.index import cmd_discover
 
         _activate_yaml(configured_yaml)
         rc = cmd_discover(_make_args(source='ghost_source'))
@@ -246,7 +246,7 @@ class TestFlagsAndErrors:
         """If --source isn't given and there's no default_source
         in config, fail with a non-zero exit code (don't silently
         process all sources)."""
-        from cli.core import cmd_discover
+        from cli.index import cmd_discover
 
         _activate_yaml(configured_yaml)
         rc = cmd_discover(_make_args())  # no source, no all
@@ -257,7 +257,7 @@ class TestFlagsAndErrors:
     ) -> None:
         """--all walks all configured sources, writing a manifest per
         source."""
-        from cli.core import cmd_discover
+        from cli.index import cmd_discover
 
         src_a = tmp_path / 'src_a'
         src_b = tmp_path / 'src_b'
@@ -293,7 +293,7 @@ class TestYamlAutoManagedBlock:
         """A scalaproject layout has a webapp/ subdir with package.json
         → typescript kind detected → index_kinds.javascript:scip lands
         in ariadne.yaml after discover."""
-        from cli.core import cmd_discover
+        from cli.index import cmd_discover
         from ruamel.yaml import YAML
 
         _activate_yaml(configured_yaml)
@@ -314,7 +314,7 @@ class TestYamlAutoManagedBlock:
     ) -> None:
         """The auto-managed scip block points artifact_path at the
         canonical <source>/.ariadne/index.scip — what cmd_index produces."""
-        from cli.core import cmd_discover
+        from cli.index import cmd_discover
         from ruamel.yaml import YAML
 
         _activate_yaml(configured_yaml)
@@ -335,7 +335,7 @@ class TestYamlAutoManagedBlock:
         """Re-running discover with no source change leaves the YAML
         mtime untouched. Pairs with the write tests so a fix that
         always-rewrites fails this half."""
-        from cli.core import cmd_discover
+        from cli.index import cmd_discover
 
         _activate_yaml(configured_yaml)
         cmd_discover(_make_args(source='scalaproject'))
@@ -352,7 +352,7 @@ class TestYamlAutoManagedBlock:
         files) gets no index_kinds block — Python catalog stays on
         ast-grep because its qualified_names already align with
         scip-python output."""
-        from cli.core import cmd_discover
+        from cli.index import cmd_discover
         from ruamel.yaml import YAML
 
         src = tmp_path / 'pyproject'

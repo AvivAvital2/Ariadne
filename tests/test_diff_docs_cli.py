@@ -34,7 +34,7 @@ class TestArgparse:
         assert args.file == 'x.py'
 
     def test_diff_docs_handler_in_handlers_map(self) -> None:
-        from cli.generation import HANDLERS
+        from cli.themes_cmd import HANDLERS
 
         assert 'diff-docs' in HANDLERS
 
@@ -67,7 +67,7 @@ class TestRuns:
             def public_fn(): return 1
         ''')
 
-        from cli.generation import cmd_diff_docs
+        from cli.themes_cmd import cmd_diff_docs
 
         with patch.object(
             DocGenerator, '_call_llm', new_callable=AsyncMock,
@@ -102,7 +102,7 @@ class TestRuns:
                 return 0
         ''')
 
-        from cli.generation import cmd_diff_docs
+        from cli.themes_cmd import cmd_diff_docs
 
         with patch.object(
             DocGenerator, '_call_llm', new_callable=AsyncMock,
@@ -126,7 +126,7 @@ class TestRuns:
     ) -> None:
         import argparse
 
-        from cli.generation import cmd_diff_docs
+        from cli.themes_cmd import cmd_diff_docs
 
         args = argparse.Namespace(
             file=str(tmp_path / 'does_not_exist.py'),
@@ -148,7 +148,7 @@ class TestRuns:
         f = tmp_path / 'config.json'
         f.write_text('{}', encoding='utf-8')
 
-        from cli.generation import cmd_diff_docs
+        from cli.themes_cmd import cmd_diff_docs
 
         args = argparse.Namespace(
             file=str(f),

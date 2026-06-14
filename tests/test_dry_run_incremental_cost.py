@@ -17,8 +17,7 @@ from pathlib import Path
 
 import pytest
 
-import cli.generate as gen
-from cli.generate import _print_cost_estimate
+from cli.generate_cost import _print_cost_estimate
 from docgen.staleness import StalenessTracker
 
 
@@ -46,20 +45,22 @@ def _estimate(src: Path, sdb: Path) -> int:
     )
 
 
-def test_preview_prices_only_stale_files(tmp_path, capsys, monkeypatch) -> None:
-    # Wide console so rich doesn't word-wrap the note mid-phrase, which
-    # would break substring assertions (a display-width artifact only).
-    from rich.console import Console
-    monkeypatch.setattr(gen, 'console', Console(width=200))
-
+def test_preview_prices_only_stale_files(tmp_path, capsys) -> None:
     src = _src_tree(tmp_path)
     sdb = tmp_path / 'staleness.db'
+
+    # rich word-wraps notes to the (test-time default) console width, which
+    # would split multi-word phrases mid-assertion — a display artifact only.
+    # Collapse all whitespace so substring checks are width-independent
+    # (no need to patch a wide console).
+    def _flat() -> str:
+        return ' '.join(capsys.readouterr().out.split())
 
     # Fresh DB: nothing documented yet → both files are stale/new, so
     # the preview is a full run and carries no "already generated" note.
     rc = _estimate(src, sdb)
     assert rc == 0
-    out = capsys.readouterr().out
+    out = _flat()
     assert '2 stale/new of 2 files' in out, out
     assert 'Full regeneration' not in out, (
         'nothing skipped yet — no incremental note expected'
@@ -84,7 +85,7 @@ def test_preview_prices_only_stale_files(tmp_path, capsys, monkeypatch) -> None:
     # and the full-regeneration figure appears as a secondary note.
     rc = _estimate(src, sdb)
     assert rc == 0
-    out = capsys.readouterr().out
+    out = _flat()
     assert '1 stale/new of 2 files' in out, out
     assert 'up-to-date' in out, out
     assert 'Full regeneration' in out, out
@@ -106,17 +107,17 @@ async def test_onboard_preview_prices_only_stale_files(
     from tests._scoped_config_fixture import install_test_config
 
     install_test_config(monkeypatch, tmp_path, 'ds')
-    monkeypatch.setattr('cli.generation.console', Console(width=200))
+    monkeypatch.setattr('cli.dry_run.console', Console(width=200))
 
     src = _src_tree(tmp_path)  # alpha.py, beta.py under tmp_path
 
     # Mock the free phases so no real discover/index/catalog-sync runs.
-    monkeypatch.setattr('cli.core.cmd_discover', lambda *_a, **_k: 0)
-    monkeypatch.setattr('cli.core.cmd_index', lambda *_a, **_k: 0)
+    monkeypatch.setattr('cli.index.cmd_discover', lambda *_a, **_k: 0)
+    monkeypatch.setattr('cli.index.cmd_index', lambda *_a, **_k: 0)
 
     async def _no_catalog_sync(*_a, **_k):
         return 0
-    monkeypatch.setattr('cli.generation.cmd_catalog_sync', _no_catalog_sync)
+    monkeypatch.setattr('cli.dry_run.cmd_catalog_sync', _no_catalog_sync)
 
     # alpha.py is up-to-date: it has a doc of every default type AND a
     # matching staleness record. beta.py has neither → stale.
@@ -144,7 +145,7 @@ async def test_onboard_preview_prices_only_stale_files(
             src / 'alpha.py', doc_ids, base_path=tmp_path,
         )
 
-    from cli.generation import cmd_dry_run
+    from cli.dry_run import cmd_dry_run
     args = argparse.Namespace(
         source='ds', model='gpt-5.4', db=None,
         verbose=False, concurrency=None, force=False,

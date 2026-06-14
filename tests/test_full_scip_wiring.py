@@ -133,7 +133,7 @@ class TestCmdCheckAutoEnablesFlag:
         """
         import argparse
 
-        from cli.generation import cmd_check
+        from cli.maintenance import cmd_check
 
         captured_config = {}
 
@@ -159,7 +159,7 @@ class TestCmdCheckAutoEnablesFlag:
         )
 
         cfg = _scip_yaml_config(tmp_path)
-        monkeypatch.setattr('cli.generation.get_config', lambda: cfg)
+        monkeypatch.setattr('cli.maintenance.get_config', lambda: cfg)
 
         args = argparse.Namespace(
             source='scalaproject', verbose=False, db=None,
@@ -254,7 +254,7 @@ class TestCmdSyncAutoEnablesFlag:
         """
         import argparse
 
-        from cli.generation import cmd_sync
+        from cli.sync import cmd_sync
 
         captured_config = {}
 
@@ -286,7 +286,7 @@ class TestCmdSyncAutoEnablesFlag:
         )
 
         cfg = _scip_yaml_config(tmp_path)
-        monkeypatch.setattr('cli.generation.get_config', lambda: cfg)
+        monkeypatch.setattr('cli.sync.get_config', lambda: cfg)
 
         # Stub git interactions so we drive the regen path with a known set.
         import subprocess
@@ -305,7 +305,7 @@ class TestCmdSyncAutoEnablesFlag:
         lib.get_sync_state.return_value = ('def456', '2026-04-28T10:00:00')
         lib.find_documents_by_source_files.return_value = []
         lib.deprecate_stale_gotchas.return_value = 0
-        monkeypatch.setattr('cli.generation.get_library', lambda *_a, **_k: lib)
+        monkeypatch.setattr('cli.sync.get_library', lambda *_a, **_k: lib)
 
         monkeypatch.setattr(
             'git_ops.get_current_branch', lambda p: 'main', raising=False,
@@ -367,7 +367,7 @@ class TestNonScipSourcesAlsoGetCatalogPath:
     ) -> None:
         import argparse
 
-        from cli.generation import cmd_sync
+        from cli.sync import cmd_sync
 
         captured_config = {}
 
@@ -397,7 +397,7 @@ class TestNonScipSourcesAlsoGetCatalogPath:
         )
 
         cfg = _non_scip_yaml_config(tmp_path)
-        monkeypatch.setattr('cli.generation.get_config', lambda: cfg)
+        monkeypatch.setattr('cli.sync.get_config', lambda: cfg)
 
         import subprocess
         def fake_run(args, **kw):
@@ -415,7 +415,7 @@ class TestNonScipSourcesAlsoGetCatalogPath:
         lib.get_sync_state.return_value = ('def456', '2026-04-28T10:00:00')
         lib.find_documents_by_source_files.return_value = []
         lib.deprecate_stale_gotchas.return_value = 0
-        monkeypatch.setattr('cli.generation.get_library', lambda *_a, **_k: lib)
+        monkeypatch.setattr('cli.sync.get_library', lambda *_a, **_k: lib)
 
         monkeypatch.setattr(
             'git_ops.get_current_branch', lambda p: 'main', raising=False,

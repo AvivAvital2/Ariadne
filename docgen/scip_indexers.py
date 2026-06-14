@@ -25,7 +25,7 @@ from pathlib import Path
 
 from attrs import frozen
 
-from cli.core import IndexerResult
+from cli.index import IndexerResult
 
 
 # ---------------------------------------------------------------------------

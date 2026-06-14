@@ -55,7 +55,7 @@ def _force_tty(monkeypatch, value: bool = True) -> None:
 
 
 def test_candidates_exclude_self_and_ariadne_repo(tmp_path):
-    from cli.generation import _dependency_candidates
+    from cli.onboard import _dependency_candidates
 
     cfg = _config_with_candidates(tmp_path)
     # sorted; the onboarded source and Ariadne's own repo are filtered out
@@ -64,7 +64,7 @@ def test_candidates_exclude_self_and_ariadne_repo(tmp_path):
 
 def test_picker_prechecks_current_and_persists_selection(tmp_path, monkeypatch):
     from config import Config
-    from cli import generation
+    from cli import onboard
 
     cfg = _config_with_candidates(tmp_path)
     cfg.set_source_dependencies('svc_main', ['lib_a'])          # an existing dep
@@ -78,9 +78,9 @@ def test_picker_prechecks_current_and_persists_selection(tmp_path, monkeypatch):
         seen['selected'] = set(selected)
         return ['lib_a', 'lib_b']                              # user also checks lib_b
 
-    monkeypatch.setattr(generation, '_arrow_key_multiselect', fake_widget)
+    monkeypatch.setattr(onboard, '_arrow_key_multiselect', fake_widget)
 
-    generation._select_onboard_dependencies(cfg, 'svc_main')
+    onboard._select_onboard_dependencies(cfg, 'svc_main')
 
     # the existing dep arrives pre-checked, by index into the option list
     assert seen['options'] == ['lib_a', 'lib_b']
@@ -94,7 +94,7 @@ def test_picker_prechecks_current_and_persists_selection(tmp_path, monkeypatch):
 
 def test_non_tty_is_silent_noop(tmp_path, monkeypatch):
     from config import Config
-    from cli import generation
+    from cli import onboard
 
     cfg = _config_with_candidates(tmp_path)
     _force_tty(monkeypatch, value=False)
@@ -102,8 +102,8 @@ def test_non_tty_is_silent_noop(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise AssertionError('widget must not run without a TTY')
 
-    monkeypatch.setattr(generation, '_arrow_key_multiselect', boom)
-    generation._select_onboard_dependencies(cfg, 'svc_main')   # must not raise
+    monkeypatch.setattr(onboard, '_arrow_key_multiselect', boom)
+    onboard._select_onboard_dependencies(cfg, 'svc_main')   # must not raise
 
     assert Config(
         config_path=tmp_path / 'ariadne.yaml',
@@ -112,7 +112,7 @@ def test_non_tty_is_silent_noop(tmp_path, monkeypatch):
 
 def test_no_candidates_is_silent_noop(tmp_path, monkeypatch):
     from config import _PACKAGE_ROOT
-    from cli import generation
+    from cli import onboard
 
     (tmp_path / 'svc_main').mkdir()
     cfg = _config(tmp_path, f"""
@@ -126,5 +126,5 @@ def test_no_candidates_is_silent_noop(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise AssertionError('widget must not run with no candidates')
 
-    monkeypatch.setattr(generation, '_arrow_key_multiselect', boom)
-    generation._select_onboard_dependencies(cfg, 'svc_main')   # must not raise
+    monkeypatch.setattr(onboard, '_arrow_key_multiselect', boom)
+    onboard._select_onboard_dependencies(cfg, 'svc_main')   # must not raise

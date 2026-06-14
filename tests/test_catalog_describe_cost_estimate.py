@@ -64,7 +64,7 @@ class TestCatalogDescribeDryRun:
             'docgen.catalog_describer.chat_complete', counting_chat_complete,
         )
         monkeypatch.setattr(
-            'cli.generation.get_library',
+            'cli.catalog.get_library',
             lambda *_a, **_kw: Library(tmp_path / 'library.db'),
         )
 
@@ -72,7 +72,7 @@ class TestCatalogDescribeDryRun:
             source='product', force=False, model=None, concurrency=4,
             max_calls=None, db=None, dry_run=True,
         )
-        from cli.generation import cmd_catalog_describe
+        from cli.catalog import cmd_catalog_describe
         rc = await cmd_catalog_describe(args)
         assert rc == 0
         assert call_count['n'] == 0, (
@@ -116,7 +116,7 @@ class TestCatalogDescribeDryRun:
             )),
         )
         monkeypatch.setattr(
-            'cli.generation.get_library',
+            'cli.catalog.get_library',
             lambda *_a, **_kw: Library(tmp_path / 'library.db'),
         )
 
@@ -127,7 +127,7 @@ class TestCatalogDescribeDryRun:
             model='claude-opus-4-7',
             concurrency=4, max_calls=None, db=None, dry_run=True,
         )
-        from cli.generation import cmd_catalog_describe
+        from cli.catalog import cmd_catalog_describe
         rc = await cmd_catalog_describe(args)
         assert rc == 0
 

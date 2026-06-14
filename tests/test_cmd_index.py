@@ -82,7 +82,7 @@ class FakeAdapter:
         if self.success:
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(self.scip_bytes)
-        from cli.core import IndexerResult
+        from cli.index import IndexerResult
         return IndexerResult(
             success=self.success,
             indexer_version=self.version,
@@ -177,7 +177,7 @@ class TestAdapterDispatch:
     def test_runs_python_adapter_for_python_entries(
         self, python_source: Path, configured_for: Path,
     ) -> None:
-        from cli.core import cmd_index
+        from cli.index import cmd_index
 
         adapter = FakeAdapter()
         merger = FakeMerger()
@@ -203,7 +203,7 @@ class TestAdapterDispatch:
         directly to ``.ariadne/index.scip`` — no merge needed and the
         external ``scip`` CLI isn't required. Pins the optimization
         that single-language projects don't need scip on PATH."""
-        from cli.core import cmd_index
+        from cli.index import cmd_index
 
         adapter = FakeAdapter()
         merger = FakeMerger()
@@ -226,7 +226,7 @@ class TestAdapterDispatch:
         ``.ariadne/index.scip``. Pairs with the single-intermediate
         test above so a fix that always-or-never invokes the merger
         fails at least one half."""
-        from cli.core import cmd_index
+        from cli.index import cmd_index
 
         (tmp_path / 'mypkg').mkdir()
         (tmp_path / 'mypkg' / '__init__.py').write_text(
@@ -267,7 +267,7 @@ class TestAdapterDispatch:
         """After ariadne index, each indexer entry in manifest.json
         gains scip_path + indexed_at + indexer_version. Subsequent
         ariadne sync reads these to load the artifact."""
-        from cli.core import cmd_index
+        from cli.index import cmd_index
 
         adapter = FakeAdapter(version='scip-python/1.4.1')
         cmd_index(
@@ -295,7 +295,7 @@ class TestPerLanguageGroupingOrder:
     def test_runs_grouped_by_language_in_volume_order(
         self, tmp_path: Path,
     ) -> None:
-        from cli.core import IndexerResult, cmd_index
+        from cli.index import IndexerResult, cmd_index
 
         # Controlled volumes: python=1, java=2, typescript=4 files.
         (tmp_path / 'py').mkdir()
@@ -372,7 +372,7 @@ class TestPolyglotPartialSlice:
     def test_unknown_kind_skipped_with_warning(
         self, tmp_path: Path,
     ) -> None:
-        from cli.core import cmd_index
+        from cli.index import cmd_index
 
         (tmp_path / 'pkg').mkdir()
         (tmp_path / 'pkg' / '__init__.py').write_text('', encoding='utf-8')
@@ -412,7 +412,7 @@ class TestHardFail:
     ) -> None:
         """Per decision #5: any indexer failure halts the run with
         non-zero exit. No partial-success, no fallback."""
-        from cli.core import cmd_index
+        from cli.index import cmd_index
 
         adapter = FakeAdapter(success=False, error_message='pyright crashed')
         merger = FakeMerger()
@@ -433,7 +433,7 @@ class TestHardFail:
         cmd_index exits nonzero. Single-intermediate projects bypass
         the merger entirely (see TestAdapterDispatch) so this contract
         only applies when there are 2+ intermediates."""
-        from cli.core import cmd_index
+        from cli.index import cmd_index
 
         (tmp_path / 'mypkg').mkdir()
         (tmp_path / 'mypkg' / '__init__.py').write_text(
@@ -470,7 +470,7 @@ class TestFlags:
     def test_dry_run_does_not_invoke_adapter_or_merge(
         self, python_source: Path, configured_for: Path,
     ) -> None:
-        from cli.core import cmd_index
+        from cli.index import cmd_index
 
         adapter = FakeAdapter()
         merger = FakeMerger()
@@ -492,7 +492,7 @@ class TestFlags:
     ) -> None:
         """--kind python runs only python entries even when other
         kinds are present in the manifest."""
-        from cli.core import cmd_index
+        from cli.index import cmd_index
 
         (tmp_path / 'pkg').mkdir()
         (tmp_path / 'pkg' / '__init__.py').write_text('', encoding='utf-8')

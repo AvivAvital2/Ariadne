@@ -12,7 +12,7 @@ from pathlib import Path
 def test_describe_tokens_per_call_prefers_calibration(tmp_path):
     """The describe estimate uses real calibrated tokens/call when the
     store has data for the model, else the 200/60 heuristic."""
-    from cli.generation import (
+    from cli.dry_run import (
         _DESCRIBE_INPUT_TOKENS_PER_CALL,
         _DESCRIBE_OUTPUT_TOKENS_PER_CALL,
         _describe_tokens_per_call,

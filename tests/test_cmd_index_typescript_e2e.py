@@ -46,7 +46,7 @@ class _FakeTsAdapter:
         })
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(self._scip_bytes)
-        from cli.core import IndexerResult
+        from cli.index import IndexerResult
         return IndexerResult(
             success=True, indexer_version='scip-typescript/fake',
         )
@@ -109,7 +109,7 @@ def test_typescript_source_runs_adapter_and_persists_to_library_scip(
     end of a successful index, or if the typescript kind regression
     breaks the kind→language mapping in ``load_source_from_manifest``.
     """
-    from cli.core import cmd_index
+    from cli.index import cmd_index
 
     # Set up a TS-shaped source tree
     source_root = tmp_path / 'webapp'
@@ -227,7 +227,7 @@ def test_typescript_dry_run_skips_persist(
     therefore before persist. ``library_scip`` stays empty. Pairs with
     the happy-path test so a fix that runs persist unconditionally is
     caught here."""
-    from cli.core import cmd_index
+    from cli.index import cmd_index
 
     source_root = tmp_path / 'webapp'
     source_root.mkdir()

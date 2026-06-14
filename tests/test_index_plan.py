@@ -16,7 +16,7 @@ from __future__ import annotations
 
 
 def test_groups_by_kind_and_orders_by_volume_ascending():
-    from cli.core import _plan_indexing
+    from cli.index import _plan_indexing
 
     # Interleaved manifest, mixed languages. Counts chosen so the
     # ascending-volume order (python=30, java=50, typescript=900)
@@ -48,7 +48,7 @@ def test_groups_by_kind_and_orders_by_volume_ascending():
 
 
 def test_absent_languages_do_not_appear():
-    from cli.core import _plan_indexing
+    from cli.index import _plan_indexing
 
     entries = [
         {'kind': 'python', 'cwd': 'a', 'files': 5},
@@ -62,7 +62,7 @@ def test_only_python_streams_file_progress():
     """Only the Python adapter emits per-file events, so only its bar can
     be a determinate file counter; opaque adapters (java/typescript) get
     an animated indeterminate bar instead of a frozen 0/N."""
-    from cli.core import _streams_file_progress
+    from cli.index import _streams_file_progress
 
     assert _streams_file_progress('python') is True
     assert _streams_file_progress('typescript') is False
@@ -74,7 +74,7 @@ def test_pulse_bar_only_for_java():
     """Only scip-java (single monolithic compile, no progress) gets the
     animated indeterminate bar. Python and TypeScript/JS keep the
     determinate file-counter bar."""
-    from cli.core import _pulse_bar
+    from cli.index import _pulse_bar
 
     assert _pulse_bar('java') is True
     assert _pulse_bar('python') is False
@@ -82,7 +82,7 @@ def test_pulse_bar_only_for_java():
 
 
 def test_index_detail_text():
-    from cli.core import _index_detail_text
+    from cli.index import _index_detail_text
 
     # Determinate (Python, TypeScript/JS): X/N files counter.
     assert _index_detail_text(1337, 512, pulse=False) == '512/1337 files'
@@ -94,7 +94,7 @@ def test_index_detail_text():
 def test_index_summary_renders_nested_indented_lines():
     """The per-language summary the callers print under ``✓ Index`` is
     one indented line per language: name, file count, m:ss elapsed."""
-    from cli.generation import _print_index_summary, console
+    from cli.dry_run import _print_index_summary, console
 
     summary = [
         {'language': 'Python', 'files': 1500, 'seconds': 8},
@@ -113,7 +113,7 @@ def test_index_summary_renders_nested_indented_lines():
 
 
 def test_volume_tie_breaks_deterministically_by_kind_name():
-    from cli.core import _plan_indexing
+    from cli.index import _plan_indexing
 
     # Equal volumes → stable, deterministic order (kind name).
     entries = [

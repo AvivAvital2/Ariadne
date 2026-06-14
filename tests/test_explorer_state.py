@@ -270,7 +270,7 @@ async def test_tui_app_toggle_and_apply():
     # Drive the full-screen Textual explorer headlessly: move the cursor to the
     # first child (children are ranked by cost, so it's the dearest one),
     # toggle it excluded, apply. The shared ExplorerState carries the rule.
-    from cli.generation import _make_explorer_tui_app
+    from cli.explorer_ui import _make_explorer_tui_app
 
     tree, costs = _fixture()
     state = ExplorerState(tree, costs)
@@ -300,7 +300,7 @@ async def test_tui_doc_types_recost_live():
     # Toggling a doc type in the left panel re-prices the whole tree: here the
     # recost scales cost with the number of selected types, so unchecking one
     # drops the total.
-    from cli.generation import _make_explorer_tui_app
+    from cli.explorer_ui import _make_explorer_tui_app
 
     tree, _ = _fixture()
     doc_types = ('explanation', 'architecture', 'qa')
@@ -339,7 +339,7 @@ async def test_tui_doc_type_checkbox_glyph():
     # Selected types show a check (☑); unselected show nothing (no gray X).
     from textual.widgets import SelectionList
 
-    from cli.generation import _make_explorer_tui_app
+    from cli.explorer_ui import _make_explorer_tui_app
 
     tree, _ = _fixture()
     dt = ('explanation', 'architecture', 'qa')
@@ -363,7 +363,7 @@ async def test_tui_tree_aligns_files_with_dirs():
     # bar/$ columns line up across files and folders.
     from textual.widgets import Tree
 
-    from cli.generation import _make_explorer_tui_app
+    from cli.explorer_ui import _make_explorer_tui_app
 
     tree, costs = _fixture()
     app = _make_explorer_tui_app(ExplorerState(tree, costs))
@@ -383,7 +383,7 @@ async def test_tui_tree_aligns_files_with_dirs():
 
 def test_explorer_theme_persistence(tmp_path, monkeypatch):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
-    from cli.generation import _load_explorer_theme, _save_explorer_theme
+    from cli.explorer_ui import _load_explorer_theme, _save_explorer_theme
 
     assert _load_explorer_theme() == 'ansi-dark'   # default when unset
     _save_explorer_theme('nord')
@@ -394,7 +394,7 @@ def test_explorer_theme_persistence(tmp_path, monkeypatch):
 
 async def test_theme_picker_preview_and_commit(tmp_path, monkeypatch):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
-    from cli.generation import _load_explorer_theme, _make_explorer_tui_app
+    from cli.explorer_ui import _load_explorer_theme, _make_explorer_tui_app
 
     tree, costs = _fixture()
     app = _make_explorer_tui_app(ExplorerState(tree, costs))
@@ -411,7 +411,7 @@ async def test_theme_picker_preview_and_commit(tmp_path, monkeypatch):
 
 async def test_theme_picker_cancel_reverts(tmp_path, monkeypatch):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
-    from cli.generation import _make_explorer_tui_app
+    from cli.explorer_ui import _make_explorer_tui_app
 
     tree, costs = _fixture()
     app = _make_explorer_tui_app(ExplorerState(tree, costs))
@@ -429,7 +429,7 @@ async def test_tui_left_returns_to_parent_dir():
     # In a subdirectory, ← on a file moves the cursor back to the dir name.
     from textual.widgets import Tree
 
-    from cli.generation import _make_explorer_tui_app
+    from cli.explorer_ui import _make_explorer_tui_app
 
     tree, costs = _fixture()
     state = ExplorerState(tree, costs)
@@ -451,12 +451,12 @@ def test_run_explorer_tui_is_async():
     # would nest asyncio.run() and raise at runtime.
     import inspect
 
-    from cli.generation import run_explorer_tui
+    from cli.explorer_ui import run_explorer_tui
     assert inspect.iscoroutinefunction(run_explorer_tui)
 
 
 async def test_tui_app_cancel_keeps_clean():
-    from cli.generation import _make_explorer_tui_app
+    from cli.explorer_ui import _make_explorer_tui_app
 
     tree, costs = _fixture()
     state = ExplorerState(tree, costs)

@@ -35,7 +35,7 @@ def _test_config(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_onboard_evolves_through_contract(monkeypatch, capsys):
-    from cli.generation import cmd_onboard
+    from cli.onboard import cmd_onboard
 
     invoked: list[str] = []
     seen_args: dict[str, argparse.Namespace] = {}
@@ -56,27 +56,27 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
 
     # Paid phases — these are what onboard runs directly after approval.
     monkeypatch.setattr(
-        'cli.generation.cmd_catalog_describe',
+        'cli.onboard.cmd_catalog_describe',
         make_async_stub('catalog-describe'),
     )
     monkeypatch.setattr(
-        'cli.generation.cmd_generate', make_async_stub('generate'),
+        'cli.onboard.cmd_generate', make_async_stub('generate'),
     )
     # onboard awaits the themes phase as a coroutine (its pipeline is
     # async). Stub the awaitable core, not the sync `cmd_themes`
     # dispatcher — the async stub also guards that onboard actually
     # awaits it.
     monkeypatch.setattr(
-        'cli.generation.cmd_themes_build', make_async_stub('themes'),
+        'cli.onboard.cmd_themes_build', make_async_stub('themes'),
     )
 
     # Free phases live INSIDE the preview. Stub them so that if onboard
     # ever re-runs them directly, they'd show up in `invoked` (they must
     # not). The preview itself is stubbed below.
-    monkeypatch.setattr('cli.core.cmd_discover', make_sync_stub('discover'))
-    monkeypatch.setattr('cli.core.cmd_index', make_sync_stub('index'))
+    monkeypatch.setattr('cli.index.cmd_discover', make_sync_stub('discover'))
+    monkeypatch.setattr('cli.index.cmd_index', make_sync_stub('index'))
     monkeypatch.setattr(
-        'cli.generation.cmd_catalog_sync', make_async_stub('catalog-sync'),
+        'cli.catalog.cmd_catalog_sync', make_async_stub('catalog-sync'),
     )
 
     # The preview (free phases + estimate) is delegated to cmd_dry_run.
@@ -87,12 +87,12 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
         dry_run_calls.append(args)
         return dry_run_rc['rc']
 
-    monkeypatch.setattr('cli.generation.cmd_dry_run', fake_dry_run)
+    monkeypatch.setattr('cli.onboard.cmd_dry_run', fake_dry_run)
 
     # Proceed decision (interactive prompt) — monkeypatched per demand.
     proceed = {'value': False}
     monkeypatch.setattr(
-        'cli.generation._prompt_proceed', lambda: proceed['value'],
+        'cli.onboard._prompt_proceed', lambda: proceed['value'],
     )
 
     # By default, the doc-type picker is non-interactive in tests
@@ -130,7 +130,7 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
     # ---- T3: --approve skips the prompt, runs paid phases -----------
     dry_run_calls.clear(); invoked.clear(); seen_args.clear()
     monkeypatch.setattr(
-        'cli.generation._prompt_proceed',
+        'cli.onboard._prompt_proceed',
         lambda: (_ for _ in ()).throw(
             AssertionError('--approve must NOT prompt'),
         ),
@@ -158,7 +158,7 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
     # ---- T6: paid-phase failure stops the pipeline ------------------
     invoked.clear(); seen_args.clear()
     monkeypatch.setattr(
-        'cli.generation.cmd_generate', make_async_stub('generate', rc=5),
+        'cli.onboard.cmd_generate', make_async_stub('generate', rc=5),
     )
     rc = await cmd_onboard(_args(approve=True))
     assert rc == 5
@@ -166,7 +166,7 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
         f'themes must not run after generate fails; got {invoked}'
     )
     monkeypatch.setattr(
-        'cli.generation.cmd_generate', make_async_stub('generate'),
+        'cli.onboard.cmd_generate', make_async_stub('generate'),
     )
 
     # ---- T7: --concurrency reaches preview + paid phases ------------
@@ -193,7 +193,7 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
     # ---- T9: the interactive doc-type selection reaches generate ----
     invoked.clear(); seen_args.clear()
     monkeypatch.setattr(
-        'cli.generation._select_generate_doc_types',
+        'cli.onboard._select_generate_doc_types',
         lambda defaults: ('explanation', 'qa'),
     )
     rc = await cmd_onboard(_args(approve=True))
@@ -206,7 +206,7 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
     # ---- T10: explicit --types wins and skips the picker ------------
     invoked.clear(); seen_args.clear()
     monkeypatch.setattr(
-        'cli.generation._select_generate_doc_types',
+        'cli.onboard._select_generate_doc_types',
         lambda defaults: (_ for _ in ()).throw(
             AssertionError('--types must skip the interactive picker'),
         ),

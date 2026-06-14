@@ -58,7 +58,7 @@ class _FakeAdapter:
     ):
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(b'\x08\x01synthetic')
-        from cli.core import IndexerResult
+        from cli.index import IndexerResult
         return IndexerResult(
             success=True, indexer_version='fake/0.1',
         )
@@ -111,7 +111,7 @@ def test_cmd_index_invokes_all_persist_steps_in_dependency_order(
     Every wrapper records its name when called. The recorded order
     must match the contract.
     """
-    from cli.core import cmd_index
+    from cli.index import cmd_index
 
     source_root = _setup_python_source(tmp_path)
 
@@ -180,7 +180,7 @@ def test_cmd_index_skips_persist_api_endpoints_when_no_swagger_declared(
     The other 9 steps run unconditionally because each is fail-soft
     on missing artifacts. Pairs with the in-order test so a fix
     that always-or-never runs api_endpoints fails one half."""
-    from cli.core import cmd_index
+    from cli.index import cmd_index
 
     source_root = _setup_python_source(tmp_path)
     # Note: NO swagger_paths in YAML.
@@ -246,7 +246,7 @@ def test_cmd_index_dry_run_skips_entire_persist_chain(
     untouched. Pinned per the same per-step pattern that
     test_cmd_index_typescript_e2e proved for persist_all_sources
     alone — extended here to cover the full chain."""
-    from cli.core import cmd_index
+    from cli.index import cmd_index
 
     source_root = _setup_python_source(tmp_path)
 

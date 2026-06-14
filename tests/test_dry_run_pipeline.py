@@ -124,10 +124,10 @@ class TestDryRunPipeline:
             await mock_catalog_sync(args)
             return 0
 
-        monkeypatch.setattr('cli.core.cmd_discover', assert_discover_args)
-        monkeypatch.setattr('cli.core.cmd_index', assert_index_args)
+        monkeypatch.setattr('cli.index.cmd_discover', assert_discover_args)
+        monkeypatch.setattr('cli.index.cmd_index', assert_index_args)
         monkeypatch.setattr(
-            'cli.generation.cmd_catalog_sync', assert_catalog_sync_args,
+            'cli.dry_run.cmd_catalog_sync', assert_catalog_sync_args,
         )
 
         # Hard fail if any LLM call escapes.
@@ -142,7 +142,7 @@ class TestDryRunPipeline:
             counting_chat_complete,
         )
         monkeypatch.setattr(
-            'cli.generation.get_library',
+            'cli.dry_run.get_library',
             lambda *_a, **_kw: Library(tmp_path / 'library.db'),
         )
 
@@ -171,7 +171,7 @@ class TestDryRunPipeline:
             db=None,
             model='claude-opus-4-7',
         )
-        from cli.generation import cmd_dry_run
+        from cli.dry_run import cmd_dry_run
         rc = await cmd_dry_run(args)
 
         assert rc == 0
@@ -366,7 +366,7 @@ class TestDryRunPipeline:
             source='product', db=None, model='claude-opus-4-7',
             verbose=True,
         )
-        from cli.generation import cmd_dry_run as _cmd_dry_run
+        from cli.dry_run import cmd_dry_run as _cmd_dry_run
         await _cmd_dry_run(verbose_args)
         verbose_out = capsys.readouterr().out
         assert len(verbose_out) > len(non_verbose_out), (
@@ -435,13 +435,13 @@ class TestDryRunPipeline:
             await asyncio.sleep(0.1)
             return 0
 
-        monkeypatch.setattr('cli.core.cmd_discover', slow_discover)
-        monkeypatch.setattr('cli.core.cmd_index', slow_index)
+        monkeypatch.setattr('cli.index.cmd_discover', slow_discover)
+        monkeypatch.setattr('cli.index.cmd_index', slow_index)
         monkeypatch.setattr(
-            'cli.generation.cmd_catalog_sync', slow_catalog_sync,
+            'cli.dry_run.cmd_catalog_sync', slow_catalog_sync,
         )
         monkeypatch.setattr(
-            'cli.generation.get_library',
+            'cli.dry_run.get_library',
             lambda *_a, **_kw: Library(tmp_path / 'library.db'),
         )
 
@@ -461,7 +461,7 @@ class TestDryRunPipeline:
             source='product', db=None, model='claude-opus-4-7',
             verbose=False,
         )
-        from cli.generation import cmd_dry_run
+        from cli.dry_run import cmd_dry_run
         await cmd_dry_run(args)
 
         captured = capfd.readouterr()
@@ -513,19 +513,19 @@ class TestDryRunPipeline:
 
         async def mock_catalog_sync(args):
             seen_cs_args.append(args)
-            from cli.generation import console as _c
+            from cli.dry_run import console as _c
             if not getattr(args, 'quiet', False):
                 _c.print(f'Catalog sync for {args.source}:')
                 _c.print('  Files scanned: 318 (0 skipped)')
             return 0
 
-        monkeypatch.setattr('cli.core.cmd_discover', lambda a: 0)
-        monkeypatch.setattr('cli.core.cmd_index', mock_index)
+        monkeypatch.setattr('cli.index.cmd_discover', lambda a: 0)
+        monkeypatch.setattr('cli.index.cmd_index', mock_index)
         monkeypatch.setattr(
-            'cli.generation.cmd_catalog_sync', mock_catalog_sync,
+            'cli.dry_run.cmd_catalog_sync', mock_catalog_sync,
         )
         monkeypatch.setattr(
-            'cli.generation.get_library',
+            'cli.dry_run.get_library',
             lambda *_a, **_kw: Library(tmp_path / 'library.db'),
         )
 
@@ -545,7 +545,7 @@ class TestDryRunPipeline:
             source='product', db=None, model='claude-opus-4-7',
             verbose=False,
         )
-        from cli.generation import cmd_dry_run
+        from cli.dry_run import cmd_dry_run
         await cmd_dry_run(args)
 
         # The mocks each received a namespace; verify ``quiet=True``
