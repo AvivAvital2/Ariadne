@@ -123,26 +123,3 @@ async def test_aclose_disconnects_the_client():
     client = _FakeClient([])
     await AgentRunner(client).aclose()
     assert client.disconnected is True
-def _tool_use(name, **inp):
-    """An assistant message carrying a single tool-use content block."""
-    return types.SimpleNamespace(content=[types.SimpleNamespace(name=name, input=inp)])
-
-
-async def test_ask_captures_score_from_log_hit_tool_call():
-    """The agent self-scores by calling ariadne_log_hit("score:N …"); that tool
-    call is in the SDK response stream, so ask() parses the score off it — no
-    usage_events / ariadne.db read needed."""
-    client = _FakeClient([
-        _assistant('here is the answer'),
-        _tool_use('mcp__ariadne__ariadne_log_hit', event_id=1, feedback='score:8 - nailed it'),
-        _result(session_id='S'),
-    ])
-    reply = await AgentRunner(client).ask('q')
-    assert reply.text == 'here is the answer'
-    assert reply.score == 8
-
-
-async def test_ask_score_is_none_without_a_log_hit():
-    client = _FakeClient([_assistant('ans'), _result(session_id='S')])
-    reply = await AgentRunner(client).ask('q')
-    assert reply.score is None

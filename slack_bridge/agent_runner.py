@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any
 
@@ -17,7 +16,6 @@ class AgentReply:
     text: str
     is_error: bool
     session_id: str | None
-    score: int | None = None
 
 
 def build_agent_options(
@@ -61,6 +59,7 @@ class AgentRunner:
         if not self._connected:
             await self._client.connect()
             self._connected = True
+
     async def ask(self, text: str, images: Sequence[ImageBlob] = ()) -> AgentReply:
         await self._ensure_connected()
         # Text-only rides the string path (cheapest; the SDK wraps it as a user
@@ -86,13 +85,9 @@ class AgentRunner:
 
         parts: list[str] = []
         result: Any = None
-        score: int | None = None
         # Duck-typed extraction (resilient to SDK field changes): assistant text
         # comes from TextBlocks inside a message's ``content``; the terminal
-        # ResultMessage is the one carrying both ``is_error`` and ``result``. The
-        # agent's self-score rides in an ``ariadne_log_hit``/``log_miss`` tool-use
-        # block (``score:N`` in its feedback) — captured here so the bridge gets it
-        # from the live stream, never from the swappable usage_events DB.
+        # ResultMessage is the one carrying both ``is_error`` and ``result``.
         async for msg in self._client.receive_response():
             content = getattr(msg, 'content', None)
             if isinstance(content, list):
@@ -100,14 +95,6 @@ class AgentRunner:
                     block_text = getattr(block, 'text', None)
                     if isinstance(block_text, str):
                         parts.append(block_text)
-                    name = getattr(block, 'name', '')
-                    if isinstance(name, str) and name.endswith(
-                        ('ariadne_log_hit', 'ariadne_log_miss')
-                    ):
-                        feedback = (getattr(block, 'input', None) or {}).get('feedback', '')
-                        m = re.search(r'score:\s*(\d+)', feedback or '')
-                        if m:
-                            score = max(1, min(10, int(m.group(1))))
             if hasattr(msg, 'is_error') and hasattr(msg, 'result'):
                 result = msg
 
@@ -118,7 +105,6 @@ class AgentRunner:
             text=text_out,
             is_error=bool(getattr(result, 'is_error', False)),
             session_id=getattr(result, 'session_id', None),
-            score=score,
         )
 
     async def aclose(self) -> None:
