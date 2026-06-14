@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -11,6 +12,8 @@ if TYPE_CHECKING:
     from library import Library
     from writer import LibraryWriter
 
+
+_logger = logging.getLogger(__name__)
 
 DEFAULT_CONCURRENCY = 4
 
@@ -267,7 +270,7 @@ async def describe_source_elements_batched(
     writer: "LibraryWriter",
     source_name: str,
     *,
-    provider,
+    strategy,
     model: str | None = None,
     force: bool = False,
     resume: bool = False,
@@ -362,12 +365,12 @@ async def describe_source_elements_batched(
             poll_cb = _make_poll_callback(on_progress, on_stage)
             if on_stage is not None:
                 on_stage('processing', 0, None)
-            await _poll_or_cancel(provider, batch_id, poll_cb)
+            await _poll_or_cancel(strategy, batch_id, poll_cb)
             if on_stage is not None:
                 on_stage('download', 0, None)
             from docgen.calibration import usage_context as _uctx
             with _uctx(phase='describe', doc_type='element', language=None):
-                results = await provider.fetch_batch_results(batch_id)
+                results = await strategy.fetch_batch_results(batch_id)
             if on_stage is not None:
                 on_stage('download', len(results), len(results))
         except Exception as e:
@@ -431,7 +434,7 @@ async def describe_source_elements_batched(
 
     if on_stage is not None:
         on_stage('submit', 0, len(requests))
-    submission = await provider.submit_batch(requests)
+    submission = await strategy.submit_batch(requests)
     if on_stage is not None:
         on_stage('submit', len(requests), len(requests))
 
@@ -451,13 +454,13 @@ async def describe_source_elements_batched(
     poll_cb = _make_poll_callback(on_progress, on_stage)
     if on_stage is not None:
         on_stage('processing', 0, None)
-    await _poll_or_cancel(provider, submission.batch_id, poll_cb)
+    await _poll_or_cancel(strategy, submission.batch_id, poll_cb)
 
     if on_stage is not None:
         on_stage('download', 0, None)
     from docgen.calibration import usage_context as _uctx
     with _uctx(phase='describe', doc_type='element', language=None):
-        results = await provider.fetch_batch_results(submission.batch_id)
+        results = await strategy.fetch_batch_results(submission.batch_id)
     if on_stage is not None:
         on_stage('download', len(results), len(results))
 
@@ -494,7 +497,22 @@ async def _apply_batch_results_to_docs(
         for cid, text in results.items()
         if text and text.strip() and by_id.get(cid) is not None
     ]
-    failed = sum(1 for _cid, text in results.items() if not text or not text.strip())
+    errored = sum(
+        1 for _cid, text in results.items() if not text or not text.strip()
+    )
+    # Submitted elements with NO result row at all. Anthropic returns a row
+    # per custom_id, but OpenAI's split output/error files can come back short
+    # on a wholesale-batch failure ('failed'/'expired'). Count them as failures
+    # so a partial provider outcome surfaces instead of being silently
+    # under-applied.
+    missing = [cid for cid in by_id if cid not in results]
+    if missing:
+        _logger.warning(
+            'Batch %s: %d of %d submitted element(s) returned no result row; '
+            'counting as failed (provider returned a short result set)',
+            batch_id, len(missing), len(by_id),
+        )
+    failed = errored + len(missing)
     skipped_already_applied = sum(
         1 for cid, text in results.items()
         if text and text.strip() and by_id.get(cid) is None
