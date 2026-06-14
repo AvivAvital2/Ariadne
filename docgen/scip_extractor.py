@@ -93,7 +93,7 @@ class ScipIndex:
         path: Path,
         *,
         repo: str,
-        max_staleness_days: int,
+        max_staleness_days: int | None,
     ) -> "ScipIndex":
         """Read and parse a ``.scip`` artifact, raising structured errors.
 
@@ -108,7 +108,7 @@ class ScipIndex:
 
         mtime = path.stat().st_mtime
         age_days = (time.time() - mtime) / 86400
-        if age_days > max_staleness_days:
+        if max_staleness_days is not None and age_days > max_staleness_days:
             raise ScipTooStaleError(
                 repo=repo,
                 reason='index_too_stale',

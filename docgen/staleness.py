@@ -290,7 +290,7 @@ class StalenessTracker:
         self,
         source_path: Path,
         base_path: Path | None = None,
-    ) -> bool:
+    is_exempt = None) -> bool:
         """Check if documentation for a source file is stale.
 
         A file is considered stale if:
@@ -318,7 +318,12 @@ class StalenessTracker:
             return True  # Never documented
 
         current_hash = _compute_file_hash(source_path)
-        return current_hash != record.hash
+        if current_hash == record.hash:
+            return False
+        # Hash changed: stale, unless this path is staleness-exempt.
+        if is_exempt is not None and is_exempt(rel_path):
+            return False
+        return True
 
     def get_stale_files(
         self,
@@ -326,7 +331,7 @@ class StalenessTracker:
         base_path: Path | None = None,
         requested_types: tuple[str, ...] | None = None,
         library: object | None = None,
-    ) -> list[Path]:
+    is_exempt = None) -> list[Path]:
         """Get all stale files from a list of paths.
 
         Language-agnostic: callers (e.g. ``find_catalog_files`` or
@@ -357,8 +362,12 @@ class StalenessTracker:
                 continue
 
             # Legacy hash-only path: never-documented or changed source.
-            if self.is_stale(path, base_path):
+            if self.is_stale(path, base_path, is_exempt=is_exempt):
                 stale.append(path)
+                continue
+            if is_exempt is not None and is_exempt(
+                str(path.relative_to(base_path)) if base_path else str(path)
+            ):
                 continue
 
             if not type_aware:

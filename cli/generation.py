@@ -473,7 +473,7 @@ async def cmd_check(args: argparse.Namespace) -> int:
         staleness_db_path=Path(cfg.staleness_db_path),
         source_config=scip_config,
         catalog_only_generator=scip_config is not None,
-    )
+    ignore_staleness=cfg.source_ignore_staleness(source_name))
 
     async with DocGenOrchestrator(config) as orchestrator:
         status = await orchestrator.check_staleness()
@@ -656,7 +656,7 @@ async def cmd_sync(args: argparse.Namespace) -> int:
                     doc_types=('explanation', 'architecture', 'catalog', 'qa', 'gotcha', 'diagram'),
                     force_regenerate=True,
                     source_config=_scip_cfg,
-                )
+                ignore_staleness=cfg.source_ignore_staleness(source_name))
 
                 docs_created = 0
                 docs_failed = 0
@@ -885,7 +885,7 @@ async def cmd_sync(args: argparse.Namespace) -> int:
                 doc_types=('explanation', 'architecture', 'catalog', 'qa', 'gotcha', 'diagram'),
                 force_regenerate=True,
                 source_config=_scip_cfg,
-            )
+            ignore_staleness=cfg.source_ignore_staleness(source_name))
 
             docs_created = 0
             docs_failed = 0
@@ -1578,7 +1578,7 @@ async def cmd_improve(args: argparse.Namespace) -> int:
             source_name=source_name,
             dry_run=False,
             source_config=scip_config,
-        )
+        ignore_staleness=cfg.source_ignore_staleness(source_name))
 
         async with DocGenOrchestrator(gen_config) as orch:
             for f in files_to_gen:
@@ -2701,6 +2701,8 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
     if not getattr(args, 'approve', False) and not getattr(args, 'interactive', False):
         if _prompt_explore_excludes():
             args.interactive = True
+    if not getattr(args, 'approve', False):
+        _apply_onboard_staleness_choice(cfg, source_name)
 
     # ---- Preview: free phases (discover/index/catalog-sync) + cost
     # estimate, run exactly once. ----------------------------------------
@@ -3812,7 +3814,7 @@ async def cmd_notify_changed(args: argparse.Namespace) -> int:
                 model=cfg.model,
                 doc_types=('explanation', 'architecture', 'catalog', 'qa', 'gotcha', 'diagram'),
                 force_regenerate=True,
-            )
+            ignore_staleness=cfg.source_ignore_staleness(source_name))
 
             docs_created = 0
             docs_failed = 0
@@ -4268,3 +4270,32 @@ HANDLERS = {
     'diff-docs': lambda args: cmd_diff_docs(args),
     'batch': lambda args: __import__('cli.batch').cmd_batch(args),
 }
+def _prompt_ignore_staleness(source_name) -> bool:
+    """Ask (TTY only) whether to exempt a source from staleness checks --
+    for repos updated rarely (e.g. only on releases), where the constant
+    'stale' nag is noise. A non-interactive context returns False.
+    """
+    import sys
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    try:
+        resp = input(
+            f"Mark '{source_name}' staleness-exempt (rarely-updated repo)? [y/N]: "
+        )
+    except EOFError:
+        return False
+    return resp.strip().lower() in ('y', 'yes')
+
+
+def _apply_onboard_staleness_choice(cfg, source_name, *, prompt=None):
+    """Offer (during onboarding) to mark ``source_name`` staleness-exempt
+    and persist ``ignore_staleness: true`` on a yes. ``prompt`` is the
+    yes/no callable (injectable for tests). Returns whether the source was
+    marked exempt.
+    """
+    if prompt is None:
+        prompt = _prompt_ignore_staleness
+    if not prompt(source_name):
+        return False
+    cfg.set_source_config(source_name, ignore_staleness=True)
+    return True

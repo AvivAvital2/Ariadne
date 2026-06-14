@@ -82,6 +82,7 @@ def register_commands(subparsers):
                          help='Comma-separated glob patterns to exclude')
     src_add.add_argument('--exclude-dirs', default=None,
                          help='Comma-separated directory names to exclude')
+    src_add.add_argument('--ignore-staleness', action='store_true', default=None, help='Skip staleness checks for this source (opt-in)')
 
     source_sub.add_parser('list', help='List configured sources')
 
@@ -746,7 +747,7 @@ def _cmd_source_add(args: argparse.Namespace) -> int:
         ref=getattr(args, 'ref', None),
         exclude=_csv(getattr(args, 'exclude', None)),
         exclude_dirs=_csv(getattr(args, 'exclude_dirs', None)),
-    ):
+    ignore_staleness=getattr(args, 'ignore_staleness', None)):
         console.print(f'[red]Failed to write source {name!r} to config.[/red]')
         return 1
 

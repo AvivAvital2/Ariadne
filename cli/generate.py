@@ -980,7 +980,7 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
         batch_mode=getattr(args, 'batch_mode', 'auto'),
         auto_batch_threshold=getattr(args, 'auto_batch_threshold', 200),
         restrict_to_files=restrict_to_files,
-    )
+    ignore_staleness=cfg.source_ignore_staleness(source_name))
 
     progress_columns = (
         SpinnerColumn(),

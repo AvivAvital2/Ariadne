@@ -109,24 +109,6 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     import_parser.add_argument('--skip-embeddings', action='store_true',
                                help='Skip embedding regeneration')
 
-    # export-db (single-source standalone slice)
-    from export_db import DEFAULT_EMBEDDING_MODEL
-    exdb = subparsers.add_parser('export-db', help='Export a single source as a standalone slice DB')
-    exdb.add_argument('--source', '-s', help='Source to slice (default from config)')
-    exdb.add_argument('--out', '-o', required=True, help='Output bundle path (a standalone ariadne.db)')
-    exdb.add_argument('--no-embeddings', action='store_true',
-                      help='Omit embeddings; recipient runs `ariadne rebuild` on the bundle')
-    exdb.add_argument('--with-scip', action='store_true',
-                      help='Also carry the SCIP call graph (callers/impact_radius)')
-
-    # import-db (merge a slice into this database)
-    imdb = subparsers.add_parser('import-db', help='Merge a slice DB into this database')
-    imdb.add_argument('bundle', help='Path to the slice DB to import')
-    imdb.add_argument('--on-conflict', choices=['replace', 'skip', 'fail'], default='replace',
-                      help='What to do when a document id already exists (default: replace)')
-    imdb.add_argument('--embedding-model', default=DEFAULT_EMBEDDING_MODEL,
-                      help='Embedding model this database uses (bundle must match)')
-
     # rebuild
     subparsers.add_parser('rebuild', help='Rebuild all embeddings')
 
@@ -702,48 +684,6 @@ def cmd_import_(args: argparse.Namespace) -> int:
 
     finally:
         library.close()
-
-
-def cmd_export_db(args: argparse.Namespace) -> int:
-    """Export a single source as a standalone slice database."""
-    from export_db import export_source_db
-
-    cfg = get_config()
-    source = args.source or cfg.default_source
-    if not source:
-        console.print('[red]No source given and no default_source configured.[/red]')
-        return 1
-    source_db = args.db or Path(cfg.db_path)
-    manifest = export_source_db(
-        str(source_db), source, args.out,
-        include_embeddings=not args.no_embeddings,
-        include_scip=getattr(args, 'with_scip', False),
-    )
-    console.print(f'[green]Exported slice of {source!r} -> {args.out}[/green]')
-    console.print(
-        f'  documents={manifest.doc_count} chunks={manifest.chunk_count} '
-        f'sections={manifest.section_count} themes={manifest.theme_count} '
-        f'edges={manifest.edge_count} embeddings_included={manifest.includes_embeddings}'
-    )
-    return 0
-
-
-def cmd_import_db(args: argparse.Namespace) -> int:
-    """Merge a slice database into this database."""
-    from export_db import import_source_db
-
-    cfg = get_config()
-    target_db = args.db or Path(cfg.db_path)
-    report = import_source_db(
-        str(target_db), args.bundle,
-        on_conflict=args.on_conflict,
-        expected_embedding_model=args.embedding_model,
-    )
-    console.print(
-        f'[green]Imported {report.documents_merged} docs from {args.bundle} '
-        f'(source={report.source_name!r}, conflicts={report.conflicts})[/green]'
-    )
-    return 0
 
 
 def cmd_build_matrix(args: argparse.Namespace) -> int:
@@ -1599,18 +1539,21 @@ def cmd_index(
         if not getattr(args, 'force', False):
             merged_scip = source_root / '.ariadne' / 'index.scip'
             if merged_scip.exists():
-                scip_cfg = cfg.get_source_scip_config(source_name)
-                max_days = scip_cfg.max_staleness_days if scip_cfg else 7
+                max_days = cfg.effective_scip_staleness_days(source_name)
                 age_days = (
                     datetime.now(timezone.utc).timestamp()
                     - merged_scip.stat().st_mtime
                 ) / 86400
-                if age_days < max_days:
+                if max_days is None or age_days < max_days:
                     if not getattr(args, 'quiet', False):
+                        detail = (
+                            'staleness-exempt'
+                            if max_days is None
+                            else f'{age_days:.1f}d < {max_days}d'
+                        )
                         console.print(
-                            f'  [dim]Index — reusing fresh SCIP for '
-                            f'{source_name} ({age_days:.1f}d < {max_days}d); '
-                            f'pass --force to re-index[/dim]',
+                            f'  [dim]Index - reusing SCIP for {source_name} '
+                            f'({detail}); pass --force to re-index[/dim]',
                         )
                     continue
 
@@ -2348,8 +2291,6 @@ HANDLERS = {
     'delete': lambda args: cmd_delete(args),
     'export': lambda args: cmd_export(args),
     'import': lambda args: cmd_import_(args),
-    'export-db': lambda args: cmd_export_db(args),
-    'import-db': lambda args: cmd_import_db(args),
     'rebuild': lambda args: asyncio.run(cmd_rebuild(args)),
     'build-matrix': lambda args: cmd_build_matrix(args),
     'stats': lambda args: cmd_stats(args),

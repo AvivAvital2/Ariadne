@@ -154,6 +154,7 @@ class OrchestratorConfig:
         ]
         h.update('||'.join(parts).encode('utf-8'))
         return h.hexdigest()
+    ignore_staleness: bool | tuple[str, ...] = False
 
 
 # ---------------------------------------------------------------------------
@@ -536,7 +537,7 @@ class DocGenOrchestrator:
                 base_path=self.config.source_path,
                 requested_types=self.config.doc_types,
                 library=self._library,
-            )
+            is_exempt=self._staleness_exempt())
 
         files_skipped = len(all_files) - len(files_to_process)
         _logger.info(
@@ -2042,7 +2043,7 @@ class DocGenOrchestrator:
             else find_python_files
         )
         all_files = discover(self.config.source_path)
-        stale = self._staleness.get_stale_files(all_files, base_path=self.config.source_path)
+        stale = self._staleness.get_stale_files(all_files, base_path=self.config.source_path, is_exempt=self._staleness_exempt())
         undocumented = self._staleness.get_undocumented_files(all_files, base_path=self.config.source_path)
 
         return {
@@ -2183,6 +2184,16 @@ class DocGenOrchestrator:
             persist=_persist,
         )
         return persisted
+    def _staleness_exempt(self):
+        """Predicate marking a source-relative path staleness-exempt, built
+    from ``config.ignore_staleness``; ``None`` for the default (no
+    exemption -- the legacy staleness path).
+    """
+        ignore = self.config.ignore_staleness
+        if not ignore:
+            return None
+        from config import ignore_staleness_matches
+        return lambda rel: ignore_staleness_matches(ignore, rel)
 
 
 async def run_pipeline(

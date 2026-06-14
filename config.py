@@ -41,7 +41,7 @@ _SOURCE_KNOWN_KEYS: frozenset[str] = frozenset({
     'swagger_paths',
     # SCIP-related keys consumed by get_source_scip_config
     'scip',
-    'index_kinds',
+    'index_kinds','ignore_staleness'
 })
 
 
@@ -183,6 +183,7 @@ class SourceConfig:
     # without published specs continue to use pattern-based extraction
     # (Phase 8) where it applies.
     swagger_paths: tuple[str, ...] = ()
+    ignore_staleness: bool | tuple[str, ...] = False
 
 # Config file names to search for
 CONFIG_FILENAME = 'ariadne.yaml'
@@ -402,6 +403,20 @@ class Config:
                             f'contain only strings; got '
                             f'{type(sp).__name__}.'
                         )
+            ign = raw.get('ignore_staleness')
+            if ign is not None and not isinstance(ign, bool):
+                if not isinstance(ign, list):
+                    raise ConfigError(
+                        f"Source '{source_name}': 'ignore_staleness' must be "
+                        f'true/false or a list of glob patterns, got '
+                        f'{type(ign).__name__}.'
+                    )
+                for pat in ign:
+                    if not isinstance(pat, str):
+                        raise ConfigError(
+                            f"Source '{source_name}': 'ignore_staleness' globs "
+                            f'must be strings; got {type(pat).__name__}.'
+                        )
 
     @property
     def config_path(self) -> Path | None:
@@ -505,7 +520,7 @@ class Config:
                 exempt_dirs=tuple(raw.get('exempt_dirs', [])),
                 env_hints=dict(raw.get('env_hints') or {}),
                 swagger_paths=tuple(raw.get('swagger_paths', []) or ()),
-            )
+            ignore_staleness=_coerce_ignore_staleness(raw.get('ignore_staleness', False)))
         return None
 
     def hydrate_relations(self, all_relations: dict) -> None:
@@ -763,7 +778,7 @@ class Config:
         ref: str | None = None,
         exclude: list[str] | None = None,
         exclude_dirs: list[str] | None = None,
-    ) -> bool:
+    ignore_staleness: bool | None = None) -> bool:
         """Persist full source configuration to ariadne.yaml.
 
         Creates the ``sources.<name>`` entry if it does not exist, else
@@ -803,6 +818,8 @@ class Config:
                 current['exclude'] = exclude
             if exclude_dirs is not None:
                 current['exclude_dirs'] = exclude_dirs
+            if ignore_staleness is not None:
+                current['ignore_staleness'] = ignore_staleness
             sources[source_name] = current
 
         return self._mutate_config(mutate)
@@ -1133,6 +1150,39 @@ class Config:
     def to_dict(self) -> dict[str, Any]:
         """Return the full configuration as a dictionary."""
         return dict(self._config)
+    def source_staleness_exempt(self, source_name: str) -> bool:
+        """True iff the whole source opts out of staleness checks
+    (``ignore_staleness: true``). Source-level gates such as the SCIP
+    index-age check consult this; a file-glob exemption does not count.
+    """
+        sc = self.get_source_config(source_name)
+        return bool(sc is not None and sc.ignore_staleness is True)
+    def path_staleness_exempt(self, source_name: str, rel_path: str) -> bool:
+        """True iff staleness should be ignored for ``rel_path`` within this
+    source -- either the whole source is exempt (``ignore_staleness:
+    true``) or ``rel_path`` matches one of the configured exemption globs.
+    """
+        sc = self.get_source_config(source_name)
+        if sc is None:
+            return False
+        return ignore_staleness_matches(sc.ignore_staleness, rel_path)
+    def effective_scip_staleness_days(self, source_name: str) -> int | None:
+        """Max age in days allowed for this source's SCIP index, or ``None``
+    to disable the age gate when the source is staleness-exempt
+    (``ignore_staleness: true``); otherwise the configured
+    ``scip.max_staleness_days`` (default 7).
+    """
+        if self.source_staleness_exempt(source_name):
+            return None
+        scip = self.get_source_scip_config(source_name)
+        return scip.max_staleness_days if scip else 7
+    def source_ignore_staleness(self, source_name):
+        """The raw ``ignore_staleness`` value the CLI passes to
+    OrchestratorConfig: ``True`` / a glob tuple / ``False`` (also False
+    for an unknown or unset source).
+    """
+        sc = self.get_source_config(source_name) if source_name else None
+        return sc.ignore_staleness if sc is not None else False
 
 
 # Global config instance - loaded lazily
@@ -1155,3 +1205,26 @@ def reload_config() -> Config:
     global _global_config
     _global_config = Config()
     return _global_config
+def _coerce_ignore_staleness(value):
+    """Normalize a raw ``ignore_staleness`` value into the stored form:
+    ``True`` (whole source exempt), a tuple of glob patterns (specific
+    files exempt), or ``False`` (default — staleness checks apply).
+    """
+    if value is True:
+        return True
+    if isinstance(value, (list, tuple)):
+        return tuple(str(v) for v in value)
+    return False
+def ignore_staleness_matches(value, rel_path) -> bool:
+    """True iff ``value`` -- a ``SourceConfig.ignore_staleness`` (``True``
+    for the whole source, a tuple of globs for specific files, or
+    ``False``) -- marks ``rel_path`` as staleness-exempt. ``fnmatch``
+    semantics, so ``vendor/**`` covers everything under ``vendor/``.
+    """
+    if value is True:
+        return True
+    if not value:
+        return False
+    from fnmatch import fnmatch
+    rel = str(rel_path).replace('\\', '/')
+    return any(fnmatch(rel, pat) for pat in value)

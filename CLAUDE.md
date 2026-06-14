@@ -65,7 +65,9 @@ See `ariadne.yaml` for:
 
 Set `ARIADNE_CONFIG=/path/to/ariadne.yaml` to use a config file outside cwd.
 
-**User-authored fields** under `sources.<name>:`: `path`, `depends_on`, `parent`, `branches`, `ref`, `exclude`, `exclude_dirs`, `exempt_dirs`, `swagger_paths`, `env_hints`. **Ariadne-managed** (written by `discover`): `index_kinds`, `scip:` block. Manual edits to the managed fields get regenerated on next `discover` run.
+**User-authored fields** under `sources.<name>:`: `path`, `depends_on`, `parent`, `branches`, `ref`, `exclude`, `exclude_dirs`, `exempt_dirs`, `swagger_paths`, `env_hints`, `ignore_staleness`. **Ariadne-managed** (written by `discover`): `index_kinds`, `scip:` block. Manual edits to the managed fields get regenerated on next `discover` run.
+
+**`ignore_staleness`** (opt-in, default off) exempts a source from staleness checks — for repos that update rarely (e.g. only on releases), where the constant "stale, regenerate" nag is noise. Set `ignore_staleness: true` to exempt the whole source (this also disables the SCIP index-age gate, so an old `.scip` index is reused instead of forcing a re-index), or give a list of globs (`["vendor/**", "legacy/*.py"]`) to exempt only matching files. It suppresses the *content-changed → stale* signal only; never-documented files still surface as coverage gaps. Set it via `ariadne source add NAME --ignore-staleness`, in `ariadne.yaml`, or when `ariadne onboard` prompts.
 
 Rather than hand-editing `ariadne.yaml`, you can manage the user-authored fields from the CLI with `ariadne source`:
 ```bash
@@ -85,7 +87,7 @@ ariadne source remove mylib                             # delete an entry (--yes
 - Gap analysis: `ariadne gaps` shows missed topics; `--analyze` runs LLM-powered recommendations
 
 ### Role-aware responses (optional)
-`ariadne_search` / `ariadne_ask` accept an optional `role` kwarg. Default `'developer'` returns the existing technical docs unchanged. When the user's phrasing implies a different audience ("from a product perspective", "for the stakeholder review"), pass `role='product_manager'` — Ariadne caches audience-adapted responses on demand and reuses them for repeat questions. Dev content stays accessible via separate `role='developer'` queries ("explain further").
+`ariadne_search` / `ariadne_ask` accept an optional `role` kwarg. Default `'developer'` returns the existing technical docs unchanged. When the user's phrasing implies a different audience ("from a product perspective", "for the stakeholder review"), pass `role='product_manager'` — Ariadne caches audience-adapted responses on demand and reuses them for repeat questions. Dev content stays accessible via separate `role='developer'` queries ("explain further"). See `designs/role-aware-responses.md` for the data model + cascade-invalidation semantics.
 
 ### Source Configuration Schema
 ```yaml
@@ -96,6 +98,7 @@ sources:
     parent: parentlib             # For subdirectory sources
     branches: ["feature/*"]       # Branch patterns where active
     ref: main                     # Pin to specific git ref
+    ignore_staleness: true        # Opt out of staleness checks (or a glob list)
 ```
 
 ### Scope-Aware Commands
