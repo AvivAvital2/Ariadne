@@ -188,7 +188,7 @@ async def cli_confirm(msg: str) -> bool:
 @asynccontextmanager
 async def _progress_heartbeat(
     progress: 'Progress', interval: float = 0.5,
-) -> 'AsyncIterator[None]':
+) -> 'AsyncIterator[Callable[[], AbstractContextManager[None]]]':
     """Refresh the progress display on a fixed cadence for the duration of
     a long async phase.
 
@@ -196,26 +196,67 @@ async def _progress_heartbeat(
     the ~30s status polls and the single long results download — so the
     spinner and elapsed timer freeze between the sparse explicit updates.
     Ticking ``progress.refresh()`` ourselves keeps them moving.
+
+    Yields a ``pause()`` context manager. Entering it ``stop()``s the progress
+    bar (halting rich's own auto-refresh thread) and silences this heartbeat;
+    exiting ``start()``s it again. This is load-bearing for any stdin prompt —
+    e.g. the batch SLA confirmation — fired while the bar is live: rich's Live
+    defaults to redirecting stdout/stderr and hiding the cursor, so a bare
+    ``input()`` under it has its prompt swallowed and the user's keystrokes
+    never echo (the run looks hung, and a reflexive Enter declines). ``stop()``
+    restores the real stdout/stderr and the cursor, making the prompt usable.
     """
     import asyncio
+
+    active = True
 
     async def _tick() -> None:
         try:
             while True:
                 await asyncio.sleep(interval)
-                progress.refresh()
+                if active:
+                    progress.refresh()
         except asyncio.CancelledError:
             pass
 
+    @contextmanager
+    def pause():
+        nonlocal active
+        active = False
+        progress.stop()
+        try:
+            yield
+        finally:
+            progress.start()
+            active = True
+
     task = asyncio.create_task(_tick())
     try:
-        yield
+        yield pause
     finally:
         task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
+
+
+def _pausing_confirm(
+    base: 'ConfirmCallback', pause: 'Callable[[], AbstractContextManager[None]]',
+) -> 'ConfirmCallback':
+    """Wrap a stdin confirm callback so the live progress display is paused
+    while it reads input.
+
+    The batch SLA prompt fires from inside the orchestrator's ``run()`` while
+    the progress bar is live; ``input()`` under that repainting display is
+    unreadable. Bracketing the prompt with ``pause()`` stops the bar for the
+    duration of the question and restarts it once the user answers.
+    """
+    async def _confirm(msg: str) -> bool:
+        with pause():
+            return await base(msg)
+
+    return _confirm
 
 
 def _generate_exit_code(result: object) -> int:
@@ -582,17 +623,20 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
         # for 10-30s on populated DBs.
         orchestrator = DocGenOrchestrator(config)
         orchestrator.progress_callback = on_progress
-        # Wire the first-run batch confirmation prompt. ``--yes`` skips
-        # via ``yes_confirm``; otherwise ``cli_confirm`` reads stdin.
-        # Only matters when batch dispatch resolves; harmless otherwise.
-        orchestrator.confirm_callback = (
-            yes_confirm if getattr(args, 'confirm_yes', False)
-            else cli_confirm
-        )
         # Heartbeat keeps the spinner + elapsed timer moving through the
         # long batch awaits (polls + results download), which otherwise
         # leave the bar frozen between sparse progress updates.
-        async with orchestrator, _progress_heartbeat(progress):
+        async with orchestrator, _progress_heartbeat(progress) as pause_display:
+            # Wire the first-run batch confirmation prompt. ``--yes`` skips
+            # via ``yes_confirm``; otherwise ``cli_confirm`` reads stdin —
+            # wrapped so the progress bar pauses around the prompt, since a
+            # bare input() under the live display is clobbered and the run
+            # looks stuck. Set inside the context so it can use the pause
+            # handle; only consulted in run()'s batch fork, not __aenter__.
+            orchestrator.confirm_callback = (
+                yes_confirm if getattr(args, 'confirm_yes', False)
+                else _pausing_confirm(cli_confirm, pause_display)
+            )
             result = await orchestrator.run(
                 progress_callback=on_progress,
                 crossref_progress=on_crossref_progress,
