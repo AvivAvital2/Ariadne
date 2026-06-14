@@ -38,6 +38,7 @@ class BridgeConfig:
     enable_feedback: bool = False
     source_descriptions: Mapping[str, str] = field(factory=dict)
     source_aliases: Mapping[str, Sequence[str]] = field(factory=dict)
+    allow_all: bool = False
 
     def is_allowed(self, *, user: str, channel: str) -> bool:
         """Allow a request if its user OR its channel is allow-listed.
@@ -46,6 +47,8 @@ class BridgeConfig:
         opens a whole channel; user allow-listing grants a person anywhere
         (e.g. DMs, whose channel id won't be in ``allowed_channels``).
         """
+        if self.allow_all:
+            return True
         return user in self.allowed_users or channel in self.allowed_channels
 
     @classmethod
@@ -78,4 +81,5 @@ class BridgeConfig:
             enable_feedback=bool(data.get('enable_feedback', False)),
             source_descriptions=data.get('source_descriptions') or {},
             source_aliases=data.get('source_aliases') or {},
+            allow_all=bool(data.get('allow_all', False)),
         )

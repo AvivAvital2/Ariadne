@@ -81,6 +81,7 @@ cp slack_bridge.yaml.example slack_bridge.yaml
 Edit it — it holds **no secrets**:
 
 - `allowed_users` / `allowed_channels` — **the access boundary.** Both empty = deny everyone (fail-closed); add the Slack user IDs (`U…`) / channel IDs (`C…`) allowed to use the bot.
+- `allow_all` — **org-wide override** (default `false`). Set `true` to let *anyone who can reach the bot* use it (any user, channel, or DM), ignoring the two lists above — convenient for a whole-workspace rollout. The bot runs on your Claude subscription, so this opens that cost to the entire org; leave it `false` unless that's intended.
 - `pool.max_size` — each warm session holds its own Ariadne MCP subprocess; on a small box start at **5–10** (the default 50 can exhaust 2 GB).
 - `source_descriptions` / `source_aliases` — one-liners that help the agent route a question to the right source.
 - `enable_feedback` — opt-in; lets the bot record `ariadne_log_hit`/`miss` into `usage_events`.

@@ -10,6 +10,7 @@
 allowed_users: []        # Slack user IDs (U0123…); an allow-listed user may use the bot anywhere, incl. DMs
 allowed_channels: []     # Slack channel IDs (C0ENG…); opens the whole channel
 # both empty ⇒ deny everyone (fail-closed)
+allow_all: false         # org-wide: true ⇒ anyone who can reach the bot may use it (overrides the two lists above)
 
 pool:
   max_size: 50           # max concurrent warm sessions (each holds an Ariadne MCP subprocess)

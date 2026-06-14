@@ -54,3 +54,29 @@ def test_from_env_loads_tokens_from_env_and_rest_from_yaml(tmp_path, monkeypatch
     assert cfg.source_aliases['projecta'] == ['proja']
     # ariadne_dir still defaults to the rename-proof repo root.
     assert (cfg.ariadne_dir / 'slack_bridge' / '__init__.py').is_file()
+def test_allow_all_opens_the_bot_to_everyone():
+    """`allow_all` is the org-wide switch: with it on, any user in any channel
+    (and any DM) is allowed regardless of the (possibly empty) allowlists. The
+    default stays fail-closed."""
+    cfg = bridge_config(allow_all=True)
+    assert cfg.is_allowed(user='UANY', channel='CANY')
+    assert cfg.is_allowed(user='', channel='')
+    # default (allow_all=False) is unchanged — fail-closed
+    assert not bridge_config().is_allowed(user='UANY', channel='CANY')
+
+
+def test_from_env_parses_allow_all(tmp_path, monkeypatch):
+    """`allow_all: true` in the operational yaml flips the org-wide switch;
+    absent, it defaults False (fail-closed)."""
+    cfg_file = tmp_path / 'slack_bridge.yaml'
+    cfg_file.write_text('allow_all: true\n')
+    monkeypatch.setenv('ARIADNE_SLACK_CONFIG', str(cfg_file))
+    monkeypatch.delenv('ARIADNE_DIR', raising=False)
+    cfg = BridgeConfig.from_env()
+    assert cfg.allow_all is True
+    assert cfg.is_allowed(user='UANY', channel='CANY')
+
+    empty = tmp_path / 'empty.yaml'
+    empty.write_text('allowed_users: []\n')
+    monkeypatch.setenv('ARIADNE_SLACK_CONFIG', str(empty))
+    assert BridgeConfig.from_env().allow_all is False
