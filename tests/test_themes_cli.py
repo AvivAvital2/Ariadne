@@ -9,13 +9,11 @@ Covers:
 """
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from cli.themes_cmd import cmd_themes
 from library import Library
 
 
@@ -238,42 +236,6 @@ class TestThemesBuild:
         )
         rc = cmd_themes(args)
         assert rc == 1
-    def test_build_batch_threads_strategy_into_refresh(
-        self, patched_get_library: Library, monkeypatch,
-    ) -> None:
-        """`themes build --batch` resolves the provider's batch backend and
-    threads the BatchStrategy into refresh_themes, so dirty themes
-    summarize via the batch API instead of the live per-theme path.
-    """
-        captured: dict = {}
-
-        async def fake_refresh(library, writer, **kwargs):
-            captured.update(kwargs)
-            return {
-                'path': 'noop', 'changed': 0, 'recluster_full': False,
-                'summarized': 0, 'incoherent': 0, 'failed': 0,
-                'total_dirty': 0,
-            }
-
-        sentinel = object()
-        monkeypatch.setattr('docgen.themes.refresh_themes', fake_refresh)
-        monkeypatch.setattr(
-            'cli.generate.resolve_provider', lambda **k: 'anthropic',
-        )
-        monkeypatch.setattr(
-            'docgen.llm.factory.make_batch_strategy', lambda *a, **k: sentinel,
-        )
-        monkeypatch.setenv('ANTHROPIC_API_KEY', 'test-key')
-
-        args = argparse.Namespace(
-            themes_action='build', db=None, cluster_id=None,
-            coherent_only=True, source=None, limit=50, batch=True,
-        )
-        rc = cmd_themes(args)
-        assert rc == 0
-        assert captured.get('batch_strategy') is sentinel, (
-            'the resolved BatchStrategy must reach refresh_themes'
-        )
 
 
 # ---------------------------------------------------------------------------

@@ -47,9 +47,6 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     themes_build.add_argument('--source', '-s', default=None,
         help='Source name (default from config)')
-    themes_build.add_argument('--batch', action='store_true',
-        help='Summarize dirty themes via the provider batch API '
-             '(~50%% off, up to 24h) instead of the live per-theme path')
 
     themes_list = themes_sub.add_parser(
         'list', help='List discovered themes',
@@ -104,20 +101,6 @@ async def cmd_themes_build(args: argparse.Namespace) -> int:
     from writer import LibraryWriter
 
     cfg = get_config()
-    batch_strategy = None
-    if getattr(args, 'batch', False):
-        from cli.generate import resolve_batch_strategy
-
-        batch_strategy, batch_provider, key_env = resolve_batch_strategy(
-            args, cfg,
-        )
-        if batch_strategy is None:
-            console.print(
-                f'[red]{key_env} is not set. Export it before using '
-                f'`themes build --batch` with the {batch_provider} '
-                f'provider.[/red]',
-            )
-            return 1
 
     library = get_library(getattr(args, 'db', None))
     try:
@@ -131,6 +114,7 @@ async def cmd_themes_build(args: argparse.Namespace) -> int:
             TextColumn('eta'),
             TimeRemainingColumn(),
         )
+
         async def _build() -> dict:
             with Progress(*progress_columns, console=console) as progress:
                 task_id = progress.add_task(
@@ -152,33 +136,11 @@ async def cmd_themes_build(args: argparse.Namespace) -> int:
                         description=desc,
                     )
 
-                def on_stage(stage: str, completed: int, total: int) -> None:
-                    # Batch path emits coarse stage transitions (submit ->
-                    # processing -> download -> apply) so the long poll wait
-                    # isn't a frozen 0/0 bar.
-                    labels = {
-                        'submit': 'Themes: submitting batch',
-                        'processing': 'Themes: processing at provider',
-                        'download': 'Themes: downloading results',
-                        'apply': 'Themes: applying summaries',
-                    }
-                    progress.update(
-                        task_id,
-                        description=labels.get(stage, f'Themes: {stage}'),
-                        completed=completed,
-                        total=total if total > 0 else None,
-                    )
-
-                summarize_kwargs = {'on_progress': on_progress}
-                if batch_strategy is not None:
-                    summarize_kwargs['on_stage'] = on_stage
-
                 async with LibraryWriter(library) as writer:
                     return await refresh_themes(
                         library, writer,
                         enabled=getattr(cfg, 'themes_enabled', True),
-                        summarize_kwargs=summarize_kwargs,
-                        batch_strategy=batch_strategy,
+                        summarize_kwargs={'on_progress': on_progress},
                     )
 
         try:

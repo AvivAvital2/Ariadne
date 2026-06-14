@@ -244,20 +244,6 @@ def _discover_files_for_estimate(cfg, source_name, source_path):
     return files
 
 
-def _apply_explorer_staleness(cfg, source_name, *, chosen, currently_exempt) -> bool:
-    """Persist the explorer staleness modal's choice to ariadne.yaml.
-
-    Writes ``ignore_staleness: true`` only when the user accepted (``chosen``)
-    and the source isn't already exempt — so it never re-writes a no-op or
-    overrides an existing setting. ``set_source_config`` merges, so this
-    preserves any excludes written alongside it. Returns whether it wrote.
-    """
-    if not chosen or currently_exempt:
-        return False
-    cfg.set_source_config(source_name, ignore_staleness=True)
-    return True
-
-
 async def cmd_dry_run(args: argparse.Namespace) -> int:
     """Wrapper: run the free phases (discover, index, catalog-sync)
     and estimate the cost of the LLM-paid phases (catalog-describe,
@@ -684,17 +670,10 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                     return cost_by_directory(
                         files, source_path, tuple(selected_types), model, **_hooks)
 
-                # Onboarding (only) asks the file browser to pop the staleness
-                # modal on Apply, so the browser — not a CLI prompt — owns this.
-                offer_staleness = getattr(args, 'offer_staleness', False)
-                currently_exempt = bool(cfg.source_ignore_staleness(source_name))
                 try:
                     app = await run_explorer_tui(
                         state, doc_types=requested_doc_types,
-                        selected=requested_doc_types, recost=_recost,
-                        offer_staleness=offer_staleness,
-                        staleness_source=source_name,
-                        staleness_exempt=currently_exempt)
+                        selected=requested_doc_types, recost=_recost)
                 except KeyboardInterrupt:
                     console.print(
                         '[dim]Explorer cancelled — no changes written.[/dim]')
@@ -709,14 +688,6 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                             f'{cfg.config_path}: '
                             f'exclude_dirs={rules["exclude_dirs"]} '
                             f'exclude={rules["exclude"]}')
-                    if _apply_explorer_staleness(
-                        cfg, source_name,
-                        chosen=getattr(app, 'staleness_exempt', False),
-                        currently_exempt=currently_exempt,
-                    ):
-                        console.print(
-                            f"[green]✓[/green] Marked '{source_name}' "
-                            f'staleness-exempt in {cfg.config_path}')
 
                     _names = set(rules['exclude_dirs'])
                     _globs = rules['exclude']

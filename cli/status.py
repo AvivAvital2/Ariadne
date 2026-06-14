@@ -54,10 +54,6 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
                               help='Show per-document serve counts')
     usage_parser.add_argument('--top-served', type=int, default=None,
                               help='Show top N most-served documents')
-    usage_parser.add_argument('--export-report', metavar='PATH', default=None,
-                              help='Write a portable analytics report (usage + '
-                                   'misses + doc signals) to PATH as JSON, for '
-                                   'shipping off-box before replacing the database')
 
     # gaps
     gaps_parser = subparsers.add_parser('gaps', help='Show documentation gap analysis')
@@ -341,18 +337,6 @@ def cmd_usage(args: argparse.Namespace) -> int:
     library = get_library(args.db)
 
     try:
-        if getattr(args, 'export_report', None):
-            from analytics_report import build_analytics_report
-
-            report = build_analytics_report(library, days=args.days)
-            Path(args.export_report).write_text(report.to_json())
-            console.print(
-                f'[green]Wrote analytics report to {args.export_report}[/green] '
-                f'({report.usage_summary["total_calls"]} calls, '
-                f'{report.usage_summary["total_misses"]} misses, last {args.days}d)'
-            )
-            return 0
-
         stats = library.get_usage_stats(days=args.days, tool_name=args.tool)
 
         table = Table(title=f'Ariadne Usage (last {args.days} days)')
