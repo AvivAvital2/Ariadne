@@ -18,7 +18,13 @@ import json
 import logging
 from collections.abc import Callable, Sequence
 
-from docgen.llm.batch import BatchRequest, BatchStatus, BatchSubmission
+from docgen.llm.anthropic import raise_if_quota_exhausted
+from docgen.llm.batch import (
+    BatchRequest,
+    BatchStatus,
+    BatchSubmission,
+    request_with_retry,
+)
 from docgen.llm.openai import OpenAIProvider, token_limit_field
 
 _logger = logging.getLogger(__name__)
@@ -71,6 +77,18 @@ class OpenAIBatchStrategy:
             'body': body,
         }
 
+    async def _request_with_retry(self, method: str, url: str, **kwargs):
+        """OpenAI Batch API request with the shared batch retry budget; a 429
+        naming a hard quota cap aborts via ``QuotaExhaustedError``. See
+        :func:`docgen.llm.batch.request_with_retry`."""
+        return await request_with_retry(
+            self._provider._get_client(), method, url,
+            retry_delay=self._provider.retry_delay,
+            logger=_logger, label='OpenAI batch',
+            on_status=raise_if_quota_exhausted,
+            **kwargs,
+        )
+
     async def submit_batch(
         self, requests: Sequence[BatchRequest],
     ) -> BatchSubmission:
@@ -80,12 +98,11 @@ class OpenAIBatchStrategy:
         the input, then ``POST /batches`` to start processing. The caller
         polls via ``poll_batch`` and fetches via ``fetch_batch_results``.
         """
-        client = self._provider._get_client()
         jsonl = '\n'.join(
             json.dumps(self._build_batch_line(req)) for req in requests
         )
-        upload = await client.post(
-            '/files',
+        upload = await self._request_with_retry(
+            'POST', '/files',
             data={'purpose': 'batch'},
             files={
                 'file': (
@@ -95,19 +112,17 @@ class OpenAIBatchStrategy:
                 ),
             },
         )
-        upload.raise_for_status()
         input_file_id = upload.json()['id']
 
         _logger.info(
             'OpenAI batch submit: model=%s n=%d input_file=%s',
             self._provider.model, len(requests), input_file_id,
         )
-        response = await client.post('/batches', json={
+        response = await self._request_with_retry('POST', '/batches', json={
             'input_file_id': input_file_id,
             'endpoint': '/v1/chat/completions',
             'completion_window': '24h',
         })
-        response.raise_for_status()
         batch_id = response.json()['id']
         _logger.info('OpenAI batch submitted: id=%s', batch_id)
         return BatchSubmission(batch_id=batch_id)
@@ -116,10 +131,9 @@ class OpenAIBatchStrategy:
         """Cancel an in-flight batch so it stops processing — and being billed
         — at OpenAI. Best-effort, like the Anthropic strategy."""
         _logger.info('OpenAI batch cancel: id=%s', batch_id)
-        response = await self._provider._get_client().post(
-            f'/batches/{batch_id}/cancel',
+        await self._request_with_retry(
+            'POST', f'/batches/{batch_id}/cancel',
         )
-        response.raise_for_status()
 
     async def poll_batch(
         self,
@@ -135,10 +149,10 @@ class OpenAIBatchStrategy:
         we derive ``processing = total - completed - failed`` and map the
         terminal status onto the shared ``ended`` vocabulary.
         """
-        client = self._provider._get_client()
         while True:
-            response = await client.get(f'/batches/{batch_id}')
-            response.raise_for_status()
+            response = await self._request_with_retry(
+                'GET', f'/batches/{batch_id}',
+            )
             data = response.json()
             counts = data.get('request_counts', {}) or {}
             total = int(counts.get('total', 0) or 0)

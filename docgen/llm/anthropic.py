@@ -111,6 +111,27 @@ def _is_workspace_usage_limit(body: dict) -> bool:
     return any(kw in msg for kw in _WORKSPACE_LIMIT_KEYWORDS)
 
 
+def raise_if_quota_exhausted(status_code: int, response) -> None:
+    """Batch-retry hook: turn a 429 naming a hard quota cap into
+    ``QuotaExhaustedError`` so the shared retry loop aborts instead of futilely
+    retrying. A 429 that is *not* a quota cap (transient per-minute limit)
+    returns None and is retried by the caller; non-429 statuses are ignored.
+
+    Passed as ``on_status`` to :func:`docgen.llm.batch.request_with_retry` by
+    both the Anthropic and OpenAI batch strategies (OpenAI surfaces the same
+    quota-cap 429 shape).
+    """
+    if status_code != 429:
+        return
+    try:
+        body = response.json() if hasattr(response, 'json') else {}
+    except (ValueError, json.JSONDecodeError):
+        body = {}
+    if _is_quota_exhausted(body):
+        msg = (body.get('error') or {}).get('message') or 'quota exhausted'
+        raise QuotaExhaustedError(msg)
+
+
 @define
 class AnthropicProvider:
     """LLM provider for Anthropic's native ``/v1/messages`` endpoint."""

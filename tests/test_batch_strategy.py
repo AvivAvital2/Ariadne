@@ -339,6 +339,90 @@ class TestOpenAIBatchStrategy:
         results = await OpenAIBatchStrategy(provider).fetch_batch_results('b')
         assert results == {'g': 'hi', 'e': None, 'n': None}
 
+    async def test_submit_retries_transient_5xx_then_succeeds(
+        self, monkeypatch,
+    ) -> None:
+        """A 5xx at submit (file upload) is retried, not surfaced — a
+        transient gateway blip must not abort the whole batch. Mirrors the
+        Anthropic strategy's batch retry budget."""
+        import httpx
+
+        from docgen.llm.batch import BatchRequest
+        from docgen.llm.openai import OpenAIProvider
+        from docgen.llm.openai_batch import OpenAIBatchStrategy
+
+        req = httpx.Request('POST', 'https://api.openai.com/v1/files')
+        client = _FlakyOpenAIClient([
+            httpx.Response(503, request=req),      # /files attempt 1 → 503
+            _FakeResponse({'id': 'file_in_1'}),    # /files retry → ok
+            _FakeResponse({'id': 'batch_oai_1'}),  # /batches → ok
+        ])
+        monkeypatch.setattr(OpenAIProvider, '_get_client', lambda self: client)
+        provider = OpenAIProvider(model='gpt-5.5', api_key='test', retry_delay=0)
+
+        submission = await OpenAIBatchStrategy(provider).submit_batch([
+            BatchRequest(custom_id='d1', system_prompt='S', user_prompt='U'),
+        ])
+        assert submission.batch_id == 'batch_oai_1'
+        assert client.calls.count(('POST', '/files')) == 2  # retried once
+
+    async def test_submit_429_quota_aborts_without_retry(
+        self, monkeypatch,
+    ) -> None:
+        """A 429 whose body names a hard quota → QuotaExhaustedError with no
+        retry (retrying a spend cap just burns attempts)."""
+        import httpx
+
+        from docgen.llm.anthropic import QuotaExhaustedError
+        from docgen.llm.batch import BatchRequest
+        from docgen.llm.openai import OpenAIProvider
+        from docgen.llm.openai_batch import OpenAIBatchStrategy
+
+        req = httpx.Request('POST', 'https://api.openai.com/v1/files')
+        client = _FlakyOpenAIClient([
+            httpx.Response(
+                429, request=req,
+                json={'error': {'message': 'monthly spend limit reached'}},
+            ),
+        ])
+        monkeypatch.setattr(OpenAIProvider, '_get_client', lambda self: client)
+        provider = OpenAIProvider(model='gpt-5.5', api_key='test', retry_delay=0)
+
+        with pytest.raises(QuotaExhaustedError):
+            await OpenAIBatchStrategy(provider).submit_batch([
+                BatchRequest(custom_id='d1', system_prompt='S', user_prompt='U'),
+            ])
+        assert client.calls.count(('POST', '/files')) == 1  # quota is fatal
+
+
+class _FlakyOpenAIClient:
+    """Replays a queue of responses/exceptions in order, recording calls — so
+    a retry test can script a transient failure followed by success. A queued
+    Exception is raised (network error); a real httpx.Response with a 4xx/5xx
+    status raises via raise_for_status()."""
+
+    def __init__(self, queue: list) -> None:
+        self._queue = list(queue)
+        self.calls: list[tuple[str, str]] = []
+        self.headers: dict[str, str] = {}
+
+    async def post(self, url: str, **kw):
+        self.calls.append(('POST', url))
+        return self._next()
+
+    async def get(self, url: str, **kw):
+        self.calls.append(('GET', url))
+        return self._next()
+
+    def _next(self):
+        item = self._queue.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    async def aclose(self) -> None:
+        return None
+
 
 class TestMakeBatchStrategy:
     # ---- C2 selector -------------------------------------------------

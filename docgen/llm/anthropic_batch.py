@@ -16,12 +16,13 @@ from collections.abc import Callable, Sequence
 
 import httpx
 
-from docgen.llm.anthropic import (
-    AnthropicProvider,
-    QuotaExhaustedError,
-    _is_quota_exhausted,
+from docgen.llm.anthropic import AnthropicProvider, raise_if_quota_exhausted
+from docgen.llm.batch import (
+    BatchRequest,
+    BatchStatus,
+    BatchSubmission,
+    request_with_retry,
 )
-from docgen.llm.batch import BatchRequest, BatchStatus, BatchSubmission
 
 _logger = logging.getLogger(__name__)
 
@@ -61,117 +62,19 @@ class AnthropicBatchStrategy:
             'messages': [{'role': 'user', 'content': req.user_prompt}],
         }
 
-    # Batch endpoints get a more generous retry budget than the unary
-    # ``call()`` path: Anthropic's batch routes hit gateway-level
-    # outages (502/503/504) that routinely last 1-2 minutes. The unary
-    # default (3 attempts, ~3s total) gives up too soon; batch
-    # submission is critical-path (no fallback after the user pays for
-    # 404 prompts) and the batch itself runs for minutes-to-hours, so
-    # 60-120s of retries is well-amortized.
-    _BATCH_MAX_RETRIES = 6
-    _BATCH_MAX_DELAY = 30.0  # cap any single backoff
-
     async def _batch_request_with_retry(
         self, method: str, url: str, **kwargs,
     ) -> httpx.Response:
-        """HTTP request to a /messages/batches endpoint with retries.
-
-        Anthropic's batch routes intermittently return 502/503/504 under
-        load (CDN/proxy hiccups, not real failures). Without retries,
-        a transient gateway error mid-onboard kills hours of work right
-        when the user is submitting a 400+ prompt batch.
-
-        Retry policy:
-          - 5xx: exponential backoff (1, 2, 4, 8, 16, 30s), 6 attempts
-          - 429 non-quota / 529 overloaded: same exponential backoff
-          - 429 quota-exhausted: raise QuotaExhaustedError (no retry)
-          - other 4xx: raise immediately
-          - httpx.RequestError (network): exponential backoff
-          - all attempts exhausted: re-raise the last error so the
-            caller's recovery (``pending_batches`` row, auto-resume on
-            next invocation) can take over.
-        """
-        client = self._provider._get_client()
-        last_error: Exception | None = None
-        method = method.upper()
-        max_retries = self._BATCH_MAX_RETRIES
-        for attempt in range(max_retries):
-            try:
-                # Use the verb-specific helpers httpx exposes (post/get).
-                # Lets test doubles with narrower interfaces stay valid;
-                # real httpx routes both through .request() internally.
-                if method == 'GET':
-                    response = await client.get(url, **kwargs)
-                elif method == 'POST':
-                    response = await client.post(url, **kwargs)
-                else:  # pragma: no cover — only GET/POST used today
-                    response = await client.request(
-                        method, url, **kwargs,
-                    )
-                response.raise_for_status()
-                return response
-            except httpx.HTTPStatusError as e:
-                last_error = e
-                status = e.response.status_code
-                if status == 429:
-                    try:
-                        err_body = (
-                            e.response.json()
-                            if hasattr(e.response, 'json') else {}
-                        )
-                    except (ValueError, json.JSONDecodeError):
-                        err_body = {}
-                    if _is_quota_exhausted(err_body):
-                        msg = (
-                            (err_body.get('error') or {}).get('message')
-                            or 'quota exhausted'
-                        )
-                        raise QuotaExhaustedError(msg) from e
-                if status >= 500 or status in (429, 529):
-                    if attempt + 1 >= max_retries:
-                        _logger.error(
-                            'Anthropic batch %s %s: exhausted %d '
-                            'retries on %d; surfacing error',
-                            method, url, max_retries, status,
-                        )
-                        break
-                    delay = min(
-                        self._provider.retry_delay * (2 ** attempt),
-                        self._BATCH_MAX_DELAY,
-                    )
-                    _logger.warning(
-                        'Anthropic batch %s %s: HTTP %d on attempt '
-                        '%d/%d, retrying in %.1fs',
-                        method, url, status, attempt + 1,
-                        max_retries, delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                # 4xx (non-429) — no retry helps; surface immediately.
-                raise
-            except httpx.RequestError as e:
-                last_error = e
-                if attempt + 1 >= max_retries:
-                    _logger.error(
-                        'Anthropic batch %s %s: exhausted %d retries '
-                        'on network error; surfacing',
-                        method, url, max_retries,
-                    )
-                    break
-                delay = min(
-                    self._provider.retry_delay * (2 ** attempt),
-                    self._BATCH_MAX_DELAY,
-                )
-                _logger.warning(
-                    'Anthropic batch %s %s: network error on attempt '
-                    '%d/%d (%s), retrying in %.1fs',
-                    method, url, attempt + 1, max_retries, e, delay,
-                )
-                await asyncio.sleep(delay)
-        # Out of retries — surface the last error so the caller's own
-        # recovery path (pending_batches, --resume, etc.) can react.
-        assert last_error is not None
-        raise last_error
+        """HTTP to a /messages/batches endpoint with the shared batch retry
+        budget; a 429 naming a hard quota cap aborts via QuotaExhaustedError.
+        See :func:`docgen.llm.batch.request_with_retry`."""
+        return await request_with_retry(
+            self._provider._get_client(), method, url,
+            retry_delay=self._provider.retry_delay,
+            logger=_logger, label='Anthropic batch',
+            on_status=raise_if_quota_exhausted,
+            **kwargs,
+        )
 
     async def submit_batch(
         self, requests: Sequence[BatchRequest],
