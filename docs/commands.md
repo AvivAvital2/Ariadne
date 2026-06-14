@@ -26,7 +26,7 @@
 | `ariadne list` | List all documents |
 | `ariadne get <id>` | Retrieve a document by ID |
 | `ariadne stats` | Show library statistics |
-| `ariadne usage` | Show MCP usage statistics and feedback |
+| `ariadne usage` | Show MCP usage statistics and feedback; `--export-report PATH` writes a portable analytics report |
 | `ariadne gaps` | Generate miss report; `--analyze` for LLM recommendations |
 | **Maintenance** | |
 | `ariadne check` | Check for stale or missing documentation |

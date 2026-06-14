@@ -191,6 +191,53 @@ uv run ariadne finding -t "Why caching uses MD5"
 uv run ariadne finding -s src/cache.py -t "Cache invalidation logic"
 ```
 
+### Replacing the Database & Fetching Analytics
+
+When you run Ariadne in a **serve/build split** — build `ariadne.db` on a beefy box (or CI), ship it to a small always-on serving box, and *replace* the file there — the swap wipes `usage_events` (it lives inside `ariadne.db`). That reset is usually what you want: each generation gets a clean slate of hit/miss/score telemetry. The catch is that the swap also discards the signal `improve`/`gaps` feed on. The fix is to **fetch the analytics into a portable report before the swap**, so the insight survives the replacement and accumulates across generations.
+
+#### Fetch analytics into a portable report
+
+On the serving box, *before* replacing the database:
+
+```bash
+uv run ariadne usage --export-report analytics-2026-06.json
+```
+
+This writes a self-contained JSON `AnalyticsReport` distilled from `usage_events` — independent of the database, so it outlives the swap:
+
+| Field | Source | Carries |
+|-------|--------|---------|
+| `usage_summary` | `get_usage_stats` | calls / hits / misses, hit-rate, per-tool breakdown, **and the response-score aggregates** (`avg_quality_score`, `score_distribution`) |
+| `missed_queries` | `get_gap_report` | miss feedback grouped by theme, with counts and example queries |
+| `recent_misses` | `get_gap_report` | raw miss events (the input to LLM gap analysis) |
+| `doc_signals` | `usage_by_document` + `find_low_value_documents` | top-served docs and served-but-never-hit docs |
+| `gaps` *(optional)* | `analyze_gaps` | the LLM `GapReport` insights, when you pass them in |
+
+Response **scores** are captured the way Ariadne already records them: a `score:N` (1–10) embedded in hit/miss feedback (e.g. `ariadne_log_hit(event_id, "score:8 — found it")`) lands in `usage_events.quality_score` and is aggregated into `usage_summary`.
+
+#### The lifecycle
+
+1. **Gather** — the serving box records `usage_events` as it answers. (For the Slack bridge, set `enable_feedback: true` so hit/miss/score get written.)
+2. **Fetch** — run `uv run ariadne usage --export-report <file>` before each rebuild; keep the JSON in a `reports/` history for a longitudinal view.
+3. **Rebuild** — on the build box, regenerate `ariadne.db`, informed by the report's gaps and doc-signals.
+4. **Replace** — ship the new `ariadne.db` to the serving box and swap it in. `usage_events` resets to empty, measuring the *new* generation; the exported report has already preserved the old signal.
+
+The raw events are disposable per generation; the **report series is the durable record**.
+
+#### Consuming the report
+
+A saved report hands its signal back in the exact shape `improve`/`gaps` read from a live database, so it can drive a rebuild after the source DB has been wiped:
+
+```python
+from pathlib import Path
+from analytics_report import AnalyticsReport
+
+report = AnalyticsReport.from_json(Path("analytics-2026-06.json").read_text())
+gap_report = report.as_gap_report()   # {total_misses, top_gaps, recent_misses}
+# feed gap_report wherever a live get_gap_report() result is expected
+```
+
+> A `--from-report PATH` flag on `improve`/`gaps` (making the swap-in a single command) is the planned next step; `as_gap_report()` is the building block it will use.
 
 ---
 
