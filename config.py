@@ -124,8 +124,6 @@ DEFAULT_EXCLUDE_FILE_PATTERNS: tuple[str, ...] = (
     '**/test_*.py', '**/*_test.py', '**/conftest.py',
     # Vendored third-party installers — not project source
     '**/get-pip.py', '**/get-poetry.py', '**/install-poetry.py',
-    # macOS Finder metadata
-    '**/.DS_Store',
 )
 
 
