@@ -2,7 +2,9 @@
 
 Extracted from cli/generation.py. Runs the free phases + cost preview (via
 cmd_dry_run), then — on --approve or a yes — the paid phases (catalog-describe,
-generate, themes), with interactive doc-type / dependency / staleness prompts.
+generate, themes), with interactive doc-type / dependency prompts. Excludes and
+the staleness-exemption choice are made in the file browser (the exclude
+explorer), which onboard always opens on a TTY.
 Wired into the parser via this module's ``register_commands`` + ``HANDLERS``
 (assembled in cli/main.py).
 """
@@ -127,16 +129,18 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
     if not getattr(args, 'approve', False):
         _select_onboard_dependencies(cfg, source_name)
 
-    # ---- Offer the interactive exclude explorer before the preview ----
-    # (TTY only, and not under --approve). On 'yes' the dry-run preview
-    # opens the explorer, writes excludes, and re-estimates — so the preview
-    # the proceed-prompt then acts on already reflects them, and the paid
-    # generate phase honors them via ariadne.yaml.
-    if not getattr(args, 'approve', False) and not getattr(args, 'interactive', False):
-        if _prompt_explore_excludes():
-            args.interactive = True
-    if not getattr(args, 'approve', False):
-        _apply_onboard_staleness_choice(cfg, source_name)
+    # ---- Always open the file browser before the preview (TTY, not --approve)
+    # The browser owns ariadne.yaml configuration: the user reviews + excludes
+    # expensive paths there, and answers the staleness question as an Apply-time
+    # pop-up — rather than via pre-browser CLI prompts. The preview the
+    # proceed-prompt then acts on already reflects the chosen excludes, and the
+    # paid generate phase honors them via ariadne.yaml.
+    import sys
+    if not getattr(args, 'approve', False) and (
+        sys.stdin.isatty() and sys.stdout.isatty()
+    ):
+        args.interactive = True       # always review in the browser
+        args.offer_staleness = True   # explorer pops the staleness modal on Apply
 
     # ---- Preview: free phases (discover/index/catalog-sync) + cost
     # estimate, run exactly once. ----------------------------------------
@@ -282,24 +286,6 @@ def _prompt_proceed() -> bool:
         return False
     try:
         resp = input('Proceed with generation (paid phases)? [y/N]: ')
-    except EOFError:
-        return False
-    return resp.strip().lower() in ('y', 'yes')
-
-
-def _prompt_explore_excludes() -> bool:
-    """Offer the interactive exclude explorer before the cost preview.
-
-    Returns True only on an explicit yes at an interactive prompt; a non-TTY
-    context returns False so scripted ``onboard`` runs are unaffected.
-    """
-    import sys
-
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        return False
-    try:
-        resp = input(
-            'Review & exclude expensive paths before estimating? [y/N]: ')
     except EOFError:
         return False
     return resp.strip().lower() in ('y', 'yes')
@@ -584,37 +570,6 @@ def _select_onboard_dependencies(cfg, source_name: str) -> None:
         )
     else:
         console.print(f'[green]Cleared dependencies for {source_name}.[/green]')
-
-
-def _prompt_ignore_staleness(source_name) -> bool:
-    """Ask (TTY only) whether to exempt a source from staleness checks --
-    for repos updated rarely (e.g. only on releases), where the constant
-    'stale' nag is noise. A non-interactive context returns False.
-    """
-    import sys
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        return False
-    try:
-        resp = input(
-            f"Mark '{source_name}' staleness-exempt (rarely-updated repo)? [y/N]: "
-        )
-    except EOFError:
-        return False
-    return resp.strip().lower() in ('y', 'yes')
-
-
-def _apply_onboard_staleness_choice(cfg, source_name, *, prompt=None):
-    """Offer (during onboarding) to mark ``source_name`` staleness-exempt
-    and persist ``ignore_staleness: true`` on a yes. ``prompt`` is the
-    yes/no callable (injectable for tests). Returns whether the source was
-    marked exempt.
-    """
-    if prompt is None:
-        prompt = _prompt_ignore_staleness
-    if not prompt(source_name):
-        return False
-    cfg.set_source_config(source_name, ignore_staleness=True)
-    return True
 
 
 HANDLERS = {

@@ -17,7 +17,15 @@ below. Fixtures are synthetic: neutral names, hand-built tree + cost map.
 from __future__ import annotations
 
 import pytest
+from textual.screen import ModalScreen
+from textual.widgets import OptionList, Tree
 
+from cli.explorer_themes import ALLOWED_THEME_NAMES, EXPLORER_DEFAULT_THEME
+from cli.explorer_ui import (
+    _load_explorer_theme,
+    _make_explorer_tui_app,
+    _save_explorer_theme,
+)
 from config import Config
 from docgen.cost_by_dir import NodeCost
 from docgen.explorer_state import ExplorerState, Totals, apply_excludes
@@ -283,6 +291,59 @@ async def test_tui_app_toggle_and_apply():
     assert state.excluded_rules() == {'exclude_dirs': ['vendor'], 'exclude': []}
 
 
+async def test_apply_offers_staleness_modal_yes(tmp_path, monkeypatch):
+    # When onboarding offers it, Apply pops a modal asking about staleness
+    # exemption *after* the user has worked the tree; the apply is gated on the
+    # answer, and 'y' records the choice for the caller to persist.
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+    tree, costs = _fixture()
+    app = _make_explorer_tui_app(
+        ExplorerState(tree, costs),
+        offer_staleness=True, staleness_source='src1', staleness_exempt=False)
+    async with app.run_test() as pilot:
+        await pilot.press('a')                       # apply → staleness modal pops up
+        assert isinstance(app.screen, ModalScreen)   # the pop-up is shown
+        assert app.applied is False                  # apply gated on the modal answer
+        await pilot.press('y')                       # mark exempt
+    assert app.applied is True
+    assert app.staleness_exempt is True
+
+
+async def test_apply_offers_staleness_modal_no(tmp_path, monkeypatch):
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+    tree, costs = _fixture()
+    app = _make_explorer_tui_app(
+        ExplorerState(tree, costs),
+        offer_staleness=True, staleness_source='src1', staleness_exempt=False)
+    async with app.run_test() as pilot:
+        await pilot.press('a')
+        await pilot.press('n')                       # keep staleness checks
+    assert app.applied is True
+    assert app.staleness_exempt is False
+
+
+async def test_apply_skips_modal_when_not_offered():
+    # Standalone dry-run -i (no offer) → Apply exits straight away, no modal.
+    tree, costs = _fixture()
+    app = _make_explorer_tui_app(ExplorerState(tree, costs))
+    async with app.run_test() as pilot:
+        await pilot.press('a')
+    assert app.applied is True
+
+
+async def test_apply_skips_modal_when_already_exempt(tmp_path, monkeypatch):
+    # Already exempt → nothing to ask; Apply goes straight through, stays exempt.
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+    tree, costs = _fixture()
+    app = _make_explorer_tui_app(
+        ExplorerState(tree, costs),
+        offer_staleness=True, staleness_source='src1', staleness_exempt=True)
+    async with app.run_test() as pilot:
+        await pilot.press('a')
+    assert app.applied is True
+    assert app.staleness_exempt is True
+
+
 def test_set_costs_keeps_exclusions():
     tree, costs = _fixture()
     st = ExplorerState(tree, costs)
@@ -383,23 +444,21 @@ async def test_tui_tree_aligns_files_with_dirs():
 
 def test_explorer_theme_persistence(tmp_path, monkeypatch):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
-    from cli.explorer_ui import _load_explorer_theme, _save_explorer_theme
 
-    assert _load_explorer_theme() == 'ansi-dark'   # default when unset
-    _save_explorer_theme('nord')
-    assert _load_explorer_theme() == 'nord'         # round-trips
-    _save_explorer_theme('not-a-real-theme')        # unknown → falls back
-    assert _load_explorer_theme() == 'ansi-dark'
+    assert _load_explorer_theme() == EXPLORER_DEFAULT_THEME  # vibrant default when unset
+    _save_explorer_theme('tokyo-night')
+    assert _load_explorer_theme() == 'tokyo-night'           # curated theme round-trips
+    _save_explorer_theme('nord')                             # built-in, no longer offered
+    assert _load_explorer_theme() == EXPLORER_DEFAULT_THEME  # disallowed → falls back
 
 
 async def test_theme_picker_preview_and_commit(tmp_path, monkeypatch):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
-    from cli.explorer_ui import _load_explorer_theme, _make_explorer_tui_app
 
     tree, costs = _fixture()
     app = _make_explorer_tui_app(ExplorerState(tree, costs))
     async with app.run_test() as pilot:
-        start = app.theme                  # 'ansi-dark' (default, tmp empty)
+        start = app.theme                  # the vibrant default (tmp empty)
         await pilot.press('t')             # open the picker
         await pilot.press('down')          # highlight next theme → live preview
         previewed = app.theme
@@ -411,7 +470,6 @@ async def test_theme_picker_preview_and_commit(tmp_path, monkeypatch):
 
 async def test_theme_picker_cancel_reverts(tmp_path, monkeypatch):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
-    from cli.explorer_ui import _make_explorer_tui_app
 
     tree, costs = _fixture()
     app = _make_explorer_tui_app(ExplorerState(tree, costs))
@@ -423,6 +481,54 @@ async def test_theme_picker_cancel_reverts(tmp_path, monkeypatch):
         assert app.theme != start
         await pilot.press('escape')        # cancel → revert to the entry theme
         assert app.theme == start
+
+
+async def test_theme_picker_lists_only_curated(tmp_path, monkeypatch):
+    # The picker offers the curated, high-contrast set (+ the ansi terminal
+    # default) and hides the bland built-ins it used to show.
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+
+    tree, costs = _fixture()
+    app = _make_explorer_tui_app(ExplorerState(tree, costs))
+    async with app.run_test() as pilot:
+        await pilot.press('t')
+        picker = app.screen.query_one(OptionList)
+        offered = {
+            picker.get_option_at_index(i).id
+            for i in range(picker.option_count)
+        }
+        assert offered <= set(ALLOWED_THEME_NAMES)   # nothing outside the allowed set
+        assert 'dracula' in offered                  # curated themes are listed
+        assert 'rose-pine' not in offered            # bland built-ins are hidden
+        assert 'nord' not in offered
+
+
+async def test_tree_labels_are_coloured_by_theme(tmp_path, monkeypatch):
+    # The render is no longer monochrome: directory names take the theme accent,
+    # and the cost bar runs a success→error gradient by a node's share of cost.
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))   # unset → vibrant default
+
+    tree, costs = _fixture()
+    app = _make_explorer_tui_app(ExplorerState(tree, costs))
+    async with app.run_test() as pilot:
+        theme = app.current_theme
+        styles: dict[str, str] = {}
+
+        def walk(node):
+            if node.data is not None and node.data is not app._state.root:
+                styles[node.data.rel_path] = ' '.join(
+                    str(span.style) for span in node.label.spans).lower()
+            for child in node.children:
+                walk(child)
+
+        walk(app.query_one(Tree).root)
+
+        # Directory names render in the accent colour, not plain/dim.
+        assert theme.primary.lower() in styles['vendor']
+        # Gradient: 'vendor' is the cost hog (~86% of total) → error colour;
+        # a cheap leaf → success colour.
+        assert theme.error.lower() in styles['vendor']
+        assert theme.success.lower() in styles['src/a.py']
 
 
 async def test_tui_left_returns_to_parent_dir():

@@ -214,3 +214,18 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
     rc = await cmd_onboard(_args(approve=True, types='architecture'))
     assert rc == 0
     assert seen_args['generate'].types == 'architecture'
+
+    # ---- T11: on a TTY, onboard always opens the file browser and asks it to
+    # offer the staleness modal — no pre-browser y/N prompts ---------------
+    dry_run_calls.clear(); invoked.clear(); seen_args.clear()
+    monkeypatch.setattr(
+        'cli.onboard._select_onboard_dependencies', lambda *a: None)
+    monkeypatch.setattr(  # T3 left this throwing; this demand runs without --approve
+        'cli.onboard._prompt_proceed', lambda: proceed['value'])
+    monkeypatch.setattr('sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('sys.stdout.isatty', lambda: True)
+    proceed['value'] = False          # stop after preview; we assert the flags
+    rc = await cmd_onboard(_args())
+    assert rc == 0
+    assert dry_run_calls[-1].interactive is True      # browser always opens
+    assert dry_run_calls[-1].offer_staleness is True  # staleness modal offered
