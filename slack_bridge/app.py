@@ -78,7 +78,8 @@ def _make_web_client(token: str) -> Any:
     return AsyncWebClient(token=token)
 
 
-async def _run_scan(cfg: BridgeConfig, *, max_pairs: int | None = None) -> int:
+async def _run_scan(cfg: BridgeConfig, *, max_pairs: int | None = None,
+                    channels: list[str] | None = None) -> int:
     """Backfill the local best-of store from the bot's public channel history.
 
     Reads the scores Ariadne already logged in ``ariadne.db`` and snapshots the
@@ -93,7 +94,7 @@ async def _run_scan(cfg: BridgeConfig, *, max_pairs: int | None = None) -> int:
     try:
         recorded = await scan(
             client, conn, store_dir=store_dir,
-            bot_user_id=bot_user_id, max_pairs=max_pairs)
+            bot_user_id=bot_user_id, max_pairs=max_pairs, channels=channels)
     finally:
         conn.close()
     _logger.info('Backfilled %d testimonial(s) from public channels into %s',
@@ -113,6 +114,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     scan_p.add_argument(
         '--limit', type=int, default=None,
         help='Max past Q&A pairs to process, newest first (default: all)')
+    scan_p.add_argument(
+        '--channel', action='append', metavar='C…', default=None,
+        help='Restrict the scan to this channel id (repeatable; default: all public channels the bot is in)')
     return parser.parse_args(argv)
 
 
@@ -124,7 +128,8 @@ def main(argv: list[str] | None = None) -> None:
         # The backfill only reads scores from the DB — it never runs the agent,
         # so the serve-time cost gate (which forbids ANTHROPIC_API_KEY) doesn't
         # apply here.
-        asyncio.run(_run_scan(BridgeConfig.from_env(), max_pairs=args.limit))
+        asyncio.run(_run_scan(BridgeConfig.from_env(),
+                              max_pairs=args.limit, channels=args.channel))
         return
     # Fail fast on the cost invariant before doing any work: the bridge process
     # must carry CLAUDE_CODE_OAUTH_TOKEN and must NOT carry ANTHROPIC_API_KEY.

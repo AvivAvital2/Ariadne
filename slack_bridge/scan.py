@@ -142,11 +142,22 @@ async def scan(
     bot_user_id: str,
     window_seconds: float = _DEFAULT_WINDOW_SECONDS,
     max_pairs: int | None = None,
+    channels: list[str] | None = None,
 ) -> int:
-    """Backfill ``store_dir`` from the bot's public channels. Returns #recorded."""
+    """Backfill ``store_dir`` from the bot's public channels. Returns #recorded.
+
+    ``channels`` restricts the scan to those channel ids (still intersected with
+    the public channels the bot is a member of, so it can never reach a private
+    or non-member channel) — pin the backfill to one channel regardless of what
+    else the bot has joined. ``None`` scans all public channels it's in.
+    """
     events = scored_events(conn)
+    targets = await public_channels(slack)
+    if channels is not None:
+        wanted = set(channels)
+        targets = [c for c in targets if c in wanted]
     pairs: list[tuple[str, _QA]] = []
-    for channel in await public_channels(slack):
+    for channel in targets:
         for qa in await qa_pairs(slack, channel, bot_user_id):
             pairs.append((channel, qa))
 

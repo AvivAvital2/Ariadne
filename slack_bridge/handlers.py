@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
 import random
 import re
+import time
 from typing import Any
 
+import testimonials
+from schema import _now_iso
 from slack_bridge.diagram import prepare_diagrams
 from slack_bridge.errors import to_user_message
 from slack_bridge.format import to_mrkdwn
 from slack_bridge.images import image_files_in
 from slack_bridge.orchestrator import answer_question
 from slack_bridge.replay import PLACEHOLDER_PREFIX, load_thread
-import contextlib
-import logging
 
 _logger = logging.getLogger(__name__)
 
@@ -141,6 +144,9 @@ async def handle_event(
     placeholder = await slack.chat_postMessage(
         channel=channel, thread_ts=thread_ts, text=_PLACEHOLDER_TEXT
     )
+    turn_started = _now_iso()
+    turn_t0 = time.monotonic()
+    turn_score: int | None = None
     task = asyncio.ensure_future(
         answer_question(
             pool=pool,
@@ -180,6 +186,7 @@ async def handle_event(
         else:
             reply = await task  # the real result — or re-raises the turn's real error
             answer = (getattr(reply, 'text', '') or '').strip() or '(no answer returned)'
+            turn_score = getattr(reply, 'score', None)
     except Exception as exc:  # noqa: BLE001 -- surface honestly (timeout included); never mask
         _logger.exception('Slack turn failed (channel=%s thread=%s)', channel, thread_ts)
         answer = to_user_message(exc)
@@ -201,6 +208,27 @@ async def handle_event(
             )
             for i, png in enumerate(prepared.images)
         ))
+    if cfg.enable_feedback and turn_score is not None:
+        # Best-effort: the answer is already posted, so capture must never surface to
+        # the user. The permalink is a nice-to-have, fetched in its OWN suppress so a
+        # transient Slack hiccup can't cost us the testimonial. Score came from the
+        # agent's tool-call stream (AgentReply.score); the store is the separate,
+        # swap-proof .ariadne/local/.
+        permalink = None
+        with contextlib.suppress(Exception):
+            link = await slack.chat_getPermalink(channel=channel, message_ts=placeholder['ts'])
+            permalink = link.get('permalink')
+        with contextlib.suppress(Exception):
+            testimonials.record(
+                testimonials.local_dir(cfg.ariadne_dir),
+                question=text,
+                answer=answer,
+                score=turn_score,
+                duration_seconds=time.monotonic() - turn_t0,
+                asked_at=turn_started,
+                permalink=permalink,
+                images=prepared.images,
+            )
 
 
 def is_dm_message(event: dict) -> bool:
@@ -213,7 +241,7 @@ def is_dm_message(event: dict) -> bool:
     return (
         event.get('channel_type') == 'im'
         and not event.get('bot_id')
-        and not event.get('subtype')
+        and event.get('subtype') in (None, 'file_share')
     )
 
 

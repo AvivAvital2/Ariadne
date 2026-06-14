@@ -36,9 +36,11 @@ oauth_config:
       - app_mentions:read   # receive @Ariadne mentions
       - chat:write          # post + edit replies (chat.postMessage / chat.update)
       - files:write         # upload rendered diagram PNGs (files_upload_v2) into threads
+      - files:read          # download images attached to a question (url_private needs the bot token)
       - commands            # the /ariadne slash command
       - im:history          # read direct messages (the message.im events)
       - channels:history    # read public-channel thread history (conversations.replies)
+      - channels:read       # list public channels for `ariadne-slack scan` (conversations.list)
       - groups:history      # read private-channel thread history
       - mpim:history        # read group-DM thread history (message.mpim thread follow-ups)
 settings:

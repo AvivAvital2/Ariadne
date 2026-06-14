@@ -29,6 +29,7 @@ uv run ariadne merge             # Regenerate stable docs after branch merge
 uv run ariadne usage             # Show usage statistics (last 30 days)
 uv run ariadne gaps              # Show documentation gap analysis
 uv run ariadne gaps --analyze    # LLM-powered gap recommendations
+uv run ariadne testimonials      # Show top-scored Q&A from the local best-of store
 uv run ariadne mcp               # Start MCP server (stdio transport)
 ```
 

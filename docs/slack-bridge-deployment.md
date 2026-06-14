@@ -160,15 +160,21 @@ If you ship the optional embedding matrix (see below), rebuild and re-ship it in
 
 ## Testimonials (best-of showcase)
 
-The bridge keeps an all-time **top-20 of the highest-scored Q&A** in `.ariadne/local/` — a store that is **swap-proof** (it's gitignored and lives outside `ariadne.db`, so a knowledge-base refresh can't wipe it). Scored answers are captured **live** as they happen (when `enable_feedback` is on), and you can **backfill from existing history**:
+The bridge keeps an all-time **top-20 of the highest-scored Q&A** in `.ariadne/local/` — a store that is **swap-proof** (it's gitignored and lives outside `ariadne.db`, so a knowledge-base refresh can't wipe it). Scored answers are captured **live** as they happen (when `enable_feedback` is on), and you can **backfill from existing history** with a one-off run on the serving box, using the same env as the service:
 
 ```bash
-ariadne-slack scan            # walk public channels, snapshot the top scored Q&A
-ariadne-slack scan --limit 200   # cap how many past pairs to process (newest first)
-ariadne testimonials             # read the store; --export DIR also copies any images out
+sudo -iu ariadne && cd /opt/ariadne
+set -a; . /etc/ariadne/slack.env; set +a        # same env the systemd unit loads
+
+.venv/bin/ariadne-slack scan                    # all public channels the bot is in
+.venv/bin/ariadne-slack scan --channel C0123    # pin to one channel (repeatable)
+.venv/bin/ariadne-slack scan --limit 200        # cap how many past pairs (newest first)
+.venv/bin/ariadne testimonials                  # read the store; --export DIR copies images out
 ```
 
-`scan` only reads **public channels the bot is a member of** — DMs and private channels are never touched. It reads the scores Ariadne already logged in `usage_events` (joining each to its answer by time), so it **runs no agent turn and costs nothing**. It's idempotent — re-running never duplicates an entry (deduped by the source message). Because scores live in `usage_events` (wiped on a DB swap), **run `scan` before you refresh `ariadne.db`** if you want history captured.
+**Scope.** `scan` reads **only public channels the bot is a member of** (`/invite @Ariadne` there first) — DMs and private channels are never touched. Scope is the bot's **channel membership, not `allow_all`**: opening the bot org-wide changes *who can ask*, it does **not** trigger or widen a backfill, and `scan` runs only when you run it. Use `--channel` to pin the scan to specific channels regardless of what else the bot has since joined. The scan needs the **`channels:read`** scope (to *list* channels via `conversations.list`, distinct from `channels:history` for *reading* them); the app manifest grants it, but an app created from an **older** manifest must add it under **OAuth & Permissions** and reinstall.
+
+**Cost & timing.** It reads the scores Ariadne already logged in `usage_events` (joined to each answer by time), so it **runs no agent turn and costs nothing**. It's idempotent — re-running never duplicates an entry (deduped by the source message). Because scores live in `usage_events` (wiped on a DB swap), **run `scan` before you refresh `ariadne.db`** if you want that history captured.
 
 ## Embedding matrix (optional — faster semantic ranking)
 

@@ -142,6 +142,20 @@ async def test_scan_backfills_scored_public_qa(tmp_path: Path) -> None:
     assert {x.score for x in kept} == {9, 8, 7}
     assert all('unscored' not in x.question for x in kept)
 
+    # Demand 4 — channels=[...] pins the backfill: only the named channel is read
+    # and recorded, even though others are public + joined (so a later org-wide
+    # rollout can't widen an explicitly-scoped scan).
+    slack.add_qa(conn, 'C_PUB', '1718000400.000000', 'pinned q?',
+                 '1718000400.000050', 'pinned a.', score=10)
+    slack.add_qa(conn, 'C_PUB2', '1718009999.000000', 'other-chan q?',
+                 '1718009999.000050', 'other a.', score=7)
+    slack.history_reads.clear()
+    assert await scan(slack, conn, store_dir=store, bot_user_id=_BOT, channels=['C_PUB']) == 1
+    assert 'C_PUB2' not in slack.history_reads          # the other channel is never read
+    kept = testimonials.top(store)
+    assert next(x for x in kept if x.question == 'pinned q?').score == 10
+    assert all(x.question != 'other-chan q?' for x in kept)   # filtered channel ignored
+
 
 async def test_scan_is_robust_to_history_shape(tmp_path: Path) -> None:
     store = testimonials.local_dir(tmp_path)

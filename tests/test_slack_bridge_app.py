@@ -40,26 +40,26 @@ def test_scan_subcommand_runs_the_backfill_past_the_agent_cost_gate(monkeypatch)
                         classmethod(lambda cls: bridge_config()))
     ran: dict = {}
 
-    async def fake_run_scan(cfg, *, max_pairs=None):
-        ran['max_pairs'] = max_pairs
+    async def fake_run_scan(cfg, *, max_pairs=None, channels=None):
+        ran.update(max_pairs=max_pairs, channels=channels)
 
     monkeypatch.setattr(app, '_run_scan', fake_run_scan)
 
     assert app._parse_args([]).command is None            # bare → serve
-    args = app._parse_args(['scan', '--limit', '5'])
-    assert (args.command, args.limit) == ('scan', 5)
+    args = app._parse_args(['scan', '--limit', '5', '--channel', 'C1', '--channel', 'C2'])
+    assert (args.command, args.limit, args.channel) == ('scan', 5, ['C1', 'C2'])
 
-    app.main(['scan', '--limit', '5'])
-    assert ran == {'max_pairs': 5}
+    app.main(['scan', '--limit', '5', '--channel', 'C1'])
+    assert ran == {'max_pairs': 5, 'channels': ['C1']}
     assert creds_checked == []                            # gate never consulted for scan
 
 
 async def test_run_scan_opens_the_db_and_backfills(monkeypatch, tmp_path):
     captured: dict = {}
 
-    async def fake_scan(slack, conn, *, store_dir, bot_user_id, max_pairs=None):
+    async def fake_scan(slack, conn, *, store_dir, bot_user_id, max_pairs=None, channels=None):
         captured.update(store_dir=store_dir, bot_user_id=bot_user_id,
-                        max_pairs=max_pairs, slack=slack)
+                        max_pairs=max_pairs, channels=channels, slack=slack)
         return 3
 
     monkeypatch.setattr('slack_bridge.scan.scan', fake_scan)
@@ -71,10 +71,11 @@ async def test_run_scan_opens_the_db_and_backfills(monkeypatch, tmp_path):
     monkeypatch.setattr(app, '_make_web_client', lambda token: _FakeClient())
     (tmp_path / 'ariadne.db').touch()
 
-    n = await app._run_scan(bridge_config(ariadne_dir=tmp_path), max_pairs=7)
+    n = await app._run_scan(bridge_config(ariadne_dir=tmp_path), max_pairs=7, channels=['C1'])
     assert n == 3
     assert captured['bot_user_id'] == 'UBOT'
     assert captured['max_pairs'] == 7
+    assert captured['channels'] == ['C1']
     assert captured['store_dir'] == testimonials.local_dir(tmp_path)
     assert isinstance(captured['slack'], _FakeClient)
 
