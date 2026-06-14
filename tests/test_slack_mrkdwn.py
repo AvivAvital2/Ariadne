@@ -4,7 +4,9 @@ The agent emits GitHub-flavored Markdown, but Slack renders *mrkdwn*: bold is
 ``*one asterisk*`` (not ``**two**``), links are ``<url|label>`` (not
 ``[label](url)``), and there are no ``#`` headings. ``to_mrkdwn`` fixes the
 constructs Slack mangles while leaving code spans/blocks — and already-correct
-mrkdwn — untouched.
+mrkdwn — otherwise untouched. It also escapes the three characters Slack treats
+specially (``&``, ``<``, ``>``) everywhere, including inside code, since an
+unescaped ``<host>`` makes Slack mis-parse the surrounding span.
 """
 from __future__ import annotations
 
@@ -51,3 +53,25 @@ def test_realistic_mixed_reply():
     assert '- option one' in out
     assert '`pip install **x**`' in out      # code span untouched
     assert '**weather.com**' not in out
+
+
+def test_slack_special_chars_escaped():
+    """Slack mrkdwn requires ``&``/``<``/``>`` as HTML entities, everywhere.
+
+    Regression: a URL placeholder in a code span — ``https://<resource>...`` —
+    arrived with raw ``<``/``>``. Slack then broke the span, keeping
+    ``https://<resource>`` as a code chip and autolinking the ``.azure.com/``
+    tail. Escaping the angle brackets keeps the whole URL inside one span.
+    """
+    # the screenshot case: angle brackets inside a code span are escaped,
+    # and the span survives as a single unit (no split, no stray autolink)
+    assert (
+        to_mrkdwn('`https://<resource>.openai.azure.com/`')
+        == '`https://&lt;resource&gt;.openai.azure.com/`'
+    )
+    # the same three characters are escaped in plain prose too
+    assert to_mrkdwn('compare a < b && c > d') == 'compare a &lt; b &amp;&amp; c &gt; d'
+    # escaping runs before link conversion: a query-string ``&`` becomes
+    # ``&amp;`` inside the Slack link, and the ``<url|label>`` markup we emit
+    # is itself never re-escaped
+    assert to_mrkdwn('[docs](https://x.com?a=1&b=2)') == '<https://x.com?a=1&amp;b=2|docs>'
