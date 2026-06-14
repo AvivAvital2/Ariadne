@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from cli.dry_run import _apply_explorer_staleness
 from config import Config, ConfigError
 from docgen.staleness import StalenessTracker
 
@@ -299,43 +300,29 @@ def test_source_add_ignore_staleness_flag(monkeypatch, tmp_path):
     assert Config(config_path=cfg_path).get_source_config("rare").ignore_staleness is True
 
 
-# --- Onboarding: offer to mark the source staleness-exempt ---
+# --- Onboarding: the explorer's Apply-time staleness modal persists the choice ---
+# The CLI y/N prompt was replaced by a pop-up in the file browser (the browser
+# owns ariadne.yaml); ``_apply_explorer_staleness`` persists its result.
 
-def test_prompt_ignore_staleness_non_tty_returns_false(monkeypatch):
-    from cli.onboard import _prompt_ignore_staleness
+def test_apply_explorer_staleness_persists_on_yes(tmp_path):
+    cfg = _write_cfg(tmp_path, "sources:\n  src1:\n    path: __SRC1__\n")
 
-    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    assert _prompt_ignore_staleness("src1") is False  # never prompt off a TTY
-
-
-def test_prompt_ignore_staleness_reads_yes_no(monkeypatch):
-    from cli.onboard import _prompt_ignore_staleness
-
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    monkeypatch.setattr("builtins.input", lambda *a: "y")
-    assert _prompt_ignore_staleness("src1") is True
-    monkeypatch.setattr("builtins.input", lambda *a: "")
-    assert _prompt_ignore_staleness("src1") is False
+    # Modal accepted + not already exempt → persists ignore_staleness: true.
+    assert _apply_explorer_staleness(
+        cfg, "src1", chosen=True, currently_exempt=False) is True
+    assert Config(cfg.config_path).get_source_config(
+        "src1").ignore_staleness is True
 
 
-def test_apply_onboard_staleness_choice_persists_on_yes(tmp_path):
-    from cli.onboard import _apply_onboard_staleness_choice
-    from config import Config
+def test_apply_explorer_staleness_noop_when_declined_or_already_exempt(tmp_path):
+    cfg = _write_cfg(tmp_path, "sources:\n  src1:\n    path: __SRC1__\n")
 
-    repo = tmp_path / "r"
-    repo.mkdir()
-    cfg_path = tmp_path / "ariadne.yaml"
-    cfg_path.write_text(f"sources:\n  src1:\n    path: {repo}\n")
+    # Declined in the modal → nothing written.
+    assert _apply_explorer_staleness(
+        cfg, "src1", chosen=False, currently_exempt=False) is False
+    assert Config(cfg.config_path).get_source_config(
+        "src1").ignore_staleness in (None, False)
 
-    # 'yes' persists ignore_staleness: true.
-    assert _apply_onboard_staleness_choice(
-        Config(config_path=cfg_path), "src1", prompt=lambda s: True
-    ) is True
-    assert Config(config_path=cfg_path).get_source_config("src1").ignore_staleness is True
-
-    # 'no' makes no change (returns False, writes nothing).
-    assert _apply_onboard_staleness_choice(
-        Config(config_path=cfg_path), "src1", prompt=lambda s: False
-    ) is False
+    # Already exempt → no redundant write.
+    assert _apply_explorer_staleness(
+        cfg, "src1", chosen=True, currently_exempt=True) is False
