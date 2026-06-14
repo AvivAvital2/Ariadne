@@ -114,7 +114,7 @@ class TestDescribeBatched:
                 )
                 await describe_source_elements_batched(
                     library, writer, 'product',
-                    provider=provider,
+                    strategy=provider,
                     model='claude-opus-4-7',
                 )
 
@@ -163,7 +163,7 @@ class TestDescribeBatched:
                 )
                 result = await describe_source_elements_batched(
                     library, writer, 'product',
-                    provider=provider,
+                    strategy=provider,
                     model='claude-opus-4-7',
                 )
 
@@ -225,7 +225,7 @@ class TestDescribeBatched:
                 )
                 result = await describe_source_elements_batched(
                     library, writer, 'product',
-                    provider=provider,
+                    strategy=provider,
                     model='claude-opus-4-7',
                 )
 
@@ -291,7 +291,7 @@ class TestDescribeBatched:
                 )
                 result = await describe_source_elements_batched(
                     library, writer, 'product',
-                    provider=provider,
+                    strategy=provider,
                     model='claude-opus-4-7',
                 )
 
@@ -306,6 +306,63 @@ class TestDescribeBatched:
             # Counts reflect the partial outcome.
             assert result['described'] == 1
             assert result['failed'] == 1
+
+    # ---- T4b ---------------------------------------------------------
+    # A provider that returns a SHORT result set — a submitted custom_id
+    # absent from the results map entirely — must surface those as
+    # failures, not silently drop them. Anthropic returns a row per id;
+    # OpenAI's split output/error files can come back short on a
+    # wholesale-batch failure ('failed'/'expired').
+    @pytest.mark.asyncio
+    async def test_t4b_missing_result_rows_counted_as_failed(
+        self, tmp_path: Path,
+    ) -> None:
+        from library import Library
+        from writer import LibraryWriter
+
+        with Library(tmp_path / 'library.db') as library:
+            ok_doc = library.add_document(
+                content_type='catalog', title='product.ok',
+                content='def ok(): pass',
+                source_name='product',
+                source_files=['product/mod.py'],
+                metadata={
+                    'kind': 'element', 'source_name': 'product',
+                    'qualified_name': 'product.ok',
+                    'subtype': 'function',
+                },
+            )
+            dropped_doc = library.add_document(
+                content_type='catalog', title='product.dropped',
+                content='def dropped(): pass',
+                source_name='product',
+                source_files=['product/mod.py'],
+                metadata={
+                    'kind': 'element', 'source_name': 'product',
+                    'qualified_name': 'product.dropped',
+                    'subtype': 'function',
+                },
+            )
+
+            provider = _FakeProvider()
+            # Only ok_doc comes back; dropped_doc's row is missing entirely.
+            provider.set_results({ok_doc.id: 'OK description.'})
+
+            async with LibraryWriter(library) as writer:
+                from docgen.catalog_describer import (
+                    describe_source_elements_batched,
+                )
+                result = await describe_source_elements_batched(
+                    library, writer, 'product',
+                    strategy=provider,
+                    model='claude-opus-4-7',
+                )
+
+            assert result['described'] == 1
+            # The dropped element is a failure, not a silent no-op.
+            assert result['failed'] == 1
+            updated_dropped = library.get_document(dropped_doc.id)
+            assert not updated_dropped.metadata.get('description')
 
     # ---- T6 ----------------------------------------------------------
     # Resume: when a pending batch exists for this source, re-running
@@ -360,7 +417,7 @@ class TestDescribeBatched:
                 )
                 result = await describe_source_elements_batched(
                     library, writer, 'product',
-                    provider=provider,
+                    strategy=provider,
                     model='claude-opus-4-7',
                     resume=True,
                     staleness_db_path=staleness_db,
@@ -433,7 +490,7 @@ class TestDescribeBatched:
                 # resume=False here — auto-resume must still kick in.
                 result = await describe_source_elements_batched(
                     library, writer, 'product',
-                    provider=provider,
+                    strategy=provider,
                     model='claude-opus-4-7',
                     resume=False,
                     staleness_db_path=staleness_db,
@@ -509,7 +566,7 @@ class TestDescribeBatched:
                 )
                 await describe_source_elements_batched(
                     library, writer, 'product',
-                    provider=provider, model='claude-opus-4-7',
+                    strategy=provider, model='claude-opus-4-7',
                     concurrency=4,
                     on_stage=lambda stage, completed, total: stages.append(
                         (stage, completed, total),
@@ -590,7 +647,7 @@ class TestDescribeBatched:
                 with set_usage_observer(store.record):
                     await describe_source_elements_batched(
                         library, writer, 'product',
-                        provider=provider, model='claude-opus-4-8',
+                        strategy=provider, model='claude-opus-4-8',
                     )
 
         cal = store.mean_tokens(phase='describe', model='claude-opus-4-8')
@@ -638,7 +695,7 @@ class TestDescribeBatched:
                 with pytest.raises(KeyboardInterrupt):
                     await describe_source_elements_batched(
                         library, writer, 'product',
-                        provider=provider, model='m',
+                        strategy=provider, model='m',
                     )
             assert provider.cancelled == ['batch_test_001'], (
                 'aborting mid-poll must cancel the in-flight batch'
@@ -781,7 +838,7 @@ class TestDescribeBatched:
         captured: dict = {}
 
         async def fake_batched(*a, **kw):
-            captured['provider'] = kw.get('provider')
+            captured['strategy'] = kw.get('strategy')
             return {'submitted': 0, 'batch_id': None, 'described': 0,
                     'failed': 0, 'total_candidates': 0}
 
@@ -822,9 +879,9 @@ class TestDescribeBatched:
         monkeypatch.setenv('OPENAI_API_KEY', 'oai-key')
         monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
         assert await cmd_catalog_describe(args) == 0
-        assert isinstance(captured['provider'], OpenAIBatchStrategy), (
+        assert isinstance(captured['strategy'],OpenAIBatchStrategy), (
             f'gpt-* batch must use OpenAIBatchStrategy; got '
-            f'{type(captured.get("provider")).__name__}'
+            f'{type(captured.get("strategy")).__name__}'
         )
 
         # (b) claude-* → AnthropicBatchStrategy, keyed on ANTHROPIC_API_KEY.
@@ -834,9 +891,9 @@ class TestDescribeBatched:
         monkeypatch.setenv('ANTHROPIC_API_KEY', 'ant-key')
         monkeypatch.delenv('OPENAI_API_KEY', raising=False)
         assert await cmd_catalog_describe(args) == 0
-        assert isinstance(captured['provider'], AnthropicBatchStrategy), (
+        assert isinstance(captured['strategy'],AnthropicBatchStrategy), (
             f'claude-* batch must use AnthropicBatchStrategy; got '
-            f'{type(captured.get("provider")).__name__}'
+            f'{type(captured.get("strategy")).__name__}'
         )
 
         # (c) Missing the resolved provider's key → clean error, no dispatch.
@@ -845,4 +902,4 @@ class TestDescribeBatched:
         monkeypatch.delenv('OPENAI_API_KEY', raising=False)
         monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
         assert await cmd_catalog_describe(args) == 1
-        assert 'provider' not in captured
+        assert 'strategy' not in captured
