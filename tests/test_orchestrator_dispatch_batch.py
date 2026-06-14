@@ -500,3 +500,32 @@ class TestFetchWithRetry:
 
             assert result is None
             assert mock_fetch.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# _batch_strategy — degrade, don't raise, for a provider with no batch backend
+# ---------------------------------------------------------------------------
+
+
+class TestBatchStrategyDegrades:
+    @pytest.mark.asyncio
+    async def test_unknown_provider_type_returns_none_not_raises(
+        self, tmp_path: Path,
+    ) -> None:
+        """_batch_strategy must degrade to None for a provider type with no
+        batch backend, so the caller's ``if strategy is None`` guard handles
+        it (BatchAbort / no-op) instead of a ValueError crashing the run. The
+        ``provider is None`` short-circuit already returns None; this covers
+        the *non-None but unrecognized* case that batch_strategy_for rejects.
+        """
+        config = _make_config(tmp_path)
+        async with DocGenOrchestrator(config) as orch:
+            # A provider object of an unrecognized type (not Anthropic/OpenAI).
+            # Restore the real provider before the `async with` exits so the
+            # generator's aclose() teardown still has something to close.
+            real_provider = orch._generator._provider
+            orch._generator._provider = object()
+            try:
+                assert orch._batch_strategy() is None
+            finally:
+                orch._generator._provider = real_provider

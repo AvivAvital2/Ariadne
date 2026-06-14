@@ -977,7 +977,17 @@ class DocGenOrchestrator:
         provider = getattr(self._generator, '_provider', None)
         if provider is None:
             return None
-        return batch_strategy_for(provider)
+        try:
+            return batch_strategy_for(provider)
+        except ValueError:
+            # Provider type with no batch backend — degrade to the "no
+            # strategy" path the callers already handle (BatchAbort /
+            # PipelineResult), rather than letting a ValueError crash the run.
+            _logger.warning(
+                'No batch strategy for provider type %s; treating as no '
+                'batch backend (sync only)', type(provider).__name__,
+            )
+            return None
 
     async def _fetch_with_retry(
         self, strategy: object, batch_id: str, max_retries: int = 5,
