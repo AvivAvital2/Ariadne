@@ -138,6 +138,10 @@ journalctl -u ariadne-slack -f      # wait for "Ariadne Slack bridge starting (S
 
 The asking user/channel must be on the allowlist, or the bot replies that they're not set up.
 
+### Asking with an image
+
+`/ariadne` is **text-only** — Slack can't attach a file to a slash-command invocation (its payload carries no `files`), so an image can't ride along with it. To ask about an image, **@mention the bot or DM it** with the file attached. Accepted: **JPEG / PNG / GIF / WebP, ≤ 5 MB** (other formats — HEIC, SVG, PDF — are skipped); the bot token needs the `files:read` scope.
+
 ## Refreshing the knowledge base
 
 Rebuild on the build box, then re-ship and restart:

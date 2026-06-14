@@ -213,7 +213,7 @@ def is_dm_message(event: dict) -> bool:
     return (
         event.get('channel_type') == 'im'
         and not event.get('bot_id')
-        and not event.get('subtype')
+        and event.get('subtype') in (None, 'file_share')
     )
 
 

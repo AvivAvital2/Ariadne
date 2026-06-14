@@ -1,7 +1,7 @@
 from __future__ import annotations
+
 import asyncio
 import logging
-
 import types
 
 import pytest
@@ -582,3 +582,16 @@ async def test_fast_internal_timeout_is_not_mistaken_for_soft_deadline(caplog):
     assert not [t for _, _, t in slack.updated if t.startswith('⏳')]     # NO false 'still working'
     assert 'too long' in slack.updated[-1][2].lower()                    # honest timeout message
     assert any(r.exc_info for r in caplog.records)                       # real error logged, not masked
+def test_is_dm_message_accepts_file_share():
+    """A Slack file upload is a `message` with subtype 'file_share' carrying
+    files[] — a real user message, not edit/system noise. The DM gate must
+    accept it, else an image attached in a DM never reaches the handler."""
+    assert is_dm_message(
+        {'channel_type': 'im', 'user': 'U1', 'subtype': 'file_share',
+         'text': 'see this', 'files': [{'id': 'F1'}]}
+    )
+    # genuine noise (and the bot's own posts) still dropped
+    assert not is_dm_message({'channel_type': 'im', 'subtype': 'message_changed'})
+    assert not is_dm_message(
+        {'channel_type': 'im', 'bot_id': 'B1', 'subtype': 'file_share'}
+    )
