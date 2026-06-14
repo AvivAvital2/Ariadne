@@ -1,14 +1,10 @@
 """Command-line interface for Ariadne.
 
 This module provides CLI commands for managing the documentation library.
-Commands are organized into domain modules:
-- cli_core: CRUD, stats, metadata
-- cli_generation: generate, sync, merge, improve
-- cli_integration: init, manifest, config, MCP
-- cli_analysis: analysis, review, explain commands
-- cli_debug: diagnose, debug, test, teach commands
-- cli_health: lint, debt, doctor, trends, ROI commands
-- cli_graph: dependency graph commands
+Commands live in per-domain submodules of this package (cli/core.py,
+cli/generation.py, cli/integration.py, …); each exposes ``register_commands``
+and ``HANDLERS``, which ``create_parser()`` and ``main()`` assemble into the
+full parser and dispatch table.
 
 Usage:
     ariadne search "How does caching work?"
