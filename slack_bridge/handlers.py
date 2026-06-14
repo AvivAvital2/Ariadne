@@ -8,6 +8,7 @@ from typing import Any
 from slack_bridge.diagram import prepare_diagrams
 from slack_bridge.errors import to_user_message
 from slack_bridge.format import to_mrkdwn
+from slack_bridge.images import image_files_in
 from slack_bridge.orchestrator import answer_question
 from slack_bridge.replay import PLACEHOLDER_PREFIX, load_thread
 import contextlib
@@ -106,7 +107,7 @@ def _help_text(cfg: Any) -> str:
 
 
 async def handle_event(
-    *, cfg: Any, pool: Any, slack: Any, bot_user_id: str, ack: Any, event: dict, seed_turns: Any = None
+    *, cfg: Any, pool: Any, slack: Any, bot_user_id: str, ack: Any, event: dict, seed_turns: Any = None, seed_images: Any = None
 ) -> None:
     """Transport-agnostic handler for one inbound Slack message.
 
@@ -115,9 +116,9 @@ async def handle_event(
     thread as needed), then edits the placeholder into the answer. Errors and
     timeouts are surfaced honestly rather than masked.
 
-    ``seed_turns`` carries a thread transcript the caller already loaded (the
-    follow-up gate fetches it to decide engagement) so the cold path reuses it
-    instead of fetching the thread again.
+    ``seed_turns``/``seed_images`` carry a thread transcript (and its images) the
+    caller already loaded (the follow-up gate fetches it to decide engagement) so
+    the cold path reuses them instead of fetching the thread again.
     """
     await ack()
 
@@ -130,9 +131,10 @@ async def handle_event(
         return
 
     text = _clean_text(event.get('text', ''))
-    if not text:
-        # Empty question (bare `/ariadne` or a lone @mention): reply with usage
-        # right away — no "Searching…" placeholder, no agent turn.
+    trigger_files = event.get('files') or ()
+    if not text and not image_files_in([event]):
+        # Empty question (bare `/ariadne` or a lone @mention) with no image:
+        # reply with usage right away — no "Searching…" placeholder, no agent turn.
         await slack.chat_postMessage(channel=channel, thread_ts=thread_ts, text=_help_text(cfg))
         return
 
@@ -147,7 +149,10 @@ async def handle_event(
             channel=channel,
             thread_ts=thread_ts,
             text=text,
+            token=cfg.slack_bot_token,
+            trigger_files=trigger_files,
             seed_turns=seed_turns,
+            seed_images=seed_images,
         )
     )
     try:
@@ -247,11 +252,11 @@ def make_listeners(cfg: Any, pool: Any, bot_user_id: str) -> dict[str, Any]:
         if thread_ts and user and user != bot_user_id:
             thread_humans.setdefault(thread_ts, set()).add(user)
 
-    async def _run(event: dict, client: Any, *, seed_turns: Any = None) -> None:
+    async def _run(event: dict, client: Any, *, seed_turns: Any = None, seed_images: Any = None) -> None:
         _note(event.get('thread_ts') or event.get('ts'), event.get('user', ''))
         await handle_event(
             cfg=cfg, pool=pool, slack=client, bot_user_id=bot_user_id, ack=_noop_ack,
-            event=event, seed_turns=seed_turns,
+            event=event, seed_turns=seed_turns, seed_images=seed_images,
         )
 
     async def on_mention(event: dict, client: Any) -> None:
@@ -281,6 +286,7 @@ def make_listeners(cfg: Any, pool: Any, bot_user_id: str) -> dict[str, Any]:
         # re-warms the cache for another cycle; if not, it's a thread the bot
         # never joined, so leave it alone (a fresh topic must @mention).
         seed_turns = None
+        seed_images = None
         if thread_ts not in pool:
             ctx = await load_thread(client, event.get('channel', ''), thread_ts, bot_user_id)
             if not ctx.bot_present:
@@ -289,6 +295,7 @@ def make_listeners(cfg: Any, pool: Any, bot_user_id: str) -> dict[str, Any]:
             # gate survives eviction (the in-memory tally died with the session).
             thread_humans[thread_ts] = set(ctx.humans)
             seed_turns = ctx.turns
+            seed_images = ctx.images
         # Ingest the participant (replay keeps the full thread as context).
         _note(thread_ts, event.get('user', ''))
         # Answer a 1:1 correspondence automatically, or whenever the bot is named.
@@ -299,7 +306,7 @@ def make_listeners(cfg: Any, pool: Any, bot_user_id: str) -> dict[str, Any]:
         one_on_one = len(thread_humans.get(thread_ts, set())) <= 1
         addresses_another_user = bool(_MENTION_RE.search(text))
         if _name_invoked(text) or (one_on_one and not addresses_another_user):
-            await _run(event, client, seed_turns=seed_turns)
+            await _run(event, client, seed_turns=seed_turns, seed_images=seed_images)
 
     async def on_command(ack: Any, command: dict, client: Any) -> None:
         await ack()

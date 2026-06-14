@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any
 
 from attrs import frozen
 from claude_agent_sdk import ClaudeAgentOptions
+
+from slack_bridge.images import ImageBlob
 
 
 @frozen
@@ -58,9 +60,28 @@ class AgentRunner:
             await self._client.connect()
             self._connected = True
 
-    async def ask(self, text: str) -> AgentReply:
+    async def ask(self, text: str, images: Sequence[ImageBlob] = ()) -> AgentReply:
         await self._ensure_connected()
-        await self._client.query(text)
+        # Text-only rides the string path (cheapest; the SDK wraps it as a user
+        # message). With images we must stream a user-message envelope whose
+        # content is a block list — the string path is text-only — so switch to
+        # the async-iterable query path.
+        if images:
+            blocks: list[dict[str, Any]] = []
+            if text:
+                blocks.append({'type': 'text', 'text': text})
+            blocks.extend(img.to_content_block() for img in images)
+
+            async def _stream() -> AsyncIterator[dict[str, Any]]:
+                yield {
+                    'type': 'user',
+                    'message': {'role': 'user', 'content': blocks},
+                    'parent_tool_use_id': None,
+                }
+
+            await self._client.query(_stream())
+        else:
+            await self._client.query(text)
 
         parts: list[str] = []
         result: Any = None

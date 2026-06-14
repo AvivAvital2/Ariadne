@@ -47,7 +47,7 @@ class _FakeSession:
         self._boom = boom
         self.asked = []
 
-    async def ask(self, text):
+    async def ask(self, text, images=()):  # noqa: ARG002 — accepts the new kwarg
         self.asked.append(text)
         if self._boom is not None:
             raise self._boom
@@ -431,6 +431,56 @@ async def test_empty_question_replies_usage_without_placeholder_or_agent():
     assert 'diagram' in low                                   # #3 diagrams when docs allow
 
 
+async def test_handle_event_forwards_token_and_trigger_files(monkeypatch):
+    """An image on the triggering message reaches the orchestrator: handle_event
+    passes the bot token (for the authenticated download) and the raw files."""
+    captured = {}
+
+    async def fake_answer_question(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(text='ok', is_error=False, session_id='S')
+
+    monkeypatch.setattr('slack_bridge.handlers.answer_question', fake_answer_question)
+    slack = _FakeSlack()
+    cfg = bridge_config(channels=frozenset({'C1'}))
+    files = [{'id': 'F1', 'mimetype': 'image/png', 'url_private': 'u1'}]
+    event = {'user': 'U1', 'channel': 'C1', 'ts': 'T1',
+             'text': '<@UBOT> what is this?', 'files': files}
+
+    await handle_event(
+        cfg=cfg, pool=_FakePool(_FakeSession(None)), slack=slack,
+        bot_user_id='UBOT', ack=_noop_ack, event=event,
+    )
+
+    assert captured['token'] == cfg.slack_bot_token
+    assert captured['trigger_files'] == files
+    assert captured['text'] == 'what is this?'
+
+
+async def test_image_only_message_is_answered_not_helped(monkeypatch):
+    """A screenshot with no words (text empty after stripping the @mention) is a
+    real question — it must run the agent, not be short-circuited to usage help."""
+    called = []
+
+    async def fake_answer_question(**kwargs):
+        called.append(kwargs)
+        return types.SimpleNamespace(text='ok', is_error=False, session_id='S')
+
+    monkeypatch.setattr('slack_bridge.handlers.answer_question', fake_answer_question)
+    slack = _FakeSlack()
+    cfg = bridge_config(channels=frozenset({'C1'}))
+    event = {'user': 'U1', 'channel': 'C1', 'ts': 'T1', 'text': '<@UBOT>',
+             'files': [{'id': 'F1', 'mimetype': 'image/png', 'url_private': 'u1'}]}
+
+    await handle_event(
+        cfg=cfg, pool=_FakePool(_FakeSession(None)), slack=slack,
+        bot_user_id='UBOT', ack=_noop_ack, event=event,
+    )
+
+    assert len(called) == 1                            # ran the agent, not help
+    assert slack.posted[0][2].startswith('🔎')          # placeholder, not usage text
+
+
 async def test_empty_slash_command_replies_usage_immediately():
     """Bare /ariadne with no text -> usage help right away: no 'asked:' echo, no
     placeholder, no agent turn."""
@@ -460,7 +510,7 @@ class _SlowSession:
         self._delay = delay
         self.asked = []
 
-    async def ask(self, text):
+    async def ask(self, text, images=()):  # noqa: ARG002 — accepts the new kwarg
         self.asked.append(text)
         await asyncio.sleep(self._delay)
         return self._reply
@@ -508,7 +558,7 @@ class _TimeoutSession:
     def __init__(self):
         self.asked = []
 
-    async def ask(self, text):
+    async def ask(self, text, images=()):  # noqa: ARG002 — accepts the new kwarg
         self.asked.append(text)
         raise TimeoutError('mcp tool call timed out')
 

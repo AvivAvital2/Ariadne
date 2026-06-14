@@ -12,7 +12,7 @@ class _RecordingRunner:
         self.active = 0
         self.max_active = 0
 
-    async def ask(self, text):
+    async def ask(self, text, images=()):  # noqa: ARG002 — accepts the new kwarg
         self.active += 1
         self.max_active = max(self.max_active, self.active)
         # Yield control twice so a non-serialized impl would interleave here.
@@ -31,3 +31,21 @@ async def test_thread_session_serializes_concurrent_asks():
     # The per-thread lock means only one ask runs at a time.
     assert runner.max_active == 1
     assert set(results) == {'answer:a', 'answer:b'}
+
+
+class _CapturingRunner:
+    def __init__(self):
+        self.calls = []
+
+    async def ask(self, text, images=()):
+        self.calls.append((text, list(images)))
+        return f'answer:{text}'
+
+
+async def test_thread_session_forwards_images_to_runner():
+    runner = _CapturingRunner()
+    session = ThreadSession(runner)
+
+    await session.ask('what is this?', images=['IMG'])
+
+    assert runner.calls == [('what is this?', ['IMG'])]

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from slack_bridge.replay import _to_transcript
+from slack_bridge.replay import _to_transcript, load_thread
 
 
 def test_to_transcript_maps_roles_drops_placeholders_keeps_order():
@@ -26,3 +26,25 @@ def test_to_transcript_maps_roles_drops_placeholders_keeps_order():
     assert turns[3].text == 'It uses skopeo copy to docker://.'
     # No placeholder text leaks into the transcript.
     assert all('🔎' not in t.text for t in turns)
+
+
+async def test_load_thread_surfaces_supported_thread_images():
+    # The thread is the "correspondence": an image attached to an earlier
+    # message must be discoverable on the cold path, junk filtered out.
+    bot = 'UBOT'
+    messages = [
+        {'user': 'UALICE', 'text': 'look at this', 'files': [
+            {'id': 'F1', 'mimetype': 'image/png', 'url_private': 'u1'},
+            {'id': 'SKIP', 'mimetype': 'application/pdf', 'url_private': 'p'},
+        ]},
+        {'user': bot, 'text': 'on it'},
+        {'user': 'UALICE', 'text': 'what is wrong?'},
+    ]
+
+    class _Slack:
+        async def conversations_replies(self, channel, ts):  # noqa: ARG002
+            return {'messages': messages}
+
+    ctx = await load_thread(_Slack(), 'C', 'T', bot)
+
+    assert [(r.id, r.media_type) for r in ctx.images] == [('F1', 'image/png')]

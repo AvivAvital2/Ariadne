@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from attrs import frozen
+from attrs import field, frozen
+
+from slack_bridge.images import ImageRef, image_files_in
 
 # Prefix the bot uses for its "working…" placeholder message. Defined here so
 # replay can drop placeholders and the handlers can post them consistently.
@@ -66,6 +68,7 @@ class ThreadContext:
     turns: list[Turn]
     bot_present: bool
     humans: frozenset[str]
+    images: list[ImageRef] = field(factory=list)
 
 
 async def load_thread(slack_client: Any, channel: str, thread_ts: str, bot_user_id: str) -> ThreadContext:
@@ -84,14 +87,5 @@ async def load_thread(slack_client: Any, channel: str, thread_ts: str, bot_user_
         turns=turns,
         bot_present=any(t.role == 'assistant' for t in turns),
         humans=_human_authors(messages, bot_user_id),
+        images=image_files_in(messages),
     )
-
-
-async def reconstruct(slack_client: Any, channel: str, thread_ts: str, bot_user_id: str) -> list[Turn]:
-    """Fetch a Slack thread and reconstruct its transcript (cold-path memory).
-
-    Slack is the durable conversation store: on a cold follow-up we rebuild
-    context from ``conversations.replies`` rather than relying on an on-disk SDK
-    session (which is per-cwd/per-machine and may be pruned).
-    """
-    return (await load_thread(slack_client, channel, thread_ts, bot_user_id)).turns

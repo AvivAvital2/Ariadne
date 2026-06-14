@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
+
+from slack_bridge.images import ImageBlob
 
 
 class ThreadSession:
@@ -19,6 +22,6 @@ class ThreadSession:
         self.lock = asyncio.Lock()
         self.last_activity = last_activity
 
-    async def ask(self, text: str) -> Any:
+    async def ask(self, text: str, images: Sequence[ImageBlob] = ()) -> Any:
         async with self.lock:
-            return await self.runner.ask(text)
+            return await self.runner.ask(text, images=images)

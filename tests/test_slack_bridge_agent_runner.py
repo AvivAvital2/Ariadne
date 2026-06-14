@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import types
 
 from slack_bridge.agent_runner import AgentRunner, build_agent_options
+from slack_bridge.images import ImageBlob
 
 
 def _text_block(t):
@@ -66,6 +68,47 @@ async def test_ask_connects_queries_and_extracts_text_and_metadata():
     assert reply.text == 'Hello, world.'   # assembled from assistant TextBlocks
     assert reply.is_error is False
     assert reply.session_id == 'S9'
+
+
+async def test_ask_with_images_streams_content_blocks():
+    client = _FakeClient([_assistant('ok'), _result(session_id='S2')])
+    blob = ImageBlob(media_type='image/png', data=b'\x89PNGdata')
+    reply = await AgentRunner(client).ask('what is this?', images=[blob])
+
+    # Images can't ride the string path (text-only), so ask() switches to the
+    # SDK streaming-dict path: query() gets an async iterable of message
+    # envelopes, not a str.
+    assert len(client.queries) == 1
+    sent = client.queries[0]
+    assert not isinstance(sent, str)
+    msgs = [m async for m in sent]
+    assert len(msgs) == 1
+    content = msgs[0]['message']['content']
+    assert msgs[0]['message']['role'] == 'user'
+    assert {'type': 'text', 'text': 'what is this?'} in content
+    img_blocks = [b for b in content if b.get('type') == 'image']
+    assert len(img_blocks) == 1
+    src = img_blocks[0]['source']
+    assert src == {
+        'type': 'base64',
+        'media_type': 'image/png',
+        'data': base64.standard_b64encode(b'\x89PNGdata').decode('ascii'),
+    }
+    # Response extraction is unchanged on the image path.
+    assert reply.text == 'ok'
+    assert reply.session_id == 'S2'
+
+
+async def test_ask_image_only_omits_empty_text_block():
+    # A screenshot with no words (e.g. a bare "@ariadne" + image) must not
+    # send an empty text block — Anthropic rejects empty text content.
+    client = _FakeClient([_result(session_id='S3')])
+    blob = ImageBlob(media_type='image/jpeg', data=b'jpegbytes')
+    await AgentRunner(client).ask('', images=[blob])
+
+    msgs = [m async for m in client.queries[0]]
+    content = msgs[0]['message']['content']
+    assert [b['type'] for b in content] == ['image']
 
 
 async def test_ask_flags_tool_error_and_falls_back_to_result_text():
