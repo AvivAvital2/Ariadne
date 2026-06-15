@@ -19,6 +19,7 @@ Root-agnostic — callers pass the directory, so it is fully unit-testable.
 """
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -66,6 +67,49 @@ def _score_of(entry: Path) -> int:
         return -1
 
 
+# --- richness ranking -------------------------------------------------------
+# The best-of is ranked by the quality SCORE plus concrete "feature-rich"
+# signals — a diagram, citations of specific source files, and thoroughness —
+# so a terse high score can't outrank a detailed, diagram-backed, file-grounded
+# answer. Weights are modest (score stays dominant) and tunable.
+_DIAGRAM_BONUS = 1.0
+_FILE_REF_BONUS = 0.3          # per distinct source file cited
+_FILE_REF_CAP = 4             # → up to +1.2
+_THOROUGHNESS_CAP = 0.8
+_FILE_REF_RE = re.compile(
+    r'\b[\w./-]+\.'
+    r'(?:py|pyi|ts|tsx|js|jsx|go|rs|java|kt|rb|c|cc|cpp|h|hpp|cs|php|swift|scala|'
+    r'sql|sh|bash|zsh|yaml|yml|json|toml|ini|cfg|conf|xml|html|css|scss|vue|md|'
+    r'rst|proto|gradle)\b',
+    re.IGNORECASE,
+)
+
+
+def _count_file_refs(answer: str) -> int:
+    """Distinct source-file paths cited in the answer (exact-file mapping)."""
+    return len({m.lower() for m in _FILE_REF_RE.findall(answer)})
+
+
+def _thoroughness(answer: str) -> float:
+    """Detail signal (0…cap) from length + code blocks + bullet/numbered lists."""
+    length = min(len(answer) / 1500.0, 1.0) * 0.4
+    code = 0.25 if '```' in answer else 0.0
+    bullets = 0.15 if re.search(r'\n\s*(?:[-*]|\d+\.)\s', answer) else 0.0
+    return round(min(length + code + bullets, _THOROUGHNESS_CAP), 4)
+
+
+def _richness_of(score: int, answer: str, n_images: int) -> float:
+    """Composite rank: quality score + feature-rich signals.
+
+    A diagram, citations of specific source files, and thoroughness each lift the
+    rank, so the top-N favours the most detailed, feature-rich answers — not just
+    the highest bare score.
+    """
+    diagram = _DIAGRAM_BONUS if n_images > 0 else 0.0
+    files = min(_count_file_refs(answer), _FILE_REF_CAP) * _FILE_REF_BONUS
+    return float(score) + diagram + files + _thoroughness(answer)
+
+
 def record(
     root: str | Path,
     *,
@@ -80,8 +124,10 @@ def record(
 ) -> bool:
     """Store this interaction if it ranks in the all-time top :data:`MAX_KEEP`.
 
-    Returns True if it was stored (evicting the lowest when the store was full),
-    False if it didn't beat the current floor. ``images`` are raw PNG bytes.
+    Ranked by **richness** — the score plus feature-rich signals (a diagram,
+    source-file citations, thoroughness) — not score alone. Returns True if
+    stored (evicting the lowest-ranked when full), False if it didn't beat the
+    floor. ``images`` are raw PNG bytes.
 
     ``source_ts`` is the originating Slack message id (set by the channel
     backfill): if an entry with this id is already stored, the record is a
@@ -92,13 +138,17 @@ def record(
     root.mkdir(parents=True, exist_ok=True)
 
     entries = _entry_dirs(root)
-    if source_ts is not None and any(_load(e).source_ts == source_ts for e in entries):
-        return False
-    if len(entries) >= MAX_KEEP:
-        lowest = min(entries, key=_score_of)
-        if score <= _score_of(lowest):
+    new_richness = _richness_of(score, answer, len(images))
+    if source_ts is not None or len(entries) >= MAX_KEEP:
+        loaded = [_load(e) for e in entries]   # for dedup + richness-based eviction
+        if source_ts is not None and any(t.source_ts == source_ts for t in loaded):
             return False
-        shutil.rmtree(lowest)
+        if len(entries) >= MAX_KEEP:
+            lowest = min(
+                loaded, key=lambda t: _richness_of(t.score, t.answer, len(t.images)))
+            if new_richness <= _richness_of(lowest.score, lowest.answer, len(lowest.images)):
+                return False
+            shutil.rmtree(lowest.path)
 
     safe_ts = asked_at.replace(':', '').replace('-', '')
     entry = root / f'{int(score):02d}_{safe_ts}'
@@ -126,9 +176,14 @@ def record(
 
 
 def top(root: str | Path, limit: int = MAX_KEEP) -> list[Testimonial]:
-    """The highest-scored stored interactions, best first (at most ``limit``)."""
-    entries = sorted(_entry_dirs(Path(root)), key=_score_of, reverse=True)
-    return [_load(e) for e in entries[:limit]]
+    """The richest stored interactions, best first (at most ``limit``).
+
+    Ranked by :func:`_richness_of` — the quality score plus feature-rich signals
+    (a diagram, source-file citations, thoroughness) — not by score alone.
+    """
+    loaded = [_load(e) for e in _entry_dirs(Path(root))]
+    loaded.sort(key=lambda t: _richness_of(t.score, t.answer, len(t.images)), reverse=True)
+    return loaded[:limit]
 
 
 def _load(entry: Path) -> Testimonial:

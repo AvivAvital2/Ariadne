@@ -170,8 +170,11 @@ set -a; . /etc/ariadne/slack.env; set +a        # same env the systemd unit load
 .venv/bin/ariadne-slack scan --channel C0123    # pin to one channel (repeatable; reaches private)
 .venv/bin/ariadne-slack scan --channel C0123 --generate-scores   # also LLM-score un-scored history
 .venv/bin/ariadne-slack scan --limit 200        # cap how many past pairs (newest first)
-.venv/bin/ariadne testimonials                  # read the store; --export DIR copies images out
+.venv/bin/ariadne testimonials                  # read the store (ranked by richness, not bare score)
+.venv/bin/ariadne testimonials --export-html best-of.html   # self-contained HTML showcase page
 ```
+
+The store is ranked by **richness** — the quality score plus feature-rich signals (a diagram attached, distinct source files cited, thoroughness) — so the most detailed, diagram-backed answers surface first, not just the highest bare score. `--export-html` writes a single self-contained page (inline CSS, diagrams embedded as base64) you can open, share, or drop into a deck.
 
 **Scope.** With no `--channel`, `scan` reads **only the public channels the bot is a member of** (`/invite @Ariadne` first); it *lists* them via `conversations.list`, which needs the **`channels:read`** scope (the manifest grants it — an app created from an older manifest must add it under **OAuth & Permissions** and reinstall), and it never touches private channels or DMs. Pass **`--channel C…`** (repeatable) to target channels **by id, read directly** — no listing, so this reaches a **private** channel the bot is in, using the bot's existing `groups:history` scope (no extra scope needed). Scope is the bot's **channel membership, not `allow_all`**: opening the bot org-wide changes *who can ask*; it does **not** trigger or widen a backfill, and `scan` runs only when you run it.
 

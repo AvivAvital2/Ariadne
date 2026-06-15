@@ -28,7 +28,7 @@
 | `ariadne stats` | Show library statistics |
 | `ariadne usage` | Show MCP usage statistics and feedback; `--export-report PATH` writes a portable analytics report |
 | `ariadne gaps` | Generate miss report; `--analyze` for LLM recommendations |
-| `ariadne testimonials` | Show the top-scored Q&A from the local best-of store (`--limit`, `--export DIR`); captured/backfilled by the Slack bridge |
+| `ariadne testimonials` | Show the best-of Q&A from the local store, ranked by richness (score + diagram + source-file citations + detail); `--limit`, `--export DIR` (images), `--export-html FILE` (self-contained showcase page) |
 | **Maintenance** | |
 | `ariadne check` | Check for stale or missing documentation |
 | `ariadne sync` | Sync docs with git changes since last sync |

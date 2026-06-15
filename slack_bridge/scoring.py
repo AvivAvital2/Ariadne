@@ -13,7 +13,9 @@ from claude_agent_sdk import ClaudeAgentOptions, query
 
 _SYSTEM = (
     'You score how well a chatbot answer addressed its question, for a "best of" '
-    'showcase. Weigh accuracy, completeness, and helpfulness. Reply with ONLY a '
+    'showcase. Reward thoroughness and detail, accuracy grounded in actual '
+    'documentation (whole documents, not just snippets), answers that map to '
+    'specific source files by name, and including a diagram. Reply with ONLY a '
     'single integer from 1 (unhelpful or wrong) to 10 (excellent) — no other text.'
 )
 

@@ -61,9 +61,11 @@ _FEEDBACK = '''\
 Rating (do this on EVERY answer):
 - After you answer, call `ariadne_log_hit` for the `event_id` from your Ariadne \
 tool call (or `ariadne_log_miss` if the docs didn't cover it), and begin the \
-feedback with `score:N — <one-line reason>`, where N rates how well you answered, \
-from 1 (unhelpful or wrong) to 10 (excellent). \
-Example: `score:8 — clear LRU explanation from the caching doc`. \
+feedback with `score:N — <one-line reason>`, where N rates the answer from 1 \
+(unhelpful or wrong) to 10 (excellent). Score higher for thoroughness and detail, \
+accuracy grounded in actual documents (not just snippets), mapping to specific \
+source files by name, and including a diagram. \
+Example: `score:8 — clear LRU explanation from the caching doc, cited cache.py`. \
 This score is what records the answer for the team's best-of showcase.
 '''
 

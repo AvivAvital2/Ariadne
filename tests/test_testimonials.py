@@ -113,5 +113,36 @@ def test_store_tolerates_a_hand_edited_directory(tmp_path: Path) -> None:
     assert {x.question for x in got if x.score == 5} == {'first', 'second'}
 
 
+def test_richer_answers_outrank_a_higher_bare_score(tmp_path: Path) -> None:
+    # Ranking is by richness (score + diagram + source-file citations + detail),
+    # not score alone — so a feature-rich 8 beats a terse 9.
+    record(tmp_path, question='plain', answer='Short.', score=9,
+           duration_seconds=1.0, asked_at='2026-06-14T00:00:09Z')
+    record(tmp_path, question='rich', score=8,
+           duration_seconds=1.0, asked_at='2026-06-14T00:00:08Z',
+           answer='Detailed: it lives in `slack_bridge/scan.py` and `config.py`.\n'
+                  '```py\nx = 1\n```\n- handles A\n- handles B',
+           images=[b'\x89PNGdiagram'])
+    assert [t.question for t in top(tmp_path)] == ['rich', 'plain']
+
+    # ...but score still dominates between answers with the same richness signals:
+    # a bare 4 stays below the bare 9.
+    record(tmp_path, question='plain-low', answer='Short.', score=4,
+           duration_seconds=1.0, asked_at='2026-06-14T00:00:04Z')
+    assert [t.question for t in top(tmp_path)][-1] == 'plain-low'
+
+    # Eviction is richness-gated too: fill the store with terser, higher-scored
+    # entries (which evict the bare 4 and 9), then a fresh bare 9 still can't
+    # displace the feature-rich 8.
+    for s in range(20, 20 + MAX_KEEP - 1):       # 19 terse entries, all above rich-8
+        record(tmp_path, question=f'terse{s}', answer='ok', score=s,
+               duration_seconds=1.0, asked_at=f'2026-06-14T01:00:{s:02d}Z')
+    assert record(tmp_path, question='plain9b', answer='ok', score=9,
+                  duration_seconds=1.0, asked_at='2026-06-14T02:00:00Z') is False
+    kept_qs = {t.question for t in top(tmp_path)}
+    assert 'rich' in kept_qs                      # survived on richness, not bare score
+    assert 'plain-low' not in kept_qs and 'plain9b' not in kept_qs
+
+
 def test_local_dir_sits_under_dot_ariadne() -> None:
     assert local_dir('/srv/ariadne') == Path('/srv/ariadne/.ariadne/local')

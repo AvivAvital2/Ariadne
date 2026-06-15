@@ -52,3 +52,15 @@ def test_testimonials_cli_shows_top_then_limits_and_exports(tmp_path: Path, caps
     assert cmd_testimonials(argparse.Namespace(dir=base, limit=20, export=str(dest))) == 0
     pngs = list(dest.glob('*.png'))
     assert len(pngs) == 1 and pngs[0].read_bytes() == b'\x89PNGpayload'
+
+    # Demand 5 — --export-html writes a self-contained showcase page (the chosen
+    # 'cards' skin): a full HTML doc with the questions rendered and any diagram
+    # embedded inline — not the terminal listing.
+    html_file = tmp_path / 'show.html'
+    assert cmd_testimonials(argparse.Namespace(dir=base, limit=20, export=None,
+                                               export_html=str(html_file))) == 0
+    page = html_file.read_text()
+    assert page.startswith('<!DOCTYPE html>') and '</html>' in page
+    assert 'how does caching work?' in page           # a seeded question, rendered
+    assert 'data:image/png;base64,' in page           # the seeded diagram embedded
+    assert 'Wrote' in capsys.readouterr().out         # confirmation, not the Q/A listing

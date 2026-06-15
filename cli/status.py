@@ -78,6 +78,8 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help='Ariadne working dir holding .ariadne/local/ (default: cwd)')
     testimonials_parser.add_argument('--export', metavar='PATH', default=None,
         help='Copy stored images into PATH (for the showcase)')
+    testimonials_parser.add_argument('--export-html', metavar='FILE', default=None,
+        help='Write a self-contained HTML showcase page to FILE (diagrams embedded)')
 
 
 def cmd_stats(args: argparse.Namespace) -> int:
@@ -497,6 +499,15 @@ def cmd_testimonials(args: argparse.Namespace) -> int:
     base = Path(args.dir) if getattr(args, 'dir', None) else Path.cwd()
     limit = min(getattr(args, 'limit', None) or testimonials.MAX_KEEP, testimonials.MAX_KEEP)
     entries = testimonials.top(testimonials.local_dir(base), limit=limit)
+
+    export_html = getattr(args, 'export_html', None)
+    if export_html:
+        from testimonials_html import render_html
+        dest = Path(export_html)
+        dest.write_text(render_html(entries), encoding='utf-8')
+        console.print(f'[green]Wrote {len(entries)} testimonial(s) to {dest}[/green]')
+        return 0
+
     if not entries:
         console.print('[yellow]No testimonials recorded yet.[/yellow]')
         return 0
