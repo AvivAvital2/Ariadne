@@ -14,12 +14,16 @@ seed live in the regen-proof store, so a one-off scan snapshots them out.
 from __future__ import annotations
 
 import contextlib
+import logging
 import re
 import sqlite3
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
 import testimonials
+
+_logger = logging.getLogger(__name__)
 
 _PAGE = 200                       # Slack list page size
 _DEFAULT_WINDOW_SECONDS = 600.0   # max turn span to look forward for a score
@@ -143,19 +147,26 @@ async def scan(
     window_seconds: float = _DEFAULT_WINDOW_SECONDS,
     max_pairs: int | None = None,
     channels: list[str] | None = None,
+    score_fn: Callable[[str, str], Awaitable[int | None]] | None = None,
 ) -> int:
-    """Backfill ``store_dir`` from the bot's public channels. Returns #recorded.
+    """Backfill ``store_dir`` from the bot's channels. Returns #recorded.
 
-    ``channels`` restricts the scan to those channel ids (still intersected with
-    the public channels the bot is a member of, so it can never reach a private
-    or non-member channel) — pin the backfill to one channel regardless of what
-    else the bot has joined. ``None`` scans all public channels it's in.
+    With ``channels=None`` (the default) the scan lists and reads only the
+    **public** channels the bot is a member of. Passing ``channels`` reads those
+    ids **directly** by history — no workspace listing — so an operator can
+    explicitly target a **private** channel the bot is in: it uses the bot's
+    existing per-type history scope and needs no channel-listing scope.
+
+    ``score_fn`` (an async ``(question, answer) -> int|None``) generates a score
+    for a pair the DB never scored — the LLM backfill scorer — so chatter from
+    before live scoring was on can still be captured. DB-scored pairs are never
+    passed to it; a ``None`` result skips the pair.
     """
     events = scored_events(conn)
-    targets = await public_channels(slack)
     if channels is not None:
-        wanted = set(channels)
-        targets = [c for c in targets if c in wanted]
+        targets = list(channels)              # explicit: read these directly (public or private)
+    else:
+        targets = await public_channels(slack)   # default: public channels the bot is in
     pairs: list[tuple[str, _QA]] = []
     for channel in targets:
         for qa in await qa_pairs(slack, channel, bot_user_id):
@@ -166,9 +177,15 @@ async def scan(
     if max_pairs is not None:
         pairs = pairs[:max_pairs]
 
-    recorded = 0
+    recorded = matched = generated = 0
     for channel, qa in pairs:
         score = _score_for_turn(events, _epoch(qa.ts), answer_epochs, window_seconds)
+        if score is not None:
+            matched += 1
+        elif score_fn is not None:
+            score = await score_fn(qa.question, qa.answer)   # LLM-score unscored history
+            if score is not None:
+                generated += 1
         if score is None:
             continue
         permalink: str | None = None
@@ -186,6 +203,11 @@ async def scan(
             source_ts=qa.ts,
         ):
             recorded += 1
+    # One line that explains a 0: where in the pipeline it dropped off.
+    _logger.info(
+        'scan: %d channel(s) read, %d Q&A pair(s), %d DB-scored + %d generated, '
+        '%d recorded (%d scored events in usage_events)',
+        len(targets), len(pairs), matched, generated, recorded, len(events))
     return recorded
 
 

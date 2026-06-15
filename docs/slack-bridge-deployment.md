@@ -84,7 +84,7 @@ Edit it — it holds **no secrets**:
 - `allow_all` — **org-wide override** (default `false`). Set `true` to let *anyone who can reach the bot* use it (any user, channel, or DM), ignoring the two lists above — convenient for a whole-workspace rollout. The bot runs on your Claude subscription, so this opens that cost to the entire org; leave it `false` unless that's intended.
 - `pool.max_size` — each warm session holds its own Ariadne MCP subprocess; on a small box start at **5–10** (the default 50 can exhaust 2 GB).
 - `source_descriptions` / `source_aliases` — one-liners that help the agent route a question to the right source.
-- `enable_feedback` — opt-in; lets the bot record `ariadne_log_hit`/`miss` into `usage_events`.
+- `enable_feedback` — opt-in; lets the bot record `ariadne_log_hit`/`miss` into `usage_events` and makes the agent **score each answer** (`score:N`). Required for the testimonials best-of store to populate live (see below).
 
 ## 5. Run it under systemd
 
@@ -160,21 +160,27 @@ If you ship the optional embedding matrix (see below), rebuild and re-ship it in
 
 ## Testimonials (best-of showcase)
 
-The bridge keeps an all-time **top-20 of the highest-scored Q&A** in `.ariadne/local/` — a store that is **swap-proof** (it's gitignored and lives outside `ariadne.db`, so a knowledge-base refresh can't wipe it). Scored answers are captured **live** as they happen (when `enable_feedback` is on), and you can **backfill from existing history** with a one-off run on the serving box, using the same env as the service:
+The bridge keeps an all-time **top-20 of the highest-scored Q&A** in `.ariadne/local/` — a store that is **swap-proof** (it's gitignored and lives outside `ariadne.db`, so a knowledge-base refresh can't wipe it). Scoring requires **`enable_feedback: true`**: the agent is then instructed to rate each answer (`score:N` via `ariadne_log_hit`), so good answers are captured **live** as they happen. You can also **backfill from existing history** with a one-off run on the serving box, using the same env as the service:
 
 ```bash
 sudo -iu ariadne && cd /opt/ariadne
 set -a; . /etc/ariadne/slack.env; set +a        # same env the systemd unit loads
 
 .venv/bin/ariadne-slack scan                    # all public channels the bot is in
-.venv/bin/ariadne-slack scan --channel C0123    # pin to one channel (repeatable)
+.venv/bin/ariadne-slack scan --channel C0123    # pin to one channel (repeatable; reaches private)
+.venv/bin/ariadne-slack scan --channel C0123 --generate-scores   # also LLM-score un-scored history
 .venv/bin/ariadne-slack scan --limit 200        # cap how many past pairs (newest first)
 .venv/bin/ariadne testimonials                  # read the store; --export DIR copies images out
 ```
 
-**Scope.** `scan` reads **only public channels the bot is a member of** (`/invite @Ariadne` there first) — DMs and private channels are never touched. Scope is the bot's **channel membership, not `allow_all`**: opening the bot org-wide changes *who can ask*, it does **not** trigger or widen a backfill, and `scan` runs only when you run it. Use `--channel` to pin the scan to specific channels regardless of what else the bot has since joined. The scan needs the **`channels:read`** scope (to *list* channels via `conversations.list`, distinct from `channels:history` for *reading* them); the app manifest grants it, but an app created from an **older** manifest must add it under **OAuth & Permissions** and reinstall.
+**Scope.** With no `--channel`, `scan` reads **only the public channels the bot is a member of** (`/invite @Ariadne` first); it *lists* them via `conversations.list`, which needs the **`channels:read`** scope (the manifest grants it — an app created from an older manifest must add it under **OAuth & Permissions** and reinstall), and it never touches private channels or DMs. Pass **`--channel C…`** (repeatable) to target channels **by id, read directly** — no listing, so this reaches a **private** channel the bot is in, using the bot's existing `groups:history` scope (no extra scope needed). Scope is the bot's **channel membership, not `allow_all`**: opening the bot org-wide changes *who can ask*; it does **not** trigger or widen a backfill, and `scan` runs only when you run it.
 
-**Cost & timing.** It reads the scores Ariadne already logged in `usage_events` (joined to each answer by time), so it **runs no agent turn and costs nothing**. It's idempotent — re-running never duplicates an entry (deduped by the source message). Because scores live in `usage_events` (wiped on a DB swap), **run `scan` before you refresh `ariadne.db`** if you want that history captured.
+**Cost & timing.** By default `scan` reads the scores already in `usage_events` (joined to each answer by time) — **no agent turn, no cost**. Add **`--generate-scores`** to also have Claude rate answers the DB never scored (so chatter from before scoring was enabled is still captured); that **runs the agent on the subscription** — it needs `CLAUDE_CODE_OAUTH_TOKEN`, and the no-`ANTHROPIC_API_KEY` cost gate applies, one LLM call per un-scored pair. Either way it's idempotent — re-running never duplicates an entry (deduped by the source message). Because DB scores live in `usage_events` (wiped on a swap), **run `scan` before you refresh `ariadne.db`** if you want that history captured.
+
+**If `scan` records 0**, read its log line — `scan: N channel(s) read, M Q&A pair(s), K DB-scored + G generated, …`:
+- **0 channels** — the bot isn't a member/listed for the target. Invite it (`/invite @Ariadne`); for a private channel, name it with `--channel C…`.
+- **0 pairs** — no threaded Q&A found (the bot answers in-thread; a channel of plain chatter with no bot answers yields nothing).
+- **pairs but 0 DB-scored** — those answers were never scored (scoring needs `enable_feedback: true` *and* the agent emitting `score:N`; chatter from before that can't be DB-matched). Either confirm scores exist — `sqlite3 ariadne.db "SELECT count(*) total, count(quality_score) scored FROM usage_events"` — or re-run with **`--generate-scores`** to have Claude rate the un-scored ones now.
 
 ## Embedding matrix (optional — faster semantic ranking)
 

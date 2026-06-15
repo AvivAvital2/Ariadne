@@ -57,6 +57,17 @@ Formatting (Slack mrkdwn, NOT Markdown):
 '''
 
 
+_FEEDBACK = '''\
+Rating (do this on EVERY answer):
+- After you answer, call `ariadne_log_hit` for the `event_id` from your Ariadne \
+tool call (or `ariadne_log_miss` if the docs didn't cover it), and begin the \
+feedback with `score:N — <one-line reason>`, where N rates how well you answered, \
+from 1 (unhelpful or wrong) to 10 (excellent). \
+Example: `score:8 — clear LRU explanation from the caching doc`. \
+This score is what records the answer for the team's best-of showcase.
+'''
+
+
 def _format_entry(entry: SourceEntry) -> str:
     line = f'- `{entry.name}`'
     if entry.description:
@@ -66,18 +77,25 @@ def _format_entry(entry: SourceEntry) -> str:
     return line
 
 
-def render_system_prompt(roster: Iterable[SourceEntry]) -> str:
+def render_system_prompt(
+    roster: Iterable[SourceEntry], *, enable_feedback: bool = False
+) -> str:
     """Render the agent's system prompt, embedding the source roster.
 
     The roster (name + description + aliases) lets the agent route questions to a
     canonical source and ask for clarification when unsure, without ever issuing
-    a blind ``source=``.
+    a blind ``source=``. When ``enable_feedback`` is on (the hit/miss tools are
+    available), append the rating directive so the agent scores each answer —
+    that ``score:N`` is what populates ``quality_score`` and the testimonials.
     """
     roster_block = '\n'.join(_format_entry(e) for e in roster)
-    return (
+    prompt = (
         f'{_PREAMBLE}\n'
         f'You can answer about these sources:\n{roster_block}\n\n'
         f'{_ROUTING}\n'
         f'{_ANSWERING}\n'
         f'{_FORMATTING}'
     )
+    if enable_feedback:
+        prompt += f'\n{_FEEDBACK}'
+    return prompt

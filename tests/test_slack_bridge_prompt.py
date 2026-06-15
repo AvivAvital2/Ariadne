@@ -29,3 +29,19 @@ def test_render_system_prompt_includes_roster_posture_and_rules():
     assert 'ariadne_ask' in low
     # Audience/altitude adaptation cue.
     assert '10k' in low or 'altitude' in low or 'audience' in low
+
+
+def test_scoring_directive_is_added_only_when_feedback_is_enabled():
+    roster = [SourceEntry('projecta', 'First example project', ())]
+
+    off = render_system_prompt(roster)                       # default: feedback off
+    on = render_system_prompt(roster, enable_feedback=True)
+
+    # Off: no instruction to log feedback or emit a score.
+    assert 'score:' not in off.lower() and 'log_hit' not in off.lower()
+    # On: the agent is told to log a hit/miss AND begin it with a 1-10 score:N,
+    # which is what populates quality_score (and thus testimonials).
+    low = on.lower()
+    assert 'ariadne_log_hit' in low
+    assert 'score:' in low
+    assert '1' in on and '10' in on

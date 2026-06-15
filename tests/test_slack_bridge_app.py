@@ -40,26 +40,28 @@ def test_scan_subcommand_runs_the_backfill_past_the_agent_cost_gate(monkeypatch)
                         classmethod(lambda cls: bridge_config()))
     ran: dict = {}
 
-    async def fake_run_scan(cfg, *, max_pairs=None, channels=None):
-        ran.update(max_pairs=max_pairs, channels=channels)
+    async def fake_run_scan(cfg, *, max_pairs=None, channels=None, generate_scores=False):
+        ran.update(max_pairs=max_pairs, channels=channels, generate_scores=generate_scores)
 
     monkeypatch.setattr(app, '_run_scan', fake_run_scan)
 
     assert app._parse_args([]).command is None            # bare → serve
-    args = app._parse_args(['scan', '--limit', '5', '--channel', 'C1', '--channel', 'C2'])
-    assert (args.command, args.limit, args.channel) == ('scan', 5, ['C1', 'C2'])
+    assert app._parse_args(['scan']).generate_scores is False    # default off
+    args = app._parse_args(['scan', '--limit', '5', '--channel', 'C1', '--generate-scores'])
+    assert (args.command, args.limit, args.channel, args.generate_scores) == ('scan', 5, ['C1'], True)
 
-    app.main(['scan', '--limit', '5', '--channel', 'C1'])
-    assert ran == {'max_pairs': 5, 'channels': ['C1']}
-    assert creds_checked == []                            # gate never consulted for scan
+    app.main(['scan', '--limit', '5', '--channel', 'C1', '--generate-scores'])
+    assert ran == {'max_pairs': 5, 'channels': ['C1'], 'generate_scores': True}
+    assert creds_checked == []                            # main() doesn't gate scan (handled in _run_scan)
 
 
 async def test_run_scan_opens_the_db_and_backfills(monkeypatch, tmp_path):
     captured: dict = {}
 
-    async def fake_scan(slack, conn, *, store_dir, bot_user_id, max_pairs=None, channels=None):
-        captured.update(store_dir=store_dir, bot_user_id=bot_user_id,
-                        max_pairs=max_pairs, channels=channels, slack=slack)
+    async def fake_scan(slack, conn, *, store_dir, bot_user_id, max_pairs=None,
+                        channels=None, score_fn=None):
+        captured.update(store_dir=store_dir, bot_user_id=bot_user_id, max_pairs=max_pairs,
+                        channels=channels, score_fn=score_fn, slack=slack)
         return 3
 
     monkeypatch.setattr('slack_bridge.scan.scan', fake_scan)
@@ -76,8 +78,44 @@ async def test_run_scan_opens_the_db_and_backfills(monkeypatch, tmp_path):
     assert captured['bot_user_id'] == 'UBOT'
     assert captured['max_pairs'] == 7
     assert captured['channels'] == ['C1']
+    assert captured['score_fn'] is None                  # DB-only by default (no LLM)
     assert captured['store_dir'] == testimonials.local_dir(tmp_path)
     assert isinstance(captured['slack'], _FakeClient)
+
+
+async def test_run_scan_wires_an_llm_scorer_when_generating(monkeypatch, tmp_path):
+    pytest.importorskip('claude_agent_sdk')
+    captured: dict = {}
+
+    async def fake_scan(slack, conn, *, store_dir, bot_user_id, max_pairs=None,
+                        channels=None, score_fn=None):
+        captured['score_fn'] = score_fn
+        return 0
+
+    monkeypatch.setattr('slack_bridge.scan.scan', fake_scan)
+
+    class _FakeClient:
+        async def auth_test(self):
+            return {'user_id': 'UBOT'}
+
+    monkeypatch.setattr(app, '_make_web_client', lambda token: _FakeClient())
+    gate: list[bool] = []
+    monkeypatch.setattr(app, 'assert_agent_credentials', lambda env: gate.append(True))
+    scored: list = []
+
+    async def fake_llm_score(question, answer, *, model=None):
+        scored.append((question, answer, model))
+        return 5
+
+    monkeypatch.setattr('slack_bridge.scoring.llm_score', fake_llm_score)
+    (tmp_path / 'ariadne.db').touch()
+
+    await app._run_scan(bridge_config(ariadne_dir=tmp_path, model='claude-x'),
+                        generate_scores=True)
+    assert gate == [True]                                 # LLM scoring → cost gate enforced
+    assert captured['score_fn'] is not None
+    assert await captured['score_fn']('q', 'a') == 5      # delegates to llm_score…
+    assert scored == [('q', 'a', 'claude-x')]             # …with the configured model
 
 
 def test_make_web_client_builds_a_real_async_client():

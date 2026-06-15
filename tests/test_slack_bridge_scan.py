@@ -51,6 +51,7 @@ class _FakeSlack:
         self.history_pages: dict[str, list[list[dict]]] = {}
         self.replies: dict[tuple[str, str], list[dict]] = {}
         self.history_reads: list[str] = []
+        self.list_calls = 0
         self.permalink_fail = False
 
     # ---- test-side builders -------------------------------------------------
@@ -78,6 +79,7 @@ class _FakeSlack:
 
     # ---- the async surface scan consumes ------------------------------------
     async def conversations_list(self, *, types, exclude_archived=True, cursor=None, limit=200):
+        self.list_calls += 1
         return {'channels': self.channels, 'response_metadata': {'next_cursor': ''}}
 
     async def conversations_history(self, *, channel, cursor=None, limit=200):
@@ -142,19 +144,42 @@ async def test_scan_backfills_scored_public_qa(tmp_path: Path) -> None:
     assert {x.score for x in kept} == {9, 8, 7}
     assert all('unscored' not in x.question for x in kept)
 
-    # Demand 4 — channels=[...] pins the backfill: only the named channel is read
-    # and recorded, even though others are public + joined (so a later org-wide
-    # rollout can't widen an explicitly-scoped scan).
-    slack.add_qa(conn, 'C_PUB', '1718000400.000000', 'pinned q?',
-                 '1718000400.000050', 'pinned a.', score=10)
-    slack.add_qa(conn, 'C_PUB2', '1718009999.000000', 'other-chan q?',
-                 '1718009999.000050', 'other a.', score=7)
+    # Demand 4 — --channel reads the named channels DIRECTLY (by history, with no
+    # workspace listing), so it reaches a PRIVATE channel the bot is in, and
+    # touches only the named one.
+    slack.add_qa(conn, 'C_PRIV', '1718000400.000000', 'private q?',
+                 '1718000400.000050', 'private a.', score=10)       # C_PRIV is private
+    slack.add_qa(conn, 'C_PUB', '1718009999.000000', 'pub q?',
+                 '1718009999.000050', 'pub a.', score=9)
     slack.history_reads.clear()
-    assert await scan(slack, conn, store_dir=store, bot_user_id=_BOT, channels=['C_PUB']) == 1
-    assert 'C_PUB2' not in slack.history_reads          # the other channel is never read
+    slack.list_calls = 0
+    assert await scan(slack, conn, store_dir=store, bot_user_id=_BOT, channels=['C_PRIV']) == 1
+    assert slack.list_calls == 0                  # no conversations.list when channels are named
+    assert slack.history_reads == ['C_PRIV']      # only the named (private) channel is read
     kept = testimonials.top(store)
-    assert next(x for x in kept if x.question == 'pinned q?').score == 10
-    assert all(x.question != 'other-chan q?' for x in kept)   # filtered channel ignored
+    assert next(x for x in kept if x.question == 'private q?').score == 10
+    assert all(x.question != 'pub q?' for x in kept)
+
+    # Demand 5 — a `score_fn` (the LLM scorer) backfills a score for history the
+    # DB never scored, so previously-unscored responses are still captured; a
+    # score_fn returning None still skips, and DB-scored pairs are never sent to it.
+    scored_by_fn: list[str] = []
+
+    async def fake_score_fn(question, answer):
+        scored_by_fn.append(question)
+        return 7 if question == 'newly-scored q?' else None
+
+    slack.add_qa(conn, 'C_PUB', '1718000500.000000', 'newly-scored q?',
+                 '1718000500.000050', 'generated answer.')      # no DB score → fn returns 7
+    slack.add_qa(conn, 'C_PUB', '1718000600.000000', 'still-unscored q?',
+                 '1718000600.000050', 'meh.')                   # no DB score → fn returns None
+    assert await scan(slack, conn, store_dir=store, bot_user_id=_BOT,
+                      channels=['C_PUB'], score_fn=fake_score_fn) >= 1
+    kept = testimonials.top(store)
+    assert next(x for x in kept if x.question == 'newly-scored q?').score == 7   # generated
+    assert all(x.question != 'still-unscored q?' for x in kept)                  # None → skipped
+    assert 'newly-scored q?' in scored_by_fn
+    assert 'how does caching work?' not in scored_by_fn         # DB-scored pairs skip the scorer   # filtered channel ignored
 
 
 async def test_scan_is_robust_to_history_shape(tmp_path: Path) -> None:

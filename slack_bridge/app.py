@@ -25,7 +25,7 @@ def build_pool(cfg: BridgeConfig) -> SessionPool:
     """Assemble the warm-session pool: roster → system prompt → runner factory."""
     source_names = sorted(set(cfg.source_descriptions) | set(cfg.source_aliases))
     roster = build_roster(source_names, cfg.source_descriptions, cfg.source_aliases)
-    system_prompt = render_system_prompt(roster)
+    system_prompt = render_system_prompt(roster, enable_feedback=cfg.enable_feedback)
     return SessionPool(
         runner_factory=make_runner_factory(cfg, system_prompt),
         max_size=cfg.max_size,
@@ -79,13 +79,26 @@ def _make_web_client(token: str) -> Any:
 
 
 async def _run_scan(cfg: BridgeConfig, *, max_pairs: int | None = None,
-                    channels: list[str] | None = None) -> int:
-    """Backfill the local best-of store from the bot's public channel history.
+                    channels: list[str] | None = None,
+                    generate_scores: bool = False) -> int:
+    """Backfill the local best-of store from the bot's channel history.
 
     Reads the scores Ariadne already logged in ``ariadne.db`` and snapshots the
-    top Q&A into the swap-proof store — no agent turn, so no LLM cost.
+    top Q&A into the swap-proof store. By default that's no agent turn (no LLM
+    cost); with ``generate_scores`` it also LLM-scores history the DB never
+    scored — which *does* run the agent, so the cost gate is enforced.
     """
     from slack_bridge.scan import scan
+
+    score_fn = None
+    if generate_scores:
+        # Generating scores runs Claude on the subscription → enforce the same
+        # cost invariant the serve path does (oauth present, no ANTHROPIC_API_KEY).
+        assert_agent_credentials(os.environ)
+        from slack_bridge.scoring import llm_score
+
+        async def score_fn(question: str, answer: str) -> int | None:
+            return await llm_score(question, answer, model=cfg.model)
 
     client = _make_web_client(cfg.slack_bot_token)
     bot_user_id = (await client.auth_test())['user_id']
@@ -93,8 +106,8 @@ async def _run_scan(cfg: BridgeConfig, *, max_pairs: int | None = None,
     conn = sqlite3.connect(Path(cfg.ariadne_dir) / 'ariadne.db')
     try:
         recorded = await scan(
-            client, conn, store_dir=store_dir,
-            bot_user_id=bot_user_id, max_pairs=max_pairs, channels=channels)
+            client, conn, store_dir=store_dir, bot_user_id=bot_user_id,
+            max_pairs=max_pairs, channels=channels, score_fn=score_fn)
     finally:
         conn.close()
     _logger.info('Backfilled %d testimonial(s) from public channels into %s',
@@ -117,6 +130,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     scan_p.add_argument(
         '--channel', action='append', metavar='C…', default=None,
         help='Restrict the scan to this channel id (repeatable; default: all public channels the bot is in)')
+    scan_p.add_argument(
+        '--generate-scores', action='store_true',
+        help='LLM-score answers the DB never scored (runs the agent; needs CLAUDE_CODE_OAUTH_TOKEN)')
     return parser.parse_args(argv)
 
 
@@ -125,11 +141,10 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO)
     args = _parse_args(argv)
     if args.command == 'scan':
-        # The backfill only reads scores from the DB — it never runs the agent,
-        # so the serve-time cost gate (which forbids ANTHROPIC_API_KEY) doesn't
-        # apply here.
-        asyncio.run(_run_scan(BridgeConfig.from_env(),
-                              max_pairs=args.limit, channels=args.channel))
+        # The DB-only backfill never runs the agent, so the serve-time cost gate
+        # doesn't apply; with --generate-scores it does, and _run_scan enforces it.
+        asyncio.run(_run_scan(BridgeConfig.from_env(), max_pairs=args.limit,
+                              channels=args.channel, generate_scores=args.generate_scores))
         return
     # Fail fast on the cost invariant before doing any work: the bridge process
     # must carry CLAUDE_CODE_OAUTH_TOKEN and must NOT carry ANTHROPIC_API_KEY.
