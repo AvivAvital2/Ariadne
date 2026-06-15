@@ -80,3 +80,44 @@ def test_from_env_parses_allow_all(tmp_path, monkeypatch):
     empty.write_text('allowed_users: []\n')
     monkeypatch.setenv('ARIADNE_SLACK_CONFIG', str(empty))
     assert BridgeConfig.from_env().allow_all is False
+
+
+def test_org_gate_restricts_to_configured_orgs_and_rejects_external():
+    """`allowed_orgs` is the hard org boundary, independent of allow_all: a
+    message must come from a listed team/enterprise AND not be externally
+    shared. Unconfigured (empty) → the gate is a no-op."""
+    assert bridge_config().is_org_allowed(team_id='TANY', enterprise_id='', is_ext_shared=False)
+
+    cfg = bridge_config(allowed_orgs=frozenset({'T0HOME', 'E0GRID'}))
+    assert cfg.is_org_allowed(team_id='T0HOME', enterprise_id='', is_ext_shared=False)  # home workspace
+    assert cfg.is_org_allowed(team_id='TX', enterprise_id='E0GRID', is_ext_shared=False)  # Grid enterprise
+    assert not cfg.is_org_allowed(team_id='T0OTHER', enterprise_id='', is_ext_shared=False)  # other org
+    assert not cfg.is_org_allowed(team_id='T0HOME', enterprise_id='', is_ext_shared=True)  # shared channel
+
+
+def test_org_gate_fails_closed_on_blank_or_foreign_origin():
+    """Security invariant: when `allowed_orgs` is set, anything we can't positively
+    place inside a listed org is denied — a missing/blank team or enterprise, a
+    foreign one, or an externally-shared conversation."""
+    cfg = bridge_config(allowed_orgs=frozenset({'T0HOME', 'E0GRID'}))
+    assert not cfg.is_org_allowed()                                # nothing supplied → denied
+    assert not cfg.is_org_allowed(team_id='', enterprise_id='')    # blank → denied
+    assert not cfg.is_org_allowed(team_id='T0FOREIGN')             # other workspace → denied
+    assert not cfg.is_org_allowed(enterprise_id='E0FOREIGN')       # other Grid org → denied
+    assert not cfg.is_org_allowed(team_id='T0HOME', is_ext_shared=True)   # shared → denied
+    # only a positive, non-shared match passes
+    assert cfg.is_org_allowed(team_id='T0HOME')
+    assert cfg.is_org_allowed(enterprise_id='E0GRID')
+
+
+def test_from_env_parses_allowed_orgs(tmp_path, monkeypatch):
+    cfg_file = tmp_path / 'slack_bridge.yaml'
+    cfg_file.write_text('allowed_orgs: [T0HOME, E0GRID]\n')
+    monkeypatch.setenv('ARIADNE_SLACK_CONFIG', str(cfg_file))
+    monkeypatch.delenv('ARIADNE_DIR', raising=False)
+    assert BridgeConfig.from_env().allowed_orgs == frozenset({'T0HOME', 'E0GRID'})
+
+    empty = tmp_path / 'empty2.yaml'
+    empty.write_text('allowed_users: []\n')
+    monkeypatch.setenv('ARIADNE_SLACK_CONFIG', str(empty))
+    assert BridgeConfig.from_env().allowed_orgs == frozenset()

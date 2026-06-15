@@ -11,6 +11,11 @@ allowed_users: []        # Slack user IDs (U0123…); an allow-listed user may u
 allowed_channels: []     # Slack channel IDs (C0ENG…); opens the whole channel
 # both empty ⇒ deny everyone (fail-closed)
 allow_all: false         # org-wide: true ⇒ anyone who can reach the bot may use it (overrides the two lists above)
+allowed_orgs: []         # hard org boundary, independent of allow_all: list your workspace team id (T0…)
+                         # and/or Enterprise Grid org id (E0…). When set, a request is served only if it
+                         # comes from a listed org AND is not an externally-shared (Slack Connect) channel;
+                         # all else is silently ignored. Empty ⇒ off. The bridge logs its own team/enterprise
+                         # id at startup so you know what to put here.
 
 pool:
   max_size: 50           # max concurrent warm sessions (each holds an Ariadne MCP subprocess)
@@ -28,3 +33,7 @@ source_aliases:          # colloquial term → canonical source (bridge-only; ne
   ariadne: [ariadne, docs, 'knowledge base', kb]
   projecta: [projecta, 'first project', 'project alpha', proja]
   projectb: [projectb, projb]
+
+source_titles:           # friendly display labels for the `/ariadne greet` announcement
+  ariadne: 'Ariadne'     # (the Covers list). Absent ⇒ the bare source key is shown.
+  projecta: 'Project Alpha (PA)'

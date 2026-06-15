@@ -49,11 +49,25 @@ def register_listeners(app: Any, cfg: BridgeConfig, pool: Any, bot_user_id: str)
     app.command(_SLASH_COMMAND)(listeners['command'])
 
 
+def _warn_if_wide_open(cfg: BridgeConfig) -> None:
+    """Nudge if the bot is open with no org boundary — relying on Slack config alone."""
+    if cfg.allow_all and not cfg.allowed_orgs:
+        _logger.warning(
+            'allow_all is on with no allowed_orgs: the bot will answer anyone who can reach it, '
+            'INCLUDING external Slack Connect users. Set allowed_orgs to gate it to your org.')
+
+
 async def _run(cfg: BridgeConfig) -> None:
     from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 
+    _warn_if_wide_open(cfg)
     app = make_app(cfg)
-    bot_user_id = (await app.client.auth_test())['user_id']
+    auth = await app.client.auth_test()
+    bot_user_id = auth['user_id']
+    # Surface the bot's own org ids so the operator knows what to put in
+    # `allowed_orgs` (the hard org gate). enterprise_id is set on Grid only.
+    _logger.info('Bot identity: user=%s team=%s enterprise=%s — set allowed_orgs to gate the org',
+                 bot_user_id, auth.get('team_id'), auth.get('enterprise_id'))
     pool = build_pool(cfg)
     register_listeners(app, cfg, pool, bot_user_id)
 

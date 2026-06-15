@@ -40,9 +40,12 @@ oauth_config:
       - commands            # the /ariadne slash command
       - im:history          # read direct messages (the message.im events)
       - channels:history    # read public-channel thread history (conversations.replies)
-      - channels:read       # list public channels for `ariadne-slack scan` (conversations.list)
+      - channels:read       # list public channels for `ariadne-slack scan`; conversations.info (shared check)
       - groups:history      # read private-channel thread history
+      - groups:read         # conversations.info on private channels (org gate's shared-channel check)
       - mpim:history        # read group-DM thread history (message.mpim thread follow-ups)
+      - mpim:read           # conversations.info on group DMs (shared check)
+      - im:read             # conversations.info on DMs (detect Slack Connect DMs)
 settings:
   event_subscriptions:
     bot_events:

@@ -82,8 +82,10 @@ Edit it — it holds **no secrets**:
 
 - `allowed_users` / `allowed_channels` — **the access boundary.** Both empty = deny everyone (fail-closed); add the Slack user IDs (`U…`) / channel IDs (`C…`) allowed to use the bot.
 - `allow_all` — **org-wide override** (default `false`). Set `true` to let *anyone who can reach the bot* use it (any user, channel, or DM), ignoring the two lists above — convenient for a whole-workspace rollout. The bot runs on your Claude subscription, so this opens that cost to the entire org; leave it `false` unless that's intended.
+- `allowed_orgs` — **hard org boundary**, checked *before* everything above and **independent of `allow_all`**. List your workspace's team id (`T…`) and/or Enterprise Grid org id (`E…`); a request is then served only if it comes from a listed org **and** isn't an externally-shared (Slack Connect) channel — anything else is silently ignored. This is the defense-in-depth layer so Slack's own config isn't your only boundary: e.g. `allow_all: true` + `allowed_orgs: [T0YOURTEAM]` = "anyone in *your* org, internal channels/DMs only; every outsider ignored." Empty ⇒ off. The bridge logs its own `team`/`enterprise` id at startup so you know what to set here. For surfaces whose payload carries no shared flag — **slash commands** and **Slack Connect DMs** — it confirms the channel isn't externally shared via `conversations.info` (cached), which needs the `channels:read`/`groups:read`/`im:read`/`mpim:read` scopes (all in the manifest — **reinstall** the app if you're upgrading); if that lookup fails it **fails closed** (treats the channel as shared and ignores it). And if `allow_all` is on with no `allowed_orgs`, the bridge logs a startup warning — you'd be relying on Slack config alone.
 - `pool.max_size` — each warm session holds its own Ariadne MCP subprocess; on a small box start at **5–10** (the default 50 can exhaust 2 GB).
 - `source_descriptions` / `source_aliases` — one-liners that help the agent route a question to the right source.
+- `source_titles` — friendly display labels for the **`/ariadne greet`** announcement's *Covers* list (e.g. `dp: 'Discovery Platform (DP)'`). A source with no title shows its bare key; leave the whole map out and `greet` simply omits the Covers block.
 - `enable_feedback` — opt-in; lets the bot record `ariadne_log_hit`/`miss` into `usage_events` and makes the agent **score each answer** (`score:N`). Required for the testimonials best-of store to populate live (see below).
 
 ## 5. Run it under systemd
@@ -138,6 +140,8 @@ journalctl -u ariadne-slack -f      # wait for "Ariadne Slack bridge starting (S
 - **Slash:** `/ariadne how does X work?`
 
 The asking user/channel must be on the allowlist, or the bot replies that they're not set up.
+
+**Announce it:** run **`/ariadne greet`** in the launch channel — the bot posts a public "Meet Ariadne" intro (how to ask, naming a project, diagrams/altitude tips, and a *Covers* list built from `source_titles`). It's a canned render — no agent turn, no cost — and a bare **`/ariadne`** shows the same usage tips any time.
 
 ### Asking with an image
 

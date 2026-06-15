@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 import testimonials
@@ -122,6 +124,19 @@ async def test_run_scan_wires_an_llm_scorer_when_generating(monkeypatch, tmp_pat
     assert captured['score_fn'] is not None
     assert await captured['score_fn']('q', 'a') == 5      # delegates to llm_score…
     assert scored == [('q', 'a', 'claude-x')]             # …with the configured model
+
+
+def test_warns_when_allow_all_without_org_gate(caplog):
+    """#9: allow_all with no allowed_orgs is open to Slack Connect — warn loudly."""
+    with caplog.at_level(logging.WARNING, logger='slack_bridge.app'):
+        app._warn_if_wide_open(bridge_config(allow_all=True))
+    assert any('allowed_orgs' in r.getMessage() for r in caplog.records)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger='slack_bridge.app'):
+        app._warn_if_wide_open(bridge_config(allow_all=True, allowed_orgs=frozenset({'T0'})))  # gated
+        app._warn_if_wide_open(bridge_config())                                                # not open
+    assert caplog.records == []
 
 
 def test_make_web_client_builds_a_real_async_client():

@@ -9,6 +9,8 @@ import pytest
 import testimonials
 from slack_bridge.diagram import dot_available
 from slack_bridge.handlers import (
+    _channel_is_shared,
+    _org_context,
     command_to_event,
     handle_event,
     is_dm_message,
@@ -18,13 +20,22 @@ from tests._slack_bridge_helpers import bridge_config
 
 
 class _FakeSlack:
-    def __init__(self, replies=None):
+    def __init__(self, replies=None, *, shared_channels=(), info_fail=False):
         self.posted = []    # list of (channel, thread_ts, text)
         self.updated = []   # list of (channel, ts, text)
         self.uploaded = []  # list of files_upload_v2 call dicts
         self.permalinks = []
         self._replies = replies or []
         self._n = 0
+        self.shared_channels = set(shared_channels)   # channels conversations.info marks shared
+        self.info_fail = info_fail                    # make conversations.info raise (fail-closed test)
+        self.info_calls = []                          # to assert caching
+
+    async def conversations_info(self, *, channel):  # noqa: N802 — mirrors slack_sdk
+        self.info_calls.append(channel)
+        if self.info_fail:
+            raise RuntimeError('slack hiccup')
+        return {'channel': {'id': channel, 'is_ext_shared': channel in self.shared_channels}}
 
     async def chat_postMessage(self, *, channel, text, thread_ts=None):  # noqa: N802 — mirrors slack_sdk
         self._n += 1
@@ -179,6 +190,128 @@ async def test_message_listener_answers_dms_and_ignores_noise():
         client=noise_slack,
     )
     assert noise_slack.posted == [] and noise_slack.updated == []
+
+
+def test_org_context_extracts_team_enterprise_and_shared_flag():
+    assert _org_context({'team_id': 'T1'}) == {
+        'team_id': 'T1', 'enterprise_id': '', 'is_ext_shared': False}
+    assert _org_context({'enterprise_id': 'E1'})['enterprise_id'] == 'E1'
+    ctx = _org_context({'authorizations': [{'enterprise_id': 'E9'}], 'is_ext_shared_channel': True})
+    assert ctx == {'team_id': '', 'enterprise_id': 'E9', 'is_ext_shared': True}
+    assert _org_context({'context_team_id': 'T2', 'context_enterprise_id': 'E2'}) == {
+        'team_id': 'T2', 'enterprise_id': 'E2', 'is_ext_shared': False}
+
+
+async def test_org_gate_ignores_out_of_org_and_shared_events_even_with_allow_all():
+    reply = types.SimpleNamespace(text='ans', is_error=False, session_id='S')
+    # Wide-open bot, but hard-gated to one org — the gate must win over allow_all.
+    cfg = bridge_config(allow_all=True, allowed_orgs=frozenset({'T0HOME'}))
+    dm = {'channel_type': 'im', 'user': 'U1', 'channel': 'D1', 'ts': 'T1', 'text': 'hi'}
+
+    home = _FakeSlack()
+    await make_listeners(cfg, _FakePool(_FakeSession(reply), contains=True), 'UBOT')['message'](
+        event=dm, client=home, body={'team_id': 'T0HOME'})
+    assert home.updated and home.updated[0][2] == 'ans'          # home org → answered
+
+    ext = _FakeSlack()
+    await make_listeners(cfg, _FakePool(_FakeSession(reply), contains=True), 'UBOT')['message'](
+        event=dm, client=ext, body={'team_id': 'T0OTHER'})
+    assert ext.posted == [] and ext.updated == []                # other org → ignored
+
+    shared = _FakeSlack()
+    await make_listeners(cfg, _FakePool(_FakeSession(reply), contains=True), 'UBOT')['app_mention'](
+        event={'user': 'U1', 'channel': 'C1', 'ts': 'T3', 'text': '<@UBOT> hi'},
+        client=shared, body={'team_id': 'T0HOME', 'is_ext_shared_channel': True})
+    assert shared.posted == [] and shared.updated == []          # shared channel → ignored
+
+    acks: list[bool] = []
+
+    async def ack():
+        acks.append(True)
+
+    cmd = _FakeSlack()
+    await make_listeners(cfg, _FakePool(_FakeSession(reply), contains=True), 'UBOT')['command'](
+        ack=ack, client=cmd,
+        command={'team_id': 'T0OTHER', 'channel_id': 'C9', 'user_id': 'UX', 'text': 'hi'})
+    assert acks == [True]                                        # acked (Slack's 3s window)…
+    assert cmd.posted == [] and cmd.updated == []                # …but a slash from another org is ignored
+
+
+async def test_channel_is_shared_caches_and_fails_closed():
+    cache: dict[str, bool] = {}
+    s = _FakeSlack(shared_channels={'C_SHARED'})
+    assert await _channel_is_shared(s, 'C_SHARED', cache) is True
+    assert await _channel_is_shared(s, 'C_INTERNAL', cache) is False
+    await _channel_is_shared(s, 'C_SHARED', cache)            # cached: no second lookup
+    assert s.info_calls == ['C_SHARED', 'C_INTERNAL']
+    # fail-closed: a conversations.info error → treated as shared, and not cached
+    boom = _FakeSlack(info_fail=True)
+    assert await _channel_is_shared(boom, 'C_X', {}) is True
+
+
+async def test_slash_in_a_shared_channel_is_ignored_even_when_open():
+    """#6: a slash in an externally-shared channel must not be answered there —
+    the slash payload has no shared flag, so we verify via conversations.info."""
+    reply = types.SimpleNamespace(text='ans', is_error=False, session_id='S')
+    cfg = bridge_config(allow_all=True)            # open; the conversations.info check still blocks
+    acks: list[bool] = []
+
+    async def ack():
+        acks.append(True)
+
+    shared = _FakeSlack(shared_channels={'C_SHARED'})
+    await make_listeners(cfg, _FakePool(_FakeSession(reply), contains=True), 'UBOT')['command'](
+        ack=ack, client=shared,
+        command={'team_id': 'T0', 'channel_id': 'C_SHARED', 'user_id': 'U1', 'text': 'hi'})
+    assert acks == [True] and shared.posted == [] and shared.updated == []   # no echo, no leak
+
+    internal = _FakeSlack()
+    await make_listeners(cfg, _FakePool(_FakeSession(reply), contains=True), 'UBOT')['command'](
+        ack=ack, client=internal,
+        command={'team_id': 'T0', 'channel_id': 'C_INTERNAL', 'user_id': 'U1', 'text': 'hi'})
+    assert any('asked:' in t for _, _, t in internal.posted)   # internal slash still works
+
+
+async def test_connect_dm_is_ignored():
+    """#8: an externally-shared (Slack Connect) DM is ignored; a normal DM works."""
+    reply = types.SimpleNamespace(text='ans', is_error=False, session_id='S')
+    cfg = bridge_config(allow_all=True)
+
+    connect = _FakeSlack(shared_channels={'D_CONNECT'})
+    await make_listeners(cfg, _FakePool(_FakeSession(reply), contains=True), 'UBOT')['message'](
+        event={'channel_type': 'im', 'user': 'UX', 'channel': 'D_CONNECT', 'ts': 'T1', 'text': 'hi'},
+        client=connect)
+    assert connect.posted == [] and connect.updated == []
+
+    internal = _FakeSlack()
+    await make_listeners(cfg, _FakePool(_FakeSession(reply), contains=True), 'UBOT')['message'](
+        event={'channel_type': 'im', 'user': 'U1', 'channel': 'D_INTERNAL', 'ts': 'T2', 'text': 'hi'},
+        client=internal)
+    assert internal.updated and internal.updated[0][2] == 'ans'
+
+
+async def test_org_gate_is_the_floor_under_the_allowlist_and_covers_channel_threads():
+    """Security invariant: the org filter sits *under* the channel allowlist (it
+    can't be punched through by listing a channel), and it covers the channel
+    thread-follow-up path (on_message), not just mentions/DMs."""
+    reply = types.SimpleNamespace(text='ans', is_error=False, session_id='S')
+    cfg = bridge_config(channels=frozenset({'C1'}), allowed_orgs=frozenset({'T0HOME'}))
+
+    # A foreign-org @mention in the ALLOW-LISTED channel is still ignored —
+    # the allowlist does not override the org filter.
+    s1 = _FakeSlack()
+    await make_listeners(cfg, _FakePool(_FakeSession(reply), contains=True), 'UBOT')['app_mention'](
+        event={'user': 'U1', 'channel': 'C1', 'ts': 'T1', 'text': '<@UBOT> hi'},
+        client=s1, body={'team_id': 'T0FOREIGN'})
+    assert s1.posted == [] and s1.updated == []
+
+    # An externally-shared CHANNEL thread follow-up (home team) is ignored too —
+    # the gate runs before any thread/engagement logic in on_message.
+    s2 = _FakeSlack()
+    await make_listeners(cfg, _FakePool(_FakeSession(reply), contains=True), 'UBOT')['message'](
+        event={'channel': 'C1', 'user': 'U1', 'ts': 'T2', 'thread_ts': 'T0', 'text': 'follow up'},
+        client=s2, body={'team_id': 'T0HOME', 'is_ext_shared_channel': True})
+    assert s2.posted == [] and s2.updated == []
 
 
 async def test_thread_followups_one_on_one_then_multiparty_name_gate():
@@ -503,6 +636,65 @@ async def test_empty_slash_command_replies_usage_immediately():
     assert 'asked:' not in text
     assert 'Searching' not in text and '🔎' not in text
     assert '/ariadne' in text
+
+
+async def test_greet_command_posts_config_driven_announcement_without_agent():
+    """`/ariadne greet` posts a public 'Meet Ariadne' announcement rendered from
+    config — no 'asked:' echo, no placeholder, no agent turn (no LLM cost). The
+    Covers list reflects the advertised projects by friendly title, falling back
+    to the bare source key when a project has no title."""
+    pool = _FakePool(_FakeSession(types.SimpleNamespace(text='x', is_error=False, session_id='S')), contains=True)
+    slack = _FakeSlack()
+    cfg = bridge_config(
+        channels=frozenset({'C1'}),
+        source_descriptions={'src_one': 'first source', 'src_two': 'second source'},
+        source_titles={'src_one': 'Source One (S1)'},   # src_two has no title → key fallback
+    )
+    L = make_listeners(cfg, pool, 'UBOT')
+
+    await L['command'](ack=_noop_ack, command={'user_id': 'U1', 'channel_id': 'C1', 'text': 'greet'}, client=slack)
+
+    # A single canned post — never the agent, the echo, or the placeholder.
+    assert pool._session.asked == []
+    assert slack.updated == []
+    assert len(slack.posted) == 1
+    text = slack.posted[0][2]
+    assert 'asked:' not in text
+    assert 'Searching' not in text and '🔎' not in text
+    # Identity, the read-only promise, and the help pointer.
+    assert 'Meet Ariadne' in text
+    assert 'read-only' in text.lower()
+    assert '/ariadne' in text
+    # Covers list is config-driven: the titled project shows its label, the
+    # untitled one falls back to its source key.
+    assert 'Source One (S1)' in text
+    assert 'src_two' in text
+
+    # The keyword is matched EXACTLY (after strip/lower) — a real question that
+    # merely starts with "greet" must still run the agent, not the announcement.
+    real_pool = _FakePool(_FakeSession(types.SimpleNamespace(text='ans', is_error=False, session_id='S')), contains=True)
+    real_slack = _FakeSlack()
+    await make_listeners(cfg, real_pool, 'UBOT')['command'](
+        ack=_noop_ack, command={'user_id': 'U1', 'channel_id': 'C1', 'text': 'greet the team for me'}, client=real_slack)
+    assert real_pool._session.asked == ['greet the team for me']   # real question → agent
+    assert all('Meet Ariadne' not in t for _, _, t in real_slack.posted)
+
+    # …but surrounding whitespace / casing on the bare keyword still greets.
+    loud_pool = _FakePool(_FakeSession(types.SimpleNamespace(text='x', is_error=False, session_id='S')), contains=True)
+    loud_slack = _FakeSlack()
+    await make_listeners(cfg, loud_pool, 'UBOT')['command'](
+        ack=_noop_ack, command={'user_id': 'U1', 'channel_id': 'C1', 'text': '  GREET '}, client=loud_slack)
+    assert loud_pool._session.asked == []
+    assert 'Meet Ariadne' in loud_slack.posted[0][2]
+
+    # With no projects configured yet (fresh launch), still greet — but omit the
+    # Covers block entirely rather than leave a dangling 'Covers:' header.
+    bare_cfg = bridge_config(channels=frozenset({'C1'}))
+    bare_slack = _FakeSlack()
+    await make_listeners(bare_cfg, pool, 'UBOT')['command'](
+        ack=_noop_ack, command={'user_id': 'U1', 'channel_id': 'C1', 'text': 'greet'}, client=bare_slack)
+    bare = bare_slack.posted[0][2]
+    assert 'Meet Ariadne' in bare and 'Covers' not in bare
 
 
 class _SlowSession:

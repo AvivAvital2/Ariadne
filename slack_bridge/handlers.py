@@ -109,6 +109,43 @@ def _help_text(cfg: Any) -> str:
     return '\n'.join(lines)
 
 
+def _greet_text(cfg: Any) -> str:
+    """The public 'Meet Ariadne' announcement for ``/ariadne greet``.
+
+    A canned, no-LLM render (like :func:`_help_text`) meant to be posted into a
+    channel at launch. The *Covers* list is config-driven: every advertised source
+    is shown by its friendly ``source_titles`` label, falling back to the bare
+    source key when none is set — so the announcement always matches what the bot
+    can actually answer about. Posted by the bot, so it uses Slack mrkdwn.
+    """
+    titles = getattr(cfg, 'source_titles', {}) or {}
+    names = set(getattr(cfg, 'source_descriptions', {}) or {}) | set(titles)
+    covers = sorted((titles.get(name, name) for name in names), key=str.casefold)
+    lines = [
+        ':wave: *Meet Ariadne*',
+        'Ask about the team’s codebases in plain English and get answers from a '
+        'curated knowledge base, instead of digging through the repos. '
+        'I’m *read-only*: I explain, I never change code.',
+        '',
+        '*How to ask*',
+        '• `/ariadne <question>` — works anywhere',
+        '• @-mention me in a channel I’m in, or DM me',
+        '',
+        '*Name the project* (I’ll ask if I can’t tell):',
+        '`/ariadne in <project>, how does the auth flow work?`',
+        '',
+        '*Good to know*',
+        '• Ask me to “diagram the … flow” and I’ll render it inline',
+        '• Add “for a product manager” or “from 10k feet” to change the depth',
+        '• Cross-project: “how does <A> talk to <B>?”',
+        '• Just keep replying in the thread to follow up',
+    ]
+    if covers:
+        lines += ['', '*Covers:*', *(f'• {label}' for label in covers)]
+    lines += ['', 'Type `/ariadne` alone anytime for help.']
+    return '\n'.join(lines)
+
+
 async def handle_event(
     *, cfg: Any, pool: Any, slack: Any, bot_user_id: str, ack: Any, event: dict, seed_turns: Any = None, seed_images: Any = None
 ) -> None:
@@ -264,6 +301,45 @@ async def _noop_ack() -> None:
     pass
 
 
+def _org_context(envelope: dict) -> dict:
+    """Org identity + external-share flag from an event envelope or slash payload.
+
+    Works for both the Events API envelope (``body``) and a slash-command
+    payload — they share ``team_id``/``enterprise_id``; only events carry
+    ``is_ext_shared_channel`` (a slash command from outside is caught by team).
+    """
+    auths = envelope.get('authorizations') or ()
+    enterprise = (envelope.get('enterprise_id') or envelope.get('context_enterprise_id')
+                  or (auths[0].get('enterprise_id') if auths else None) or '')
+    return {
+        'team_id': envelope.get('team_id') or envelope.get('context_team_id') or '',
+        'enterprise_id': enterprise,
+        'is_ext_shared': bool(envelope.get('is_ext_shared_channel')),
+    }
+
+
+async def _channel_is_shared(client: Any, channel_id: str, cache: dict[str, bool]) -> bool:
+    """Authoritative externally-shared check via ``conversations.info`` (cached).
+
+    The event envelope's ``is_ext_shared_channel`` covers mentions/channel
+    messages, but a **slash** payload carries no such flag and a **Slack Connect
+    DM** may not either — so for those surfaces we ask Slack directly. Fail-closed:
+    if the lookup errors we treat the channel as shared (and don't cache the
+    failure, so the next message retries) — never leak into an unverified channel.
+    """
+    if channel_id in cache:
+        return cache[channel_id]
+    try:
+        ch = (await client.conversations_info(channel=channel_id)).get('channel') or {}
+    except Exception:
+        _logger.warning('conversations.info failed for %s — treating as externally shared', channel_id)
+        return True
+    shared = bool(ch.get('is_ext_shared') or ch.get('is_shared')
+                  or ch.get('is_org_shared') or ch.get('is_pending_ext_shared'))
+    cache[channel_id] = shared
+    return shared
+
+
 def make_listeners(cfg: Any, pool: Any, bot_user_id: str) -> dict[str, Any]:
     """Build the three Slack listeners (transport-agnostic; no ``slack_bolt`` import).
 
@@ -275,6 +351,7 @@ def make_listeners(cfg: Any, pool: Any, bot_user_id: str) -> dict[str, Any]:
     # Distinct human participants per engaged thread_ts (in-memory; rides the
     # session's lifetime). Drives the 1:1-vs-multi-human follow-up decision.
     thread_humans: dict[str, set[str]] = {}
+    shared_cache: dict[str, bool] = {}   # channel_id → externally-shared? (conversations.info, cached)
 
     def _note(thread_ts: str, user: str) -> None:
         if thread_ts and user and user != bot_user_id:
@@ -287,13 +364,19 @@ def make_listeners(cfg: Any, pool: Any, bot_user_id: str) -> dict[str, Any]:
             event=event, seed_turns=seed_turns, seed_images=seed_images,
         )
 
-    async def on_mention(event: dict, client: Any) -> None:
+    async def on_mention(event: dict, client: Any, body: dict | None = None) -> None:
+        if not cfg.is_org_allowed(**_org_context(body or {})):
+            return                                   # outside the org → silently ignore
         await _run(event, client)
 
-    async def on_message(event: dict, client: Any) -> None:
+    async def on_message(event: dict, client: Any, body: dict | None = None) -> None:
+        if not cfg.is_org_allowed(**_org_context(body or {})):
+            return                                   # outside the org → silently ignore
         # DMs are 1:1 by nature — answer (is_dm_message already drops the bot's
         # own messages and edit/system noise).
         if is_dm_message(event):
+            if await _channel_is_shared(client, event.get('channel', ''), shared_cache):
+                return                               # Slack Connect DM → ignore (#8)
             await _run(event, client)
             return
         # Channel/group: never react to the bot's own posts or edit/system events.
@@ -338,10 +421,20 @@ def make_listeners(cfg: Any, pool: Any, bot_user_id: str) -> dict[str, Any]:
 
     async def on_command(ack: Any, command: dict, client: Any) -> None:
         await ack()
+        if not cfg.is_org_allowed(**_org_context(command)):
+            return                                   # outside the org → silently ignore
+        if await _channel_is_shared(client, command.get('channel_id', ''), shared_cache):
+            return                                   # slash in a shared channel → ignore (#6)
         text = _clean_text(command.get('text', ''))
         if not text:
             # Bare `/ariadne` -> usage help immediately (no echo, no thread, no agent).
             await client.chat_postMessage(channel=command['channel_id'], text=_help_text(cfg))
+            return
+        if text.lower() == 'greet':
+            # `/ariadne greet` -> public 'Meet Ariadne' announcement, canned (no
+            # agent). Matched exactly so a real question ("greet the team…") still
+            # routes to the agent; _clean_text already stripped surrounding space.
+            await client.chat_postMessage(channel=command['channel_id'], text=_greet_text(cfg))
             return
         echo = await client.chat_postMessage(
             channel=command['channel_id'],

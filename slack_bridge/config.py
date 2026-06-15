@@ -38,7 +38,9 @@ class BridgeConfig:
     enable_feedback: bool = False
     source_descriptions: Mapping[str, str] = field(factory=dict)
     source_aliases: Mapping[str, Sequence[str]] = field(factory=dict)
+    source_titles: Mapping[str, str] = field(factory=dict)
     allow_all: bool = False
+    allowed_orgs: frozenset[str] = frozenset()
 
     def is_allowed(self, *, user: str, channel: str) -> bool:
         """Allow a request if its user OR its channel is allow-listed.
@@ -50,6 +52,23 @@ class BridgeConfig:
         if self.allow_all:
             return True
         return user in self.allowed_users or channel in self.allowed_channels
+
+    def is_org_allowed(self, *, team_id: str = '', enterprise_id: str = '',
+                       is_ext_shared: bool = False) -> bool:
+        """The hard org boundary, checked *before* :meth:`is_allowed`.
+
+        When ``allowed_orgs`` is configured, a request is internal only if its
+        workspace (``team_id``) or Enterprise Grid org (``enterprise_id``) is
+        listed AND the conversation is not externally shared (Slack Connect).
+        This is independent of ``allow_all`` — even an open bot ignores anything
+        from outside the org. Empty ``allowed_orgs`` ⇒ the gate is off.
+        """
+        if not self.allowed_orgs:
+            return True
+        if is_ext_shared:
+            return False
+        return team_id in self.allowed_orgs or bool(
+            enterprise_id and enterprise_id in self.allowed_orgs)
 
     @classmethod
     def from_env(cls, config_path: str | Path | None = None) -> BridgeConfig:
@@ -81,5 +100,7 @@ class BridgeConfig:
             enable_feedback=bool(data.get('enable_feedback', False)),
             source_descriptions=data.get('source_descriptions') or {},
             source_aliases=data.get('source_aliases') or {},
+            source_titles=data.get('source_titles') or {},
             allow_all=bool(data.get('allow_all', False)),
+            allowed_orgs=frozenset(data.get('allowed_orgs') or []),
         )
