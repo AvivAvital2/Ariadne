@@ -120,6 +120,7 @@ def record(
     asked_at: str,
     permalink: str | None = None,
     source_ts: str | None = None,
+    replace: bool = False,
     images: list[bytes] = (),
 ) -> bool:
     """Store this interaction if it ranks in the all-time top :data:`MAX_KEEP`.
@@ -131,8 +132,10 @@ def record(
 
     ``source_ts`` is the originating Slack message id (set by the channel
     backfill): if an entry with this id is already stored, the record is a
-    no-op (returns False), so re-scanning a channel never duplicates an entry.
-    Live captures pass no ``source_ts`` and skip the dedup scan entirely.
+    no-op (returns False), so re-scanning never duplicates an entry. Pass
+    ``replace=True`` (``scan --rescore``) to re-judge in place instead: the
+    existing entry is dropped and re-recorded with the new score. Live captures
+    pass no ``source_ts`` and skip the dedup scan entirely.
     """
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
@@ -140,10 +143,15 @@ def record(
     entries = _entry_dirs(root)
     new_richness = _richness_of(score, answer, len(images))
     if source_ts is not None or len(entries) >= MAX_KEEP:
-        loaded = [_load(e) for e in entries]   # for dedup + richness-based eviction
-        if source_ts is not None and any(t.source_ts == source_ts for t in loaded):
-            return False
-        if len(entries) >= MAX_KEEP:
+        loaded = [_load(e) for e in entries]   # for dedup/replace + richness eviction
+        if source_ts is not None:
+            dupes = [t for t in loaded if t.source_ts == source_ts]
+            if dupes and not replace:
+                return False                       # already captured — keep the first
+            for t in dupes:                        # replace=True: drop old, re-add below
+                shutil.rmtree(t.path)
+            loaded = [t for t in loaded if t.source_ts != source_ts]
+        if len(loaded) >= MAX_KEEP:
             lowest = min(
                 loaded, key=lambda t: _richness_of(t.score, t.answer, len(t.images)))
             if new_richness <= _richness_of(lowest.score, lowest.answer, len(lowest.images)):
@@ -186,6 +194,15 @@ def top(root: str | Path, limit: int = MAX_KEEP) -> list[Testimonial]:
     return loaded[:limit]
 
 
+def recorded_source_ts(root: str | Path) -> set[str]:
+    """Originating Slack message ids already stored — for delta scans.
+
+    A backfill skips any pair whose id is already here (no re-judging), so a
+    re-run only scores new history. ``scan --rescore`` ignores this and re-judges.
+    """
+    return {t.source_ts for t in (_load(e) for e in _entry_dirs(Path(root))) if t.source_ts}
+
+
 def _load(entry: Path) -> Testimonial:
     text = (entry / 'qna.md').read_text(encoding='utf-8')
     meta: dict[str, str] = {}
@@ -218,4 +235,4 @@ def _load(entry: Path) -> Testimonial:
     )
 
 
-__all__ = ['MAX_KEEP', 'Testimonial', 'local_dir', 'record', 'top']
+__all__ = ['MAX_KEEP', 'Testimonial', 'local_dir', 'record', 'recorded_source_ts', 'top']

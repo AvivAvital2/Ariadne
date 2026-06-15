@@ -174,11 +174,19 @@ set -a; . /etc/ariadne/slack.env; set +a        # same env the systemd unit load
 .venv/bin/ariadne testimonials --export-html best-of.html   # self-contained HTML showcase page
 ```
 
-The store is ranked by **richness** — the quality score plus feature-rich signals (a diagram attached, distinct source files cited, thoroughness) — so the most detailed, diagram-backed answers surface first, not just the highest bare score. `--export-html` writes a single self-contained page (inline CSS, diagrams embedded as base64) you can open, share, or drop into a deck.
+The store is ranked by **richness** — the quality score plus feature-rich signals (a diagram attached, distinct source files cited, thoroughness) — so the most detailed, diagram-backed answers surface first, not just the highest bare score. The backfill also **downloads the bot's rendered diagrams** from each thread (needs the `files:read` scope), so historical answers carry their diagrams too. `--export-html` writes a single self-contained page (inline CSS, diagrams embedded as base64) you can open, share, or drop into a deck.
 
 **Scope.** With no `--channel`, `scan` reads **only the public channels the bot is a member of** (`/invite @Ariadne` first); it *lists* them via `conversations.list`, which needs the **`channels:read`** scope (the manifest grants it — an app created from an older manifest must add it under **OAuth & Permissions** and reinstall), and it never touches private channels or DMs. Pass **`--channel C…`** (repeatable) to target channels **by id, read directly** — no listing, so this reaches a **private** channel the bot is in, using the bot's existing `groups:history` scope (no extra scope needed). Scope is the bot's **channel membership, not `allow_all`**: opening the bot org-wide changes *who can ask*; it does **not** trigger or widen a backfill, and `scan` runs only when you run it.
 
-**Cost & timing.** By default `scan` reads the scores already in `usage_events` (joined to each answer by time) — **no agent turn, no cost**. Add **`--generate-scores`** to also have Claude rate answers the DB never scored (so chatter from before scoring was enabled is still captured); that **runs the agent on the subscription** — it needs `CLAUDE_CODE_OAUTH_TOKEN`, and the no-`ANTHROPIC_API_KEY` cost gate applies, one LLM call per un-scored pair. Either way it's idempotent — re-running never duplicates an entry (deduped by the source message). Because DB scores live in `usage_events` (wiped on a swap), **run `scan` before you refresh `ariadne.db`** if you want that history captured.
+**Cost & timing.** By default `scan` reads the scores already in `usage_events` (joined to each answer by time) — **no agent turn, no cost**. Add **`--generate-scores`** to also have Claude rate answers the DB never scored (so chatter from before scoring was enabled is still captured); that **runs the agent on the subscription** — it needs `CLAUDE_CODE_OAUTH_TOKEN`, and the no-`ANTHROPIC_API_KEY` cost gate applies, one LLM call per un-scored pair.
+
+The scan is a **delta**: a pair already in the store is skipped *before* scoring, so re-runs cost nothing for history already captured (and never duplicate). To re-judge entries you've already stored — e.g. to apply a changed scoring rubric — add **`--rescore`**, which re-scores and replaces them in place (no need to delete the store by hand):
+
+```bash
+.venv/bin/ariadne-slack scan --channel C0123 --generate-scores --rescore   # apply a new rubric to existing entries
+```
+
+Because DB scores live in `usage_events` (wiped on a swap), **run `scan` before you refresh `ariadne.db`** if you want that history captured.
 
 **If `scan` records 0**, read its log line — `scan: N channel(s) read, M Q&A pair(s), K DB-scored + G generated, …`:
 - **0 channels** — the bot isn't a member/listed for the target. Invite it (`/invite @Ariadne`); for a private channel, name it with `--channel C…`.

@@ -80,7 +80,7 @@ def _make_web_client(token: str) -> Any:
 
 async def _run_scan(cfg: BridgeConfig, *, max_pairs: int | None = None,
                     channels: list[str] | None = None,
-                    generate_scores: bool = False) -> int:
+                    generate_scores: bool = False, rescore: bool = False) -> int:
     """Backfill the local best-of store from the bot's channel history.
 
     Reads the scores Ariadne already logged in ``ariadne.db`` and snapshots the
@@ -107,7 +107,7 @@ async def _run_scan(cfg: BridgeConfig, *, max_pairs: int | None = None,
     try:
         recorded = await scan(
             client, conn, store_dir=store_dir, bot_user_id=bot_user_id,
-            max_pairs=max_pairs, channels=channels, score_fn=score_fn)
+            max_pairs=max_pairs, channels=channels, score_fn=score_fn, rescore=rescore)
     finally:
         conn.close()
     _logger.info('Backfilled %d testimonial(s) from public channels into %s',
@@ -133,6 +133,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     scan_p.add_argument(
         '--generate-scores', action='store_true',
         help='LLM-score answers the DB never scored (runs the agent; needs CLAUDE_CODE_OAUTH_TOKEN)')
+    scan_p.add_argument(
+        '--rescore', action='store_true',
+        help='Re-judge and replace entries already stored (use with --generate-scores to apply a new rubric)')
     return parser.parse_args(argv)
 
 
@@ -144,7 +147,8 @@ def main(argv: list[str] | None = None) -> None:
         # The DB-only backfill never runs the agent, so the serve-time cost gate
         # doesn't apply; with --generate-scores it does, and _run_scan enforces it.
         asyncio.run(_run_scan(BridgeConfig.from_env(), max_pairs=args.limit,
-                              channels=args.channel, generate_scores=args.generate_scores))
+                              channels=args.channel, generate_scores=args.generate_scores,
+                              rescore=args.rescore))
         return
     # Fail fast on the cost invariant before doing any work: the bridge process
     # must carry CLAUDE_CODE_OAUTH_TOKEN and must NOT carry ANTHROPIC_API_KEY.

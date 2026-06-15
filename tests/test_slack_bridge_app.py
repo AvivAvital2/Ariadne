@@ -40,18 +40,23 @@ def test_scan_subcommand_runs_the_backfill_past_the_agent_cost_gate(monkeypatch)
                         classmethod(lambda cls: bridge_config()))
     ran: dict = {}
 
-    async def fake_run_scan(cfg, *, max_pairs=None, channels=None, generate_scores=False):
-        ran.update(max_pairs=max_pairs, channels=channels, generate_scores=generate_scores)
+    async def fake_run_scan(cfg, *, max_pairs=None, channels=None,
+                            generate_scores=False, rescore=False):
+        ran.update(max_pairs=max_pairs, channels=channels,
+                   generate_scores=generate_scores, rescore=rescore)
 
     monkeypatch.setattr(app, '_run_scan', fake_run_scan)
 
     assert app._parse_args([]).command is None            # bare → serve
-    assert app._parse_args(['scan']).generate_scores is False    # default off
-    args = app._parse_args(['scan', '--limit', '5', '--channel', 'C1', '--generate-scores'])
-    assert (args.command, args.limit, args.channel, args.generate_scores) == ('scan', 5, ['C1'], True)
+    assert app._parse_args(['scan']).rescore is False     # default off
+    args = app._parse_args(['scan', '--limit', '5', '--channel', 'C1',
+                            '--generate-scores', '--rescore'])
+    assert (args.command, args.limit, args.channel, args.generate_scores, args.rescore) \
+        == ('scan', 5, ['C1'], True, True)
 
-    app.main(['scan', '--limit', '5', '--channel', 'C1', '--generate-scores'])
-    assert ran == {'max_pairs': 5, 'channels': ['C1'], 'generate_scores': True}
+    app.main(['scan', '--generate-scores', '--rescore'])
+    assert ran == {'max_pairs': None, 'channels': None,
+                   'generate_scores': True, 'rescore': True}
     assert creds_checked == []                            # main() doesn't gate scan (handled in _run_scan)
 
 
@@ -59,9 +64,9 @@ async def test_run_scan_opens_the_db_and_backfills(monkeypatch, tmp_path):
     captured: dict = {}
 
     async def fake_scan(slack, conn, *, store_dir, bot_user_id, max_pairs=None,
-                        channels=None, score_fn=None):
+                        channels=None, score_fn=None, rescore=False):
         captured.update(store_dir=store_dir, bot_user_id=bot_user_id, max_pairs=max_pairs,
-                        channels=channels, score_fn=score_fn, slack=slack)
+                        channels=channels, score_fn=score_fn, rescore=rescore, slack=slack)
         return 3
 
     monkeypatch.setattr('slack_bridge.scan.scan', fake_scan)
@@ -79,6 +84,7 @@ async def test_run_scan_opens_the_db_and_backfills(monkeypatch, tmp_path):
     assert captured['max_pairs'] == 7
     assert captured['channels'] == ['C1']
     assert captured['score_fn'] is None                  # DB-only by default (no LLM)
+    assert captured['rescore'] is False                  # delta by default (no re-judge)
     assert captured['store_dir'] == testimonials.local_dir(tmp_path)
     assert isinstance(captured['slack'], _FakeClient)
 
@@ -88,7 +94,7 @@ async def test_run_scan_wires_an_llm_scorer_when_generating(monkeypatch, tmp_pat
     captured: dict = {}
 
     async def fake_scan(slack, conn, *, store_dir, bot_user_id, max_pairs=None,
-                        channels=None, score_fn=None):
+                        channels=None, score_fn=None, rescore=False):
         captured['score_fn'] = score_fn
         return 0
 

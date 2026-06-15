@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from testimonials import MAX_KEEP, local_dir, record, top
+from testimonials import MAX_KEEP, local_dir, record, recorded_source_ts, top
 
 
 def _rec(root: Path, score: int, *, q: str = 'q', **kw) -> bool:
@@ -142,6 +142,25 @@ def test_richer_answers_outrank_a_higher_bare_score(tmp_path: Path) -> None:
     kept_qs = {t.question for t in top(tmp_path)}
     assert 'rich' in kept_qs                      # survived on richness, not bare score
     assert 'plain-low' not in kept_qs and 'plain9b' not in kept_qs
+
+
+def test_replace_re_judges_in_place_and_tracks_recorded_ids(tmp_path: Path) -> None:
+    def rec(score, *, replace=False):
+        return record(tmp_path, question='q', answer='a', score=score,
+                      duration_seconds=1.0, asked_at='2026-06-14T00:00:01Z',
+                      source_ts='msg-1', replace=replace)
+
+    assert rec(5) is True
+    assert recorded_source_ts(tmp_path) == {'msg-1'}     # delta helper sees it
+
+    # without replace, an already-stored message is skipped (score unchanged)
+    assert rec(9) is False
+    assert [t.score for t in top(tmp_path)] == [5]
+
+    # with replace, it's re-judged in place: still one entry, new score
+    assert rec(9, replace=True) is True
+    kept = top(tmp_path)
+    assert len(kept) == 1 and kept[0].score == 9
 
 
 def test_local_dir_sits_under_dot_ariadne() -> None:

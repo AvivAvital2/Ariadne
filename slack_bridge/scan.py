@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
 import testimonials
+from slack_bridge.images import ImageRef, download_images, image_files_in
 
 _logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class _QA(NamedTuple):
     question: str
     answer: str
     ts: str       # the bot answer's Slack message ts — the dedup + permalink key
+    image_refs: tuple[ImageRef, ...] = ()   # the bot's diagram uploads in the thread
 
 
 def _epoch(slack_ts: str) -> float:
@@ -127,12 +129,18 @@ async def qa_pairs(slack: Any, channel: str, bot_user_id: str) -> list[_QA]:
             'messages',
         )
         question: str | None = None
+        last = None      # index in `out` of this thread's answer, for diagram attach
         for msg in replies:
             is_bot = msg.get('user') == bot_user_id
             text = (msg.get('text') or '').strip()
+            refs = tuple(image_files_in([msg])) if is_bot else ()   # bot diagram uploads
             if is_bot and question and text:
-                out.append(_QA(question=question, answer=text, ts=msg['ts']))
+                out.append(_QA(question=question, answer=text, ts=msg['ts'], image_refs=refs))
+                last = len(out) - 1
                 question = None
+            elif is_bot and refs and last is not None:
+                # a follow-up bot file message (the rendered diagram) → attach to the answer
+                out[last] = out[last]._replace(image_refs=out[last].image_refs + refs)
             elif not is_bot and text:
                 question = _strip_mentions(text)
     return out
@@ -148,6 +156,8 @@ async def scan(
     max_pairs: int | None = None,
     channels: list[str] | None = None,
     score_fn: Callable[[str, str], Awaitable[int | None]] | None = None,
+    rescore: bool = False,
+    image_fetch: Callable[[str, str], Awaitable[bytes]] | None = None,
 ) -> int:
     """Backfill ``store_dir`` from the bot's channels. Returns #recorded.
 
@@ -161,6 +171,11 @@ async def scan(
     for a pair the DB never scored — the LLM backfill scorer — so chatter from
     before live scoring was on can still be captured. DB-scored pairs are never
     passed to it; a ``None`` result skips the pair.
+
+    By default the scan is a **delta**: a pair already in the store is skipped
+    *before* scoring (no wasted ``score_fn`` call). ``rescore=True`` re-judges
+    and replaces every pair in scope instead — for applying a new rubric to
+    history already captured.
     """
     events = scored_events(conn)
     if channels is not None:
@@ -177,8 +192,12 @@ async def scan(
     if max_pairs is not None:
         pairs = pairs[:max_pairs]
 
-    recorded = matched = generated = 0
+    already = testimonials.recorded_source_ts(store_dir)
+    recorded = matched = generated = skipped = 0
     for channel, qa in pairs:
+        if qa.ts in already and not rescore:
+            skipped += 1                          # delta: already captured, don't re-judge
+            continue
         score = _score_for_turn(events, _epoch(qa.ts), answer_epochs, window_seconds)
         if score is not None:
             matched += 1
@@ -192,6 +211,10 @@ async def scan(
         with contextlib.suppress(Exception):
             link = await slack.chat_getPermalink(channel=channel, message_ts=qa.ts)
             permalink = link.get('permalink')
+        images: list[bytes] = []
+        if qa.image_refs:   # download the answer's diagram(s) so the showcase shows them
+            blobs = await download_images(qa.image_refs, token=slack.token, fetch=image_fetch)
+            images = [b.data for b in blobs]
         if testimonials.record(
             store_dir,
             question=qa.question,
@@ -201,13 +224,15 @@ async def scan(
             asked_at=datetime.fromtimestamp(_epoch(qa.ts), UTC).isoformat(),
             permalink=permalink,
             source_ts=qa.ts,
+            replace=rescore,
+            images=images,
         ):
             recorded += 1
     # One line that explains a 0: where in the pipeline it dropped off.
     _logger.info(
-        'scan: %d channel(s) read, %d Q&A pair(s), %d DB-scored + %d generated, '
-        '%d recorded (%d scored events in usage_events)',
-        len(targets), len(pairs), matched, generated, recorded, len(events))
+        'scan: %d channel(s) read, %d Q&A pair(s), %d already stored, %d DB-scored '
+        '+ %d generated, %d recorded (%d scored events in usage_events)',
+        len(targets), len(pairs), skipped, matched, generated, recorded, len(events))
     return recorded
 
 

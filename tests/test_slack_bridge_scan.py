@@ -48,6 +48,7 @@ class _FakeSlack:
 
     def __init__(self, channels: list[dict]) -> None:
         self.channels = channels
+        self.token = 'xoxb-fake'
         self.history_pages: dict[str, list[list[dict]]] = {}
         self.replies: dict[tuple[str, str], list[dict]] = {}
         self.history_reads: list[str] = []
@@ -65,13 +66,19 @@ class _FakeSlack:
         self._page(channel, page).append(msg)
 
     def add_qa(self, conn: sqlite3.Connection, channel: str, root_ts: str, question: str,
-               answer_ts: str, answer: str, *, score: int | None = None, page: int = 0) -> None:
+               answer_ts: str, answer: str, *, score: int | None = None, page: int = 0,
+               diagram: bool = False) -> None:
         self._page(channel, page).append(
             {'ts': root_ts, 'user': 'U1', 'text': f'<@{_BOT}> {question}', 'reply_count': 1})
-        self.replies[(channel, root_ts)] = [
+        replies = [
             {'ts': root_ts, 'user': 'U1', 'text': f'<@{_BOT}> {question}'},
             {'ts': answer_ts, 'user': _BOT, 'text': answer},
         ]
+        if diagram:                                 # the bot's rendered-diagram upload, post-answer
+            replies.append({'ts': answer_ts + '9', 'user': _BOT, 'text': '', 'files': [
+                {'id': f'F{answer_ts}', 'mimetype': 'image/png',
+                 'url_private': f'https://files.slack/{answer_ts}.png'}]})
+        self.replies[(channel, root_ts)] = replies
         if score is not None:                       # score logged mid-turn, after the answer post
             conn.execute('INSERT INTO usage_events (timestamp, quality_score) VALUES (?, ?)',
                          (_iso(float(answer_ts) + 5.0), score))
@@ -223,3 +230,74 @@ async def test_scan_is_robust_to_history_shape(tmp_path: Path) -> None:
     after = testimonials.top(store)
     assert len(after) == before + 1
     assert any(x.question == 'newest?' for x in after)   # only the newest pair was processed
+
+
+async def test_scan_is_a_delta_then_rescore_replaces(tmp_path: Path) -> None:
+    store = testimonials.local_dir(tmp_path)
+    conn = _conn()
+    slack = _FakeSlack([{'id': 'C_PUB', 'is_member': True, 'is_private': False}])
+    slack.add_qa(conn, 'C_PUB', '1718000100.000000', 'q one', '1718000100.000050', 'a one')
+    slack.add_qa(conn, 'C_PUB', '1718000200.000000', 'q two', '1718000200.000050', 'a two')
+
+    judged: list[str] = []
+
+    async def judge(question, answer):
+        judged.append(question)
+        return 7
+
+    # First run: both new → both judged + recorded.
+    assert await scan(slack, conn, store_dir=store, bot_user_id=_BOT, score_fn=judge) == 2
+    assert sorted(judged) == ['q one', 'q two']
+
+    # Delta re-run: both already stored → skipped BEFORE scoring (no score_fn call).
+    judged.clear()
+    assert await scan(slack, conn, store_dir=store, bot_user_id=_BOT, score_fn=judge) == 0
+    assert judged == []
+
+    # --rescore: re-judge + replace in place with the new score.
+    async def judge9(question, answer):
+        judged.append(question)
+        return 9
+
+    assert await scan(slack, conn, store_dir=store, bot_user_id=_BOT,
+                      score_fn=judge9, rescore=True) == 2
+    assert sorted(judged) == ['q one', 'q two']               # re-judged this run
+    assert {x.score for x in testimonials.top(store)} == {9}  # replaced, not duplicated
+
+
+async def test_scan_counts_only_pairs_that_make_the_cut(tmp_path: Path) -> None:
+    store = testimonials.local_dir(tmp_path)
+    conn = _conn()
+    for i in range(testimonials.MAX_KEEP):       # store already full of high-richness entries
+        testimonials.record(store, question=f'q{i}', answer='x', score=10,
+                            duration_seconds=1.0, asked_at=f'2026-06-14T00:00:{i:02d}Z',
+                            source_ts=f'pre{i}')
+    slack = _FakeSlack([{'id': 'C_PUB', 'is_member': True, 'is_private': False}])
+    slack.add_qa(conn, 'C_PUB', '1718000100.000000', 'low q', '1718000100.000050', 'a')
+
+    async def low(question, answer):
+        return 1
+
+    # scored, but below the floor of a full store → not recorded, not counted
+    assert await scan(slack, conn, store_dir=store, bot_user_id=_BOT, score_fn=low) == 0
+    assert all(t.question != 'low q' for t in testimonials.top(store))
+
+
+async def test_scan_downloads_answer_diagrams(tmp_path: Path) -> None:
+    store = testimonials.local_dir(tmp_path)
+    conn = _conn()
+    slack = _FakeSlack([{'id': 'C_PUB', 'is_member': True, 'is_private': False}])
+    slack.add_qa(conn, 'C_PUB', '1718000100.000000', 'flow?',
+                 '1718000100.000050', 'see the diagram', score=8, diagram=True)
+
+    fetched: list[tuple[str, str]] = []
+
+    async def fake_fetch(url, token):
+        fetched.append((url, token))
+        return b'\x89PNG-diagram-bytes'
+
+    assert await scan(slack, conn, store_dir=store, bot_user_id=_BOT, image_fetch=fake_fetch) == 1
+    t = testimonials.top(store)[0]
+    assert len(t.images) == 1                                   # the bot's diagram was captured
+    assert t.images[0].read_bytes() == b'\x89PNG-diagram-bytes'
+    assert fetched and fetched[0][1] == 'xoxb-fake'            # downloaded with the bot token
