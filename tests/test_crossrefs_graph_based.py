@@ -1,10 +1,10 @@
 """Tests for graph-based crossref injection.
 
-Replaces brute-force regex (O(N²) over content) with edge lookups in
-``doc_graph`` via ``library.get_related``. The graph already has
-imports + documents/topic_member edges from build_graph and
-semantic_neighbor edges from build_semantic_edges (run during themes).
-Reusing them gives O(N×K) crossrefs that scale.
+Neighbours come from ONE batched ``get_related_batch`` call (a single bulk
+graph load + in-memory walks) instead of a per-doc ``get_related`` query
+storm. The graph already has imports + documents/topic_member edges from
+build_graph and semantic_neighbor edges from build_semantic_edges (run during
+themes); reusing them in one batch is what makes crossrefs scale.
 """
 from __future__ import annotations
 
@@ -25,9 +25,9 @@ def _test_config(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_inject_crossrefs_uses_library_get_related(tmp_path):
-    """``_inject_crossrefs_scoped`` must call ``library.get_related`` for
-    each scoped doc instead of running brute-force regex over content.
+async def test_inject_crossrefs_uses_batch_get_related(tmp_path):
+    """``_inject_crossrefs_scoped`` must fetch neighbours via ONE batched
+    ``get_related_batch`` call for all scoped docs, not a per-doc query storm.
     """
     from docgen.orchestrator import DocGenOrchestrator, OrchestratorConfig
 
@@ -47,23 +47,23 @@ async def test_inject_crossrefs_uses_library_get_related(tmp_path):
         ]
         fake_lib = MagicMock()
         fake_lib.list_documents.return_value = fake_docs
-        fake_lib.get_related.return_value = []  # no neighbors → no updates
+        fake_lib.get_related_batch.return_value = {}  # no neighbours → no updates
         orch._library = fake_lib
 
         await orch._inject_crossrefs_scoped()
 
-        assert fake_lib.get_related.call_count == len(fake_docs), (
-            f'expected get_related called once per scoped doc; got '
-            f'{fake_lib.get_related.call_count} calls for {len(fake_docs)} docs'
+        assert fake_lib.get_related_batch.call_count == 1, (
+            f'expected ONE batched get_related_batch for all scoped docs; '
+            f'got {fake_lib.get_related_batch.call_count} calls'
         )
-        # And update_document should NOT be called when there are no neighbors
+        # No neighbours → no doc updates.
         assert fake_lib.update_document.call_count == 0
 
 
 @pytest.mark.asyncio
 async def test_inject_crossrefs_filters_neighbors_to_scope(tmp_path):
-    """``get_related`` may return docs from outside the configured scope;
-    the crossref pass must filter them so only scoped docs are linked.
+    """``get_related_batch`` may surface docs outside the configured scope;
+    the crossref pass must drop them so only scoped docs are linked.
     """
     from docgen.orchestrator import DocGenOrchestrator, OrchestratorConfig
 
@@ -75,7 +75,7 @@ async def test_inject_crossrefs_filters_neighbors_to_scope(tmp_path):
     )
 
     async with DocGenOrchestrator(cfg) as orch:
-        # d_in is the in-scope doc; d_out is from a different source
+        # d_in is the in-scope doc; d_other is from a different source
         d_in = MagicMock(
             id='d_in', title='In-scope',
             source_files=['mylib/f1.py'], content='content',
@@ -86,13 +86,13 @@ async def test_inject_crossrefs_filters_neighbors_to_scope(tmp_path):
         )
         fake_lib = MagicMock()
         fake_lib.list_documents.return_value = [d_in, d_other]
-        # get_related returns the OUT-of-scope doc
-        fake_lib.get_related.return_value = [
-            {
+        # the in-scope doc's only neighbour is the out-of-scope doc
+        fake_lib.get_related_batch.return_value = {
+            'd_in': [{
                 'id': 'd_other', 'title': 'Out-of-scope',
                 'content_type': 'explanation', 'distance': 1.0,
-            }
-        ]
+            }],
+        }
         orch._library = fake_lib
         # Bypass the chokepoint's SQL-backed closure filter; the contract
         # under test is the orchestrator's own scoping pass, not the
@@ -109,9 +109,8 @@ async def test_inject_crossrefs_filters_neighbors_to_scope(tmp_path):
 
 @pytest.mark.asyncio
 async def test_inject_crossrefs_injects_related_section_when_neighbors_exist(tmp_path):
-    """When scoped neighbors exist, the doc content gets a ``Related``
-    section injected (via ``inject_related_section``) and the doc is
-    updated.
+    """When scoped neighbours exist, the doc content gets a ``Related``
+    section injected (via ``inject_related_section``) and the doc is updated.
     """
     from docgen.orchestrator import DocGenOrchestrator, OrchestratorConfig
 
@@ -134,20 +133,17 @@ async def test_inject_crossrefs_injects_related_section_when_neighbors_exist(tmp
         )
         fake_lib = MagicMock()
         fake_lib.list_documents.return_value = [d1, d2]
-
-        def fake_get_related(doc_id, **kwargs):
-            if doc_id == 'd1':
-                return [{
-                    'id': 'd2', 'title': 'Doc 2',
-                    'content_type': 'explanation', 'distance': 1.0,
-                }]
-            return []
-
-        fake_lib.get_related.side_effect = fake_get_related
+        # d1 links to d2; d2 has no neighbours
+        fake_lib.get_related_batch.return_value = {
+            'd1': [{
+                'id': 'd2', 'title': 'Doc 2',
+                'content_type': 'explanation', 'distance': 1.0,
+            }],
+            'd2': [],
+        }
         orch._library = fake_lib
         # Bypass the chokepoint's SQL-backed closure filter; the contract
         # under test is "neighbors → update_document", not the wrapper.
-        # The wrapper has its own tests in test_scoped_library.py.
         orch._scoped = fake_lib
 
         await orch._inject_crossrefs_scoped()

@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from ariadne_mcp import service_analysis
+from ariadne_mcp.service import AriadneService
 from cli import callers
 from config import (
     CODE_PROVENANCE,
@@ -81,6 +82,52 @@ class TestProvenanceConfidence:
             # despite being the closer raw match, the human doc sinks below code
             assert titles == ['Code doc', 'Human doc']
             assert results[0].score > results[1].score
+        finally:
+            lib.close()
+
+    # ---- the down-rank must reach the LIVE MCP path, not just library.search
+    # ariadne_search / ask rank via service_search -> embedding_ranking, a
+    # different ranker than library.search; the provenance weight must apply
+    # there too, else the feature is a no-op for the tools Claude actually uses.
+    async def test_mcp_search_path_downranks_human_doc(self, tmp_path: Path, monkeypatch) -> None:
+        lib = Library(tmp_path / 'mcp.db')
+        try:
+            e_query = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+            lib.add_document('explanation', 'Human doc', 'h',  # closer raw match
+                             embedding=np.array([1.0, 0.0, 0.0], dtype=np.float32),
+                             metadata={'provenance': HUMAN_DOC_PROVENANCE})
+            lib.add_document('explanation', 'Code doc', 'c',
+                             embedding=np.array([0.9, 0.0, 0.0], dtype=np.float32),
+                             metadata={'provenance': CODE_PROVENANCE})
+
+            class _FakeEmbed:
+                async def embed(self, *_a, **_k):
+                    return e_query
+
+            svc = AriadneService()
+            svc._library = lib
+            svc._embedding_service = _FakeEmbed()
+            monkeypatch.setattr(svc, '_resolve_scope', lambda *a, **k: lib)
+            resp = await svc._search_uncached(query='queue', limit=2)
+            by_title = {d.title: d.score for d in resp.documents}
+            # despite the closer raw match, the human doc scores below code
+            assert by_title['Code doc'] > by_title['Human doc']
+        finally:
+            lib.close()
+
+    # ---- the scoped / CLI search path (search_with_scope) applies it too
+    def test_search_with_scope_downranks_human_doc(self, tmp_path: Path) -> None:
+        lib = Library(tmp_path / 'scope.db')
+        try:
+            e_query = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+            lib.add_document('explanation', 'Human doc', 'h',  # closer raw match
+                             embedding=np.array([1.0, 0.0, 0.0], dtype=np.float32),
+                             metadata={'provenance': HUMAN_DOC_PROVENANCE})
+            lib.add_document('explanation', 'Code doc', 'c',
+                             embedding=np.array([0.9, 0.0, 0.0], dtype=np.float32),
+                             metadata={'provenance': CODE_PROVENANCE})
+            titles = [r.document.title for r in lib.search_with_scope(e_query, k=2)]
+            assert titles == ['Code doc', 'Human doc']
         finally:
             lib.close()
 

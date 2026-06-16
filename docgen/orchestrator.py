@@ -1649,6 +1649,8 @@ class DocGenOrchestrator:
         # Themes first. Announce phase entry/exit on the bar AND surface
         # per-theme progress during the LLM summarize stage so the user
         # sees the bar tick from 0/N → N/N instead of staring at 0/0.
+        from time import perf_counter
+        _t0 = perf_counter()
         from docgen.themes import refresh_themes
         if crossref_progress is not None:
             crossref_progress('Themes: refreshing...', 0, 0)
@@ -1690,14 +1692,18 @@ class DocGenOrchestrator:
             if crossref_progress is not None:
                 crossref_progress('Themes: failed (see log)', 0, 0)
 
+        _logger.info('post-process timing: themes refresh %.2fs', perf_counter() - _t0)
+
         # Crossrefs second (and optional). The function itself fires
         # per-doc progress; we just announce the load stage here.
         if self.config.inject_crossrefs and results:
             if crossref_progress is not None:
                 crossref_progress('Crossref: loading library...', 0, 0)
+            _xref_t0 = perf_counter()
             await self._inject_crossrefs_scoped(
                 progress_callback=crossref_progress,
             )
+            _logger.info('post-process timing: crossref injection %.2fs', perf_counter() - _xref_t0)
 
     async def _regenerate_doc(
         self, path: Path, doc_type: DocType,
@@ -2029,6 +2035,16 @@ class DocGenOrchestrator:
         doc_titles = {doc.id: doc.title for doc in scoped_docs}
         total = len(scoped_docs)
         updated = 0
+        from time import perf_counter
+        _read = _write = 0.0
+
+        # One bulk graph load + in-memory walks for ALL docs, instead of a
+        # per-doc query storm (library.get_related_batch — equivalence-tested).
+        _r = perf_counter()
+        related_by_id = self._scoped_lib().get_related_batch(
+            [doc.id for doc in scoped_docs], max_hops=2, limit=10,
+        )
+        _read += perf_counter() - _r
 
         for i, doc in enumerate(scoped_docs):
             if progress_callback:
@@ -2036,9 +2052,7 @@ class DocGenOrchestrator:
                     f'Crossref {doc.title[:40]}', i, total,
                 )
 
-            related = self._scoped_lib().get_related(
-                doc.id, max_hops=2, limit=10,
-            )
+            related = related_by_id.get(doc.id) or []
             if not related:
                 continue
 
@@ -2070,10 +2084,15 @@ class DocGenOrchestrator:
                 )
                 continue
             if new_content != doc.content:
+                _w = perf_counter()
                 self._library.update_document(doc.id, content=new_content)
+                _write += perf_counter() - _w
                 updated += 1
 
-        _logger.info('Cross-refs: %d/%d docs updated', updated, total)
+        _logger.info(
+            'Cross-refs: %d/%d docs updated (graph load %.2fs, writes %.2fs)',
+            updated, total, _read, _write,
+        )
         if progress_callback:
             progress_callback('Crossrefs complete', total, total)
 

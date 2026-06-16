@@ -64,6 +64,38 @@ def test_estimate_cost_uses_calibrated_output_when_provided():
     assert mixed.output_tokens == 1500
 
 
+def test_calibrated_generate_hooks_prefer_recorded_usage(tmp_path):
+    """The generate dry-run self-tunes from recorded per-call usage: the
+    calibrated input (which includes the cross-source / dependency context the
+    file-content count misses) and output replace the cold heuristics, with
+    coarser-bucket fallback. A cold store → file-content count / None.
+    """
+    from cli.generate_cost import _calibrated_generate_hooks
+    from docgen.calibration import CalibrationStore
+
+    store = CalibrationStore(tmp_path / 'cal.db')
+    store.record(phase='generate', doc_type='explanation', language='rst',
+                 model='m', input_tokens=8000, output_tokens=3000)
+
+    def file_counter(path):
+        return 500  # the cold, file-content-only token count
+
+    inp, out = _calibrated_generate_hooks(store, 'm', file_counter)
+    # exact bucket → recorded real means (input includes context, not 500)
+    assert inp(Path('guide.rst')) == 8000
+    assert out('explanation', 'rst') == 3000
+    # coarser fallback: an unseen doc_type for rst → the language-wide mean
+    assert out('gotcha', 'rst') == 3000
+    # a different language with no rows → phase-wide mean still applies
+    assert inp(Path('mod.py')) == 8000
+    # truly cold store → file-content count for input, None (heuristic) for output
+    cold_in, cold_out = _calibrated_generate_hooks(
+        CalibrationStore(tmp_path / 'empty.db'), 'm', file_counter,
+    )
+    assert cold_in(Path('x.rst')) == 500
+    assert cold_out('explanation', 'rst') is None
+
+
 def test_per_doc_generation_cost_tracks_model_rates():
     """ROI's per-doc generation cost must follow the configured model's
     rates, not a fixed GPT-4o-mini constant ($0.02)."""

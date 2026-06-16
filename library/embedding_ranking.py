@@ -37,9 +37,9 @@ class MatrixRanker:
         self._matrix = matrix
 
     def rank(
-        self, query_embedding: 'NDArray[np.float32]', candidate_ids, limit: int
+        self, query_embedding: 'NDArray[np.float32]', candidate_ids, limit: int, weights=None
     ) -> list[tuple[str, float]]:
-        return self._matrix.rank(query_embedding, candidate_ids, limit)
+        return self._matrix.rank(query_embedding, candidate_ids, limit, weights=weights)
 
 
 class SqliteRanker:
@@ -51,7 +51,7 @@ class SqliteRanker:
         self._library = library
 
     def rank(
-        self, query_embedding: 'NDArray[np.float32]', candidate_ids, limit: int
+        self, query_embedding: 'NDArray[np.float32]', candidate_ids, limit: int, weights=None
     ) -> list[tuple[str, float]]:
         from search import batch_dot_similarity, top_k_indices
 
@@ -61,6 +61,9 @@ class SqliteRanker:
         ordered = [cid for cid in candidate_ids if cid in embeddings]
         matrix = np.stack([embeddings[cid] for cid in ordered])
         similarities = batch_dot_similarity(query_embedding, matrix)
+        if weights is not None:
+            similarities = similarities * np.array(
+                [weights.get(cid, 1.0) for cid in ordered], dtype=np.float32)
         return [(ordered[i], float(similarities[i])) for i in top_k_indices(similarities, limit)]
 
 

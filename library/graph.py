@@ -329,6 +329,93 @@ class GraphMixin:
                         break
         return results
 
+    def get_related_batch(
+        self, doc_ids, max_hops: int = 2, limit: int = 10,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Batch equivalent of :meth:`get_related` for many seeds.
+
+        Loads the whole ``doc_graph`` and the ``id -> (title, content_type)``
+        map ONCE, then walks each seed in memory — replacing the per-seed,
+        per-node query storm (``O(seeds x visited)`` round-trips) with two
+        bulk reads. Output is identical to calling ``get_related`` for each
+        id: same neighbours, distances, ordering, and ``limit`` cut. The
+        equivalence is pinned by ``tests/test_get_related_batch.py``.
+        """
+        from collections import defaultdict
+
+        adjacency: dict[str, list[tuple[str, float]]] = defaultdict(list)
+        seen: dict[str, set[tuple[str, float]]] = defaultdict(set)
+        with self._conn_provider.acquire() as conn:
+            for source_id, target_id, weight in conn.execute(
+                'SELECT source_id, target_id, weight FROM doc_graph'
+            ).fetchall():
+                # Undirected like get_related's source/target UNION; dedupe on
+                # (neighbour, weight) so parallel edges of differing weight survive.
+                for node, neighbor in (
+                    (source_id, target_id), (target_id, source_id),
+                ):
+                    pair = (neighbor, weight)
+                    if pair not in seen[node]:
+                        seen[node].add(pair)
+                        adjacency[node].append(pair)
+            doc_meta = {
+                row[0]: (row[1], row[2])
+                for row in conn.execute(
+                    'SELECT id, title, content_type FROM documents'
+                ).fetchall()
+            }
+        # Match SQLite's UNION row order (by neighbour id, then weight) so the
+        # distance-tie ordering at the ``limit`` cut is identical to get_related.
+        for neighbors in adjacency.values():
+            neighbors.sort()
+
+        return {
+            doc_id: self._related_from_adjacency(
+                doc_id, adjacency, doc_meta, max_hops, limit,
+            )
+            for doc_id in doc_ids
+        }
+
+    @staticmethod
+    def _related_from_adjacency(
+        seed: str,
+        adjacency: dict[str, list[tuple[str, float]]],
+        doc_meta: dict[str, tuple[str, str]],
+        max_hops: int,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """In-memory twin of get_related's BFS over a prebuilt adjacency.
+
+        Same relax-and-requeue walk, hop bound, and hydrate-only-documents
+        + ``limit`` semantics — just no per-node database round-trips.
+        """
+        from collections import deque
+
+        visited: dict[str, float] = {seed: 0}
+        queue: deque[tuple[str, float, int]] = deque([(seed, 0, 0)])
+        while queue:
+            node, dist, hops = queue.popleft()
+            if hops >= max_hops:
+                continue
+            for neighbor, weight in adjacency.get(node, ()):
+                new_dist = dist + (1.0 / weight if weight > 0 else 10.0)
+                if neighbor not in visited or new_dist < visited[neighbor]:
+                    visited[neighbor] = new_dist
+                    queue.append((neighbor, new_dist, hops + 1))
+
+        visited.pop(seed, None)
+        results: list[dict[str, Any]] = []
+        for node_id, distance in sorted(visited.items(), key=lambda x: x[1]):
+            meta = doc_meta.get(node_id)
+            if meta is not None:
+                results.append({
+                    'id': node_id, 'title': meta[0],
+                    'content_type': meta[1], 'distance': distance,
+                })
+                if len(results) >= limit:
+                    break
+        return results
+
     def export_graph_json(self) -> dict[str, Any]:
         """Export the graph as JSON for D3.js visualization."""
         import json as json_mod

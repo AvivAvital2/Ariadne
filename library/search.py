@@ -24,6 +24,19 @@ _HUMAN_DOC_RANK_WEIGHT = 0.8
 _STALE_DOC_RANK_WEIGHT = 0.6
 
 
+def provenance_weight(metadata):
+    """Similarity multiplier from a doc's provenance metadata, shared by every
+    ranking path so the calibration is identical wherever search runs:
+    human-authored docs rank below code-derived, and a doc whose rst autodoc
+    target no longer resolves sinks further. 1.0 = no change."""
+    weight = 1.0
+    if metadata.get('provenance') == HUMAN_DOC_PROVENANCE:
+        weight *= _HUMAN_DOC_RANK_WEIGHT
+    if metadata.get('stale_autodoc'):
+        weight *= _STALE_DOC_RANK_WEIGHT
+    return weight
+
+
 class SearchMixin:
     """Semantic search and scope filtering.
 
@@ -74,10 +87,7 @@ class SearchMixin:
             else:
                 weight = 0.7 + 0.3 * (hits / served) if served > 0 else 1.0
             similarities[i] *= weight
-            if doc.metadata.get('provenance') == HUMAN_DOC_PROVENANCE:
-                similarities[i] *= _HUMAN_DOC_RANK_WEIGHT
-            if doc.metadata.get('stale_autodoc'):
-                similarities[i] *= _STALE_DOC_RANK_WEIGHT
+            similarities[i] *= provenance_weight(doc.metadata)
 
         top_indices = top_k_indices(similarities, k)
 
@@ -267,6 +277,8 @@ class SearchMixin:
         # Batch compute similarities (vectorized)
         embeddings = np.stack([d.embedding for d in docs_with_embeddings])  # type: ignore[misc]
         similarities = batch_dot_similarity(query_embedding, embeddings)
+        for i, doc in enumerate(docs_with_embeddings):
+            similarities[i] *= provenance_weight(doc.metadata)
         top_indices = top_k_indices(similarities, k)
 
         return [

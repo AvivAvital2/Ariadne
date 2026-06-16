@@ -108,6 +108,37 @@ def _stale_subset_for_estimate(
     return [(p, size) for (p, size) in files_with_size if p in stale]
 
 
+def _calibrated_generate_hooks(store, model, file_counter):
+    """``(input_tokens_for, output_tokens_for)`` for the generate estimate,
+    backed by recorded per-call usage (``phase='generate'``) when the store
+    has data — finest ``(doc_type, language)`` bucket first, then coarser
+    fallbacks — else the file-content / flat-output heuristics.
+
+    Because the recorded ``mean_input`` is the *real* prompt input, this also
+    captures the cross-source / dependency context the file-content count
+    alone misses; the estimate self-tunes after one real run.
+    """
+    def _bucket(doc_type=None, language=None):
+        if store is None:
+            return None
+        return store.mean_tokens(
+            phase='generate', model=model,
+            doc_type=doc_type, language=language,
+        )
+
+    def output_tokens_for(doc_type, language):
+        cal = (_bucket(doc_type, language) or _bucket(language=language)
+               or _bucket(doc_type=doc_type) or _bucket())
+        return cal.mean_output if cal is not None else None
+
+    def input_tokens_for(path):
+        from docgen.pricing import _detect_language
+        cal = _bucket(language=_detect_language(path)) or _bucket()
+        return cal.mean_input if cal is not None else file_counter(path)
+
+    return input_tokens_for, output_tokens_for
+
+
 def _print_cost_estimate(
     *,
     source_path: Path,
@@ -195,8 +226,29 @@ def _print_cost_estimate(
     # dry-run uses); falls back to the char heuristic when tiktoken is
     # unavailable.
     from docgen.token_count import file_token_counter
-    _input_tokens = file_token_counter(model)
     _scaffold_overhead = _scaffold_overhead_counter(model)
+    # Self-tuning input/output hooks: prefer recorded per-call usage — whose
+    # input INCLUDES the cross-source / dependency prompt context the
+    # file-content count alone misses — falling back to the tiktoken file
+    # count + flat-output heuristic when the store has no data yet.
+    _cal_store = None
+    if library is not None:
+        try:
+            from docgen.calibration import CalibrationStore
+            _cal_store = CalibrationStore(library._conn_provider.path)
+        except Exception:
+            _cal_store = None
+    _input_tokens, _output_tokens = _calibrated_generate_hooks(
+        _cal_store, model, file_token_counter(model),
+    )
+    # When calibration drives the input, the recorded mean_input already
+    # includes the prompt scaffold — so don't add the scaffold heuristic on
+    # top (it would double-count). Cold runs (no data) still need it.
+    _has_cal = (
+        _cal_store is not None
+        and _cal_store.mean_tokens(phase='generate', model=model) is not None
+    )
+    _scaffold = (lambda _dt: 0) if _has_cal else _scaffold_overhead
 
     # For auto mode we need a planned-calls count to compare against
     # the threshold. ``estimate_cost(batch_enabled=False)`` is the
@@ -241,7 +293,8 @@ def _print_cost_estimate(
         caching_enabled=caching_enabled,
         batch_enabled=batch_resolved,
         input_tokens_for=_input_tokens,
-        prompt_overhead_for=_scaffold_overhead,
+        output_tokens_for=_output_tokens,
+        prompt_overhead_for=_scaffold,
     )
 
     # Full-regeneration figure for the note — only recomputed when some
@@ -255,7 +308,7 @@ def _print_cost_estimate(
             caching_enabled=caching_enabled,
             batch_enabled=batch_resolved,
             input_tokens_for=_input_tokens,
-            prompt_overhead_for=_scaffold_overhead,
+            prompt_overhead_for=_scaffold,
         )
     else:
         full_estimate = estimate

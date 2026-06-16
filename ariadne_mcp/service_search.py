@@ -187,6 +187,8 @@ class SearchMixin:
         # Phase 2: For embedding ranking, load just the IDs that pass filters
         # Full document content is loaded only for the final top-k results
         candidate_ids = [d.id for d in lite_docs]
+        from library.search import provenance_weight
+        weights = {d.id: provenance_weight(d.metadata) for d in lite_docs}
 
         # Context-aware boosting: if working on a specific file, boost
         # docs for that file and its graph neighbors
@@ -205,7 +207,7 @@ class SearchMixin:
         effective_query = query.strip() if query else ''
         if effective_query:
             # Phase 3: Load only embeddings for ranking (no content loaded yet)
-            ranked_ids = await self._rank_ids_by_embedding(candidate_ids, effective_query, limit * 2)
+            ranked_ids = await self._rank_ids_by_embedding(candidate_ids, effective_query, limit * 2, weights)
 
             # Apply context boost
             if context_boost_ids:
@@ -344,14 +346,14 @@ class SearchMixin:
 
         return None
 
-    async def _rank_ids_by_embedding(self, doc_ids: list[str], query: str, limit: int) -> list[tuple[str, float]]:
+    async def _rank_ids_by_embedding(self, doc_ids: list[str], query: str, limit: int, weights=None) -> list[tuple[str, float]]:
         """Rank document IDs by embedding similarity, via the strategy chosen for the candidate count."""
         try:
             from library.embedding_ranking import select_ranker
 
             query_embedding = await self.embedding_service.embed(query)
             ranker = select_ranker(len(doc_ids), self._get_embedding_matrix, self.library)
-            ranked = ranker.rank(query_embedding, doc_ids, limit)
+            ranked = ranker.rank(query_embedding, doc_ids, limit, weights=weights)
             if ranked:
                 return ranked
             return [(did, 0.0) for did in self._rank_by_query_ids(doc_ids, query, limit)]

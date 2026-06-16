@@ -495,6 +495,26 @@ class ScopedLibrary:
         )
         return [r for r in related if r['id'] in allowed_ids]
 
+    def get_related_batch(self, doc_ids, max_hops=2, limit=10):
+        """Batch, closure-filtered twin of :meth:`get_related`.
+
+        One bulk graph load in the underlying library; the closure filter
+        runs once across all neighbours rather than per seed. The result
+        for each id equals ``get_related(id)`` (the in-library batch is
+        equivalence-tested in ``tests/test_get_related_batch.py``).
+        """
+        raw = self._library.get_related_batch(
+            doc_ids, max_hops=max_hops, limit=limit,
+        )
+        all_ids = {r['id'] for results in raw.values() for r in results}
+        if not all_ids:
+            return raw
+        allowed = set(self._filter_ids_by_closure(list(all_ids)))
+        return {
+            doc_id: [r for r in results if r['id'] in allowed]
+            for doc_id, results in raw.items()
+        }
+
     def get_document(self, doc_id):
         """Single-doc lookup restricted to the closure.
 

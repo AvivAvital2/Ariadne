@@ -76,3 +76,16 @@ def test_matrix_ranker_delegates(lib: Library, tmp_path: Path) -> None:
     build_doc_embedding_matrix(lib, tmp_path)
     matrix_ranker = MatrixRanker(EmbeddingMatrix.load(tmp_path))
     assert [i for i, _ in matrix_ranker.rank(QUERY, ['d1', 'd2'], 2)] == ['d2', 'd1']
+
+
+def test_rankers_apply_candidate_weights(lib: Library, tmp_path: Path) -> None:
+    # d2 is the closer raw match, so unweighted it ranks first (tests above).
+    _add(lib, 'd1', [1.0, 0.0, 0.0, 0.0])
+    _add(lib, 'd2', [0.0, 1.0, 0.0, 0.0])
+    # A sub-1.0 weight on d2 sinks it below d1. This is the hook the live MCP
+    # search path uses to down-rank human/stale docs; BOTH rankers must honor it.
+    weights = {'d2': 0.05}
+    assert [i for i, _ in SqliteRanker(lib).rank(QUERY, ['d1', 'd2'], 2, weights=weights)] == ['d1', 'd2']
+    build_doc_embedding_matrix(lib, tmp_path)
+    mr = MatrixRanker(EmbeddingMatrix.load(tmp_path))
+    assert [i for i, _ in mr.rank(QUERY, ['d1', 'd2'], 2, weights=weights)] == ['d1', 'd2']
