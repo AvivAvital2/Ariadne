@@ -131,6 +131,8 @@ class ScipFileMetadata:
     """
     callers: tuple[ScipCaller, ...] = ()
     callees: tuple[ScipCallee, ...] = ()
+    autodoc_links: tuple[AutodocLink, ...] = ()
+    documented_by_rst: tuple[ReverseAutodocLink, ...] = ()
 
 
 @frozen
@@ -448,6 +450,57 @@ _SCIP_RESOLVABLE_SUBTYPES = frozenset({
 })
 
 
+@frozen
+class AutodocLink:
+    """A Sphinx autodoc directive resolved (or not) against the SCIP graph.
+
+    ``resolved=False`` is the "docs reference X, but X is not in the indexed
+    code" signal -- recorded explicitly, never silently dropped.
+    """
+    section_qualified_name: str
+    target: str
+    symbol_qualified_name: str | None = None
+    symbol_file: str | None = None
+    resolved: bool = False
+
+
+def _resolve_autodoc_links(
+    elements: list[ElementInfo],
+    graph: 'CrossSourceGraph | None',
+) -> tuple[AutodocLink, ...]:
+    """Resolve each rst section's ``autodoc_targets`` against the SCIP graph.
+
+    A hit links the section to the real code symbol; a miss is recorded with
+    ``resolved=False`` (the "documented but not in the code" finding).
+    Returns ``()`` when no graph is available -- the source simply isn't
+    SCIP-indexed; the file is still documented.
+    """
+    if graph is None:
+        return ()
+    links: list[AutodocLink] = []
+    for el in elements:
+        for target in el.autodoc_targets:
+            res = graph.resolve_symbol(target)
+            sym = res.symbol
+            links.append(AutodocLink(
+                section_qualified_name=el.qualified_name,
+                target=target,
+                symbol_qualified_name=sym.qualified_name if sym else None,
+                symbol_file=sym.file if sym else None,
+                resolved=sym is not None,
+            ))
+    return tuple(links)
+
+
+@frozen
+class ReverseAutodocLink:
+    """A code symbol documented by an rst section -- the reverse of
+    :class:`AutodocLink`. Lets a code doc surface its human rst rationale.
+    """
+    symbol_qualified_name: str
+    rst_section_qualified_name: str
+
+
 def _compute_scip_metadata(
     elements: list[ElementInfo],
     path: Path,
@@ -472,6 +525,7 @@ def _compute_scip_metadata(
 
     callers: list[ScipCaller] = []
     callees: list[ScipCallee] = []
+    documented: list[ReverseAutodocLink] = []
 
     for el in elements:
         if el.subtype not in _SCIP_RESOLVABLE_SUBTYPES:
@@ -509,9 +563,17 @@ def _compute_scip_metadata(
                 remote_line=edge.line,
             ))
 
+        for section_qn in graph.rst_sections_documenting(sym.qualified_name):
+            documented.append(ReverseAutodocLink(
+                symbol_qualified_name=sym.qualified_name,
+                rst_section_qualified_name=section_qn,
+            ))
+
     return ScipFileMetadata(
         callers=tuple(callers),
         callees=tuple(callees),
+        documented_by_rst=tuple(documented),
+        autodoc_links=_resolve_autodoc_links(elements, graph),
     )
 
 

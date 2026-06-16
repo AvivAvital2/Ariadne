@@ -41,7 +41,7 @@ _SOURCE_KNOWN_KEYS: frozenset[str] = frozenset({
     'swagger_paths',
     # SCIP-related keys consumed by get_source_scip_config
     'scip',
-    'index_kinds','ignore_staleness'
+    'index_kinds','ignore_staleness', 'low_confidence_doc_languages'
 })
 
 
@@ -129,6 +129,9 @@ DEFAULT_EXCLUDE_FILE_PATTERNS: tuple[str, ...] = (
 )
 
 
+DEFAULT_LOW_CONFIDENCE_DOC_LANGUAGES = ('rst', 'markdown')
+
+
 @frozen
 class SourceConfig:
     """Configuration for a documentation source.
@@ -186,6 +189,7 @@ class SourceConfig:
     # (Phase 8) where it applies.
     swagger_paths: tuple[str, ...] = ()
     ignore_staleness: bool | tuple[str, ...] = False
+    low_confidence_doc_languages: tuple[str, ...] = DEFAULT_LOW_CONFIDENCE_DOC_LANGUAGES
 
 # Config file names to search for
 CONFIG_FILENAME = 'ariadne.yaml'
@@ -522,7 +526,8 @@ class Config:
                 exempt_dirs=tuple(raw.get('exempt_dirs', [])),
                 env_hints=dict(raw.get('env_hints') or {}),
                 swagger_paths=tuple(raw.get('swagger_paths', []) or ()),
-            ignore_staleness=_coerce_ignore_staleness(raw.get('ignore_staleness', False)))
+            ignore_staleness=_coerce_ignore_staleness(raw.get('ignore_staleness', False)),
+                low_confidence_doc_languages=tuple(raw.get('low_confidence_doc_languages', DEFAULT_LOW_CONFIDENCE_DOC_LANGUAGES)))
         return None
 
     def hydrate_relations(self, all_relations: dict) -> None:
@@ -1230,3 +1235,18 @@ def ignore_staleness_matches(value, rel_path) -> bool:
     from fnmatch import fnmatch
     rel = str(rel_path).replace('\\', '/')
     return any(fnmatch(rel, pat) for pat in value)
+
+
+HUMAN_DOC_PROVENANCE = 'human-doc'
+CODE_PROVENANCE = 'code-derived'
+
+
+def doc_provenance(language, low_confidence_languages) -> str:
+    """A doc's provenance from its source language: ``human-doc`` when the
+    language is in the source's ``low_confidence_doc_languages`` (human-
+    authored prose, treated with a grain of salt), else ``code-derived``
+    (ground truth from the code). An empty list opts the source out.
+    """
+    if language in low_confidence_languages:
+        return HUMAN_DOC_PROVENANCE
+    return CODE_PROVENANCE

@@ -55,6 +55,9 @@ CATALOG_EXTS = {
     # Closes the multi-language coverage gap for products that ship
     # CSS alongside HTML / JS / TS.
     '.css',
+    # reStructuredText (Sphinx docs). File-index only (no
+    # ast-grep grammar); see designs/rst-support.md.
+    '.rst',
 }
 
 import re as _re
@@ -499,7 +502,8 @@ async def notify_changed(
 
     # Read-side closure-scoped view. Writes still go via the raw
     # ``library`` because ScopedLibrary doesn't expose mutation
-    # methods (per the chokepoint discipline).
+    # methods (per the chokepoint discipline in
+    # designs/directional-closure-scoping.md).
     scoped = make_scoped_library(cfg, library, source_name)
                                                                                                                                                                                      
     # Acquire per-file locks in sorted order (deterministic, avoids deadlock)

@@ -256,6 +256,20 @@ CREATE INDEX IF NOT EXISTS idx_config_reads_source_key ON config_reads(source_na
 '''
 
 
+_RST_AUTODOC_LINKS_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS rst_autodoc_links (
+    source_name                 TEXT NOT NULL,
+    symbol_qualified_name       TEXT NOT NULL,
+    rst_section_qualified_name  TEXT NOT NULL,
+    UNIQUE(source_name, symbol_qualified_name, rst_section_qualified_name)
+)
+'''
+
+_RST_AUTODOC_LINKS_INDEXES = '''
+CREATE INDEX IF NOT EXISTS idx_rst_autodoc_links_symbol ON rst_autodoc_links(symbol_qualified_name);
+'''
+
+
 def init_scip_schema(conn: 'Connection') -> None:
     """Create the SCIP tables (cross-source graph + API surface +
     config-value index + config-read index + string-literal index +
@@ -289,6 +303,39 @@ def init_scip_schema(conn: 'Connection') -> None:
     # HTTP client call sites (Phase 8b)
     conn.execute(_HTTP_CLIENT_CALLS_SCHEMA)
     conn.executescript(_HTTP_CLIENT_CALLS_INDEXES)
+    conn.execute(_RST_AUTODOC_LINKS_SCHEMA)
+    conn.executescript(_RST_AUTODOC_LINKS_INDEXES)
+
+
+def persist_rst_autodoc_links(conn, source_name, links):
+    """Persist resolved rst->symbol autodoc links for reverse lookup.
+
+    Only resolved links are stored (a dangling target points at no symbol).
+    Replaces this source's prior links so a re-sync is idempotent.
+    """
+    conn.execute('DELETE FROM rst_autodoc_links WHERE source_name = ?', (source_name,))
+    conn.executemany(
+        'INSERT OR IGNORE INTO rst_autodoc_links '
+        '(source_name, symbol_qualified_name, rst_section_qualified_name) '
+        'VALUES (?, ?, ?)',
+        [
+            (source_name, lk.symbol_qualified_name, lk.section_qualified_name)
+            for lk in links
+            if lk.resolved
+        ],
+    )
+
+
+def rst_sections_documenting(conn, symbol_qualified_name):
+    """rst section qualified-names that document ``symbol_qualified_name``
+    (the reverse of the autodoc link). Empty when none -- the symbol has no
+    human rst documentation pointing at it."""
+    rows = conn.execute(
+        'SELECT rst_section_qualified_name FROM rst_autodoc_links '
+        'WHERE symbol_qualified_name = ? ORDER BY rst_section_qualified_name',
+        (symbol_qualified_name,),
+    ).fetchall()
+    return tuple(r[0] for r in rows)
 
 
 __all__ = ['init_scip_schema']

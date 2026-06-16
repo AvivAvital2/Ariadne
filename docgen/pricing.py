@@ -117,6 +117,8 @@ def _detect_language(path: Path) -> str | None:
         return 'scala'
     if ext == '.java':
         return 'java'
+    if ext == '.rst':
+        return 'rst'
     return None
 
 

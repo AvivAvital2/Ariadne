@@ -93,6 +93,16 @@ class GeneratorConfig:
     provider: str = 'openai'
 
 
+def _dangling_autodoc_meta(bundle):
+    """{'stale_autodoc': True} when the bundle's rst autodoc references a symbol
+    that did not resolve (a dangling target), else {}. Spread into a generated
+    doc's metadata so search down-ranks it.
+    """
+    if bundle.scip and any(not link.resolved for link in bundle.scip.autodoc_links):
+        return {'stale_autodoc': True}
+    return {}
+
+
 @define
 class GeneratedDoc:
     """A generated documentation item."""
@@ -730,7 +740,7 @@ class DocGenerator:
                     source_files=(str(bundle.path),),
                     metadata={
                         'module_name': bundle.module_name,
-                        'language': bundle.language,
+                        'language': bundle.language,**_dangling_autodoc_meta(bundle)
                     },
                 )
             except QuotaExhaustedError:
@@ -833,7 +843,7 @@ class DocGenerator:
                     title=title,
                     metadata={
                         'module_name': bundle.module_name,
-                        'language': bundle.language,
+                        'language': bundle.language,**_dangling_autodoc_meta(bundle)
                     },
                 )
             )
@@ -964,11 +974,13 @@ class DocGenerator:
             related = format_related_modules(
                 [(d, None) for d in deps[:5]]
             )
+            from docgen.prompts import format_rst_crossref
             return render_user_template(
                 template, language=lang,
                 module_info=module_info,
                 source_code=source_code,
                 related_modules=related,
+                rst_crossref=format_rst_crossref(bundle.scip),
             )
 
         if template.doc_type == 'architecture':
@@ -990,12 +1002,18 @@ class DocGenerator:
                 dependents = format_cross_source_callers(bundle.scip.callers)
             else:
                 dependents = '(Analysis not performed)'
+            if bundle.scip is not None and bundle.scip.callees:
+                from docgen.prompts import format_cross_source_callees
+                cross_source_calls = format_cross_source_callees(bundle.scip.callees)
+            else:
+                cross_source_calls = '(None detected)'
             return render_user_template(
                 template, language=lang,
                 component_info=module_info,
                 source_code=source_code,
                 dependencies=deps,
                 dependents=dependents,
+                cross_source_calls=cross_source_calls,
             )
 
         if template.doc_type == 'qa':

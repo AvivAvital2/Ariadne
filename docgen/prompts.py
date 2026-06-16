@@ -92,6 +92,8 @@ EXPLANATION_TEMPLATE = '''Create an explanation document for the following {lang
 ## Related Modules
 {related_modules}
 
+{rst_crossref}
+
 ---
 
 Write a comprehensive explanation covering:
@@ -118,6 +120,9 @@ ARCHITECTURE_TEMPLATE = '''Create an architecture document for the following cod
 
 ## Dependents
 {dependents}
+
+## Cross-Source Calls
+{cross_source_calls}
 
 ---
 
@@ -633,6 +638,33 @@ def format_cross_source_callees(
     return '\n'.join(lines)
 
 
+def format_rst_crossref(scip) -> str:
+    """Render a file's rst<->code cross-references for the doc-gen prompt.
+
+    Code file: the rst sections documenting its symbols
+    (``documented_by_rst``) — human rationale to fold in, already
+    fact-checked against the source. rst file: the resolved code symbols
+    this page documents (``autodoc_links``). Returns an empty string when
+    neither applies, so the slot stays empty rather than a bare header.
+    """
+    if scip is None:
+        return ''
+    lines = []
+    for rev in scip.documented_by_rst:
+        lines.append(
+            f'- `{rev.symbol_qualified_name}` is documented in the '
+            f'reStructuredText section `{rev.rst_section_qualified_name}` '
+            f'— fold in its human-authored rationale (already fact-checked '
+            f'against the source above)'
+        )
+    for link in scip.autodoc_links:
+        if link.resolved:
+            lines.append(f'- this page documents `{link.symbol_qualified_name}`')
+    if not lines:
+        return ''
+    return '## Cross-Source Documentation\n' + '\n'.join(lines)
+
+
 def format_dependencies(imports: list[str], internal: list[str]) -> str:
     """Format dependency information for prompt injection.
 
@@ -684,6 +716,7 @@ LANGUAGE_FENCE: dict[str, str] = {
     'markdown': 'markdown',
     'scala': 'scala',
     'java': 'java',
+    'rst': 'rst',
 }
 
 LANGUAGE_FRAMING: dict[str, str] = {
@@ -695,6 +728,7 @@ LANGUAGE_FRAMING: dict[str, str] = {
     'markdown': 'Markdown',
     'scala': 'Scala',
     'java': 'Java',
+    'rst': 'reStructuredText',
 }
 
 LANGUAGE_DOC_TYPES: dict[str, tuple[DocType, ...]] = {
@@ -708,6 +742,7 @@ LANGUAGE_DOC_TYPES: dict[str, tuple[DocType, ...]] = {
     # benefit from architecture/qa/gotcha/diagram, just like Python.
     'scala':      ('explanation', 'architecture', 'qa', 'catalog', 'gotcha', 'diagram'),
     'java':       ('explanation', 'architecture', 'qa', 'catalog', 'gotcha', 'diagram'),
+    'rst':        ('explanation', 'architecture', 'qa', 'gotcha'),
 }
 
 
@@ -723,13 +758,18 @@ def render_user_template(
     EnrichedFileBundle path go through this helper. The legacy path
     always passes ``language='python'``; the new path passes
     ``bundle.language``.
+
+    Optional cross-source slots default to a placeholder so every render
+    site can format the architecture template without supplying them;
+    callers with real data (the bundle path) override via ``kwargs``.
     """
     fence = LANGUAGE_FENCE.get(language, language)
     framing = LANGUAGE_FRAMING.get(language, language.capitalize())
+    optional_slots = {'cross_source_calls': '(None detected)', 'rst_crossref': ''}
     return template.user_template.format(
         language_fence=fence,
         language_framing=framing,
-        **kwargs,
+        **{**optional_slots, **kwargs},
     )
 
 

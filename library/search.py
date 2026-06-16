@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+from config import HUMAN_DOC_PROVENANCE
 
 from schema import Chunk, ContentType, Document, SearchResult
 
@@ -13,6 +14,14 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 _logger = logging.getLogger(__name__)
+
+
+# Human-authored docs (rst/markdown) rank below code-derived docs for the same
+# query — a provenance down-weight multiplied into similarity alongside
+# the usage-feedback weight. <1 sinks without hiding.
+_HUMAN_DOC_RANK_WEIGHT = 0.8
+
+_STALE_DOC_RANK_WEIGHT = 0.6
 
 
 class SearchMixin:
@@ -65,6 +74,10 @@ class SearchMixin:
             else:
                 weight = 0.7 + 0.3 * (hits / served) if served > 0 else 1.0
             similarities[i] *= weight
+            if doc.metadata.get('provenance') == HUMAN_DOC_PROVENANCE:
+                similarities[i] *= _HUMAN_DOC_RANK_WEIGHT
+            if doc.metadata.get('stale_autodoc'):
+                similarities[i] *= _STALE_DOC_RANK_WEIGHT
 
         top_indices = top_k_indices(similarities, k)
 

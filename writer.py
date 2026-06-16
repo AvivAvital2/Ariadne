@@ -357,6 +357,7 @@ class LibraryWriter:
         source_files: list[str] | None = None,
         source_name: str | None = None,
         doc_id: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> Document:
         """Add an architecture document.
 
@@ -369,6 +370,7 @@ class LibraryWriter:
             source_files=source_files,
             source_name=source_name,
             doc_id=doc_id,
+            metadata=metadata,
         )
 
     async def add_qa(
@@ -378,6 +380,7 @@ class LibraryWriter:
         source_files: list[str] | None = None,
         source_name: str | None = None,
         doc_id: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> Document:
         """Add a Q&A document.
 
@@ -390,7 +393,7 @@ class LibraryWriter:
             title=question,
             content=content,
             source_files=source_files,
-            metadata={'question': question, 'answer': answer},
+            metadata={**(metadata or {}), 'question': question, 'answer': answer},
             source_name=source_name,
             doc_id=doc_id,
         )
@@ -403,6 +406,7 @@ class LibraryWriter:
         source_files: list[str] | None = None,
         source_name: str | None = None,
         doc_id: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> Document:
         """Add a diagram document.
 
@@ -417,7 +421,7 @@ class LibraryWriter:
             title=title,
             content=content,
             source_files=source_files,
-            metadata={'dot_code': dot_code},
+            metadata={**(metadata or {}), 'dot_code': dot_code},
             create_chunks=False,
             source_name=source_name,
             doc_id=doc_id,

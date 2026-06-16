@@ -25,6 +25,8 @@ Language = Literal[
     # the multi-language coverage gap for products that ship CSS
     # alongside HTML / JS / TS.
     'css',
+    # reStructuredText (Sphinx docs): file_index-only extraction; see designs/rst-support.md
+    'rst',
 ]
 Subtype = Literal[
     'function', 'async_function', 'class', 'method', 'variable',
@@ -37,6 +39,7 @@ Subtype = Literal[
     'scala_package_object',
     'java_class', 'java_interface', 'java_enum',
     'java_method', 'java_constructor', 'java_field',
+    'rst_section',
 ]               
                                                                                                                                                                                      
 _HTML_SEMANTIC = {
@@ -64,6 +67,9 @@ class ElementInfo:
     # for languages without doc enrichment (Python uses
     # PythonEnrichment.docstring instead, which lives on the EnrichedFileBundle).
     documentation: dict | None = None                                                                                                                                                               
+    # Sphinx autodoc targets referenced by an rst section (rst only);
+    # resolved against the SCIP index downstream. () for other languages.
+    autodoc_targets: tuple[str, ...] = ()
                 
 
 def _sha(text: str) -> str:
@@ -101,6 +107,8 @@ def _detect_language(path: Path) -> Language | None:
         return 'hocon'
     if ext == '.css':
         return 'css'
+    if ext == '.rst':
+        return 'rst'
     return None
 def _first_identifier(node) -> str | None:
     for child in node.children():
@@ -444,6 +452,89 @@ def _extract_markdown(src: str, path: Path, source_root: Path) -> list[ElementIn
             parent_qualified_name=module_qn,                                                                                                                            
         ))
     return out                                                                                                                                                          
+def _extract_rst(src: str, path: Path, source_root: Path) -> list[ElementInfo]:
+    """reStructuredText sections via the docutils doctree.
+
+    Mirrors :func:`_extract_markdown` but parses with docutils so section
+    nesting and adornment styles resolve correctly. Each section becomes an
+    ``rst_section`` element; nested sections link to their parent, and any
+    Sphinx ``autodoc`` directives in a section are captured as
+    ``autodoc_targets`` (resolved against the SCIP index downstream).
+    Degrades to ``[]`` (the file-index fallback, like ``.conf``/``.css``)
+    when the source has no sections or can't be parsed -- explicitly, never
+    silently.
+    """
+    import re as _re
+
+    from docutils import nodes as _dn
+    from docutils.core import publish_doctree
+
+    autodoc_re = _re.compile(r'^\s*\.\.\s+auto\w+::\s+(\S+)')
+    module_qn = _js_module_qn(path, source_root)
+    file_s = str(path.resolve())
+    lines = src.splitlines()
+    try:
+        doctree = publish_doctree(
+            src,
+            settings_overrides={'report_level': 5, 'halt_level': 5, 'doctitle_xform': False},
+        )
+    except Exception:
+        return []
+    sections = list(doctree.findall(_dn.section))
+    if not sections:
+        return []
+
+    # docutils reports the adornment line; the title text is the line above
+    # (underline form). Fall back to line 1 if docutils gives no position.
+    title_lines = [max(0, (sec.line or 1) - 2) for sec in sections]
+
+    out: list[ElementInfo] = []
+    seen: set[str] = set()
+    qn_by_id: dict[int, str] = {}
+    for i, sec in enumerate(sections):
+        text = sec.next_node(_dn.title).astext()
+        slug = _slugify(text)
+        if slug in seen:
+            j = 2
+            while f'{slug}_{j}' in seen:
+                j += 1
+            slug = f'{slug}_{j}'
+        seen.add(slug)
+        qn = f'{module_qn}.{slug}'
+        qn_by_id[id(sec)] = qn
+
+        # Nearest enclosing section -> parent qn (else the module). Parents
+        # precede children in document order, so the lookup always resolves.
+        parent_qn = module_qn
+        ancestor = sec.parent
+        while ancestor is not None:
+            if isinstance(ancestor, _dn.section):
+                parent_qn = qn_by_id[id(ancestor)]
+                break
+            ancestor = ancestor.parent
+
+        line_idx = title_lines[i]
+        end_line = title_lines[i + 1] if i + 1 < len(sections) else len(lines)
+        section_text = '\n'.join(lines[line_idx:end_line])
+        targets: list[str] = []
+        for ln in lines[line_idx:end_line]:
+            m = autodoc_re.match(ln)
+            if m:
+                targets.append(m.group(1))
+        out.append(ElementInfo(
+            language='rst', subtype='rst_section', file=file_s,
+            qualified_name=qn,
+            signature=_signature(lines[line_idx]),
+            line_start=line_idx + 1, line_end=end_line,
+            col_start=0,
+            col_end=len(lines[line_idx]),
+            body_sha=_sha(section_text),
+            parent_qualified_name=parent_qn,
+            autodoc_targets=tuple(targets),
+        ))
+    return out
+
+
 _SUB_EXTRACT_THRESHOLD = 80                                                                                                                                             
                                                                                                                                                                         
  
@@ -703,6 +794,8 @@ def extract_elements(
         return _extract_yaml(src, path, source_root)
     if lang == 'markdown':
         return _extract_markdown(src, path, source_root)
+    if lang == 'rst':
+        return _extract_rst(src, path, source_root)
     if lang == 'hocon':
         from docgen.hocon_extractor import _extract_hocon
         return _extract_hocon(src, path, source_root)

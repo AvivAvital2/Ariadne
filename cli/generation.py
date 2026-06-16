@@ -261,6 +261,16 @@ async def cmd_improve(args: argparse.Namespace) -> int:
                     '  [dim]No dead code found (or source not in '
                     'SCIP graph — run `ariadne index --source X`).[/dim]'
                 )
+            src_path = cfg.get_source_path(source_name)
+            if src_path is not None:
+                from cli.callers import format_stale_autodoc_report
+                from docgen.scip_persist import dangling_autodoc
+                sc = cfg.get_source_config(source_name)
+                ign = sc.ignore_staleness if sc else False
+                stale = format_stale_autodoc_report(
+                    dangling_autodoc(src_path, graph, ignore_staleness=ign))
+                if stale:
+                    console.print(stale)
 
         # Step 4: Prioritize using graph if available
         graph_stats = library.get_graph_stats()

@@ -741,6 +741,15 @@ class IntelligenceMixin:
                 elif doc2_idx < doc1_idx:
                     return doc2
 
+        # Rule 2.5: code-derived docs beat human-authored ones.
+        from config import HUMAN_DOC_PROVENANCE
+        doc1_human = doc1.metadata.get('provenance') == HUMAN_DOC_PROVENANCE
+        doc2_human = doc2.metadata.get('provenance') == HUMAN_DOC_PROVENANCE
+        if doc1_human and not doc2_human:
+            return doc2
+        if doc2_human and not doc1_human:
+            return doc1
+
         # Rule 3: Most recently updated wins
         if doc1.updated_at > doc2.updated_at:
             return doc1

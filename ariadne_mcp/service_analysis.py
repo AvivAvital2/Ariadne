@@ -171,9 +171,10 @@ class AnalysisMixin:
         search_result = await self.search(
             query=question, branch=branch, limit=5, role=role, source=source,
         )
+        badge = _doc_only_badge(search_result.documents[:3])
         if not search_result.documents:
             return AskResponse(
-                answer=f'No relevant documentation found for: "{question}"',
+                answer=badge + f'No relevant documentation found for: "{question}"',
                 confidence='low',
                 event_id=search_result.event_id,
             )
@@ -204,7 +205,7 @@ class AnalysisMixin:
             )
             if cached is not None:
                 return AskResponse(
-                    answer=cached.content,
+                    answer=badge + cached.content,
                     sources=[cached.title],
                     confidence=confidence,
                     event_id=search_result.event_id,
@@ -222,7 +223,7 @@ class AnalysisMixin:
             except Exception as e:
                 _logger.warning('Role adapter failed: %s', e)
                 return AskResponse(
-                    answer=(
+                    answer=badge + (
                         f'Could not adapt response for role={role!r}: '
                         f'{e}. Falling back to developer-level docs:'
                         f'\n\n{context}'
@@ -249,7 +250,7 @@ class AnalysisMixin:
                 )
 
             return AskResponse(
-                answer=adapted,
+                answer=badge + adapted,
                 sources=sources,
                 confidence=confidence,
                 event_id=search_result.event_id,
@@ -259,7 +260,7 @@ class AnalysisMixin:
         api_key = os.environ.get('OPENAI_API_KEY')
         if not api_key:
             return AskResponse(
-                answer=f'Based on {len(sources)} docs:\n\n{context}',
+                answer=badge + f'Based on {len(sources)} docs:\n\n{context}',
                 sources=sources,
                 confidence=confidence,
                 event_id=search_result.event_id,
@@ -281,7 +282,7 @@ class AnalysisMixin:
             )
 
             return AskResponse(
-                answer=answer,
+                answer=badge + answer,
                 sources=sources,
                 confidence=confidence,
                 event_id=search_result.event_id,
@@ -289,7 +290,7 @@ class AnalysisMixin:
         except Exception as e:
             _logger.warning('LLM synthesis failed: %s', e)
             return AskResponse(
-                answer=f'Based on {len(sources)} docs (LLM synthesis unavailable):\n\n{context}',
+                answer=badge + f'Based on {len(sources)} docs (LLM synthesis unavailable):\n\n{context}',
                 sources=sources,
                 confidence=confidence,
                 event_id=search_result.event_id,
@@ -778,6 +779,17 @@ def _confidence_from_scores(scores: list[float | None]) -> str:
     if best > 0.4:
         return 'medium'
     return 'low'
+
+
+def _doc_only_badge(docs):
+    """The '\U0001f4c4 no code evidence' prefix when an answer rests SOLELY on
+    human-authored docs (every doc tagged human-doc, no code-derived
+    corroboration); else ''. Surfaces only when no other evidence.
+    """
+    from config import HUMAN_DOC_PROVENANCE
+    if docs and all(d.metadata.get('provenance') == HUMAN_DOC_PROVENANCE for d in docs):
+        return '\U0001f4c4 **Doc-only -- no code evidence found to back this.**\n\n'
+    return ''
 
 
 def _find_cached_audience_response(library, *, role: str, question: str):

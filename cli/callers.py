@@ -382,3 +382,26 @@ __all__ = [
     'walk_callees',
     'walk_callers',
 ]
+
+
+def format_stale_autodoc_report(dangling):
+    """Report rst autodoc targets that no longer resolve to a code symbol --
+    the docs reference code that was renamed or removed. ``dangling`` is the
+    ``(rst_section, target)`` list from ``dangling_autodoc``. Returns None when
+    empty so the caller skips the section.
+    """
+    if not dangling:
+        return None
+    lines = [
+        '[yellow]\u26a0\ufe0f  Stale documentation (autodoc targets no longer resolve):[/yellow]',
+    ]
+    for section, target in sorted(dangling):
+        lines.append(
+            f'  [cyan]{section}[/cyan] documents [red]{target}[/red] '
+            '-- not found in any indexed source',
+        )
+    lines.append(
+        '[dim]  The rst references code that was renamed or removed; '
+        'update the autodoc directive or the docs.[/dim]',
+    )
+    return '\n'.join(lines)

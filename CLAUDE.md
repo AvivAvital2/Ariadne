@@ -52,7 +52,7 @@ uv run ariadne index --source X           # Run scip-X per declared kind, then 1
 uv run ariadne callers <symbol>           # Cross-source caller tree
 uv run ariadne callees <symbol>           # Cross-source callee tree
 uv run ariadne impact_radius <symbol> --depth 3   # Files affected by changing a symbol
-uv run ariadne improve --dead-code        # Symbols with zero references in any indexed source
+uv run ariadne improve --dead-code        # Zero-reference symbols + stale rst (autodoc targets that no longer resolve)
 uv run ariadne trace-flow <symbol> --depth 3      # Cross-language flow trace (SCIP + HTTP tiers)
 ```
 
@@ -66,9 +66,11 @@ See `ariadne.yaml` for:
 
 Set `ARIADNE_CONFIG=/path/to/ariadne.yaml` to use a config file outside cwd.
 
-**User-authored fields** under `sources.<name>:`: `path`, `depends_on`, `parent`, `branches`, `ref`, `exclude`, `exclude_dirs`, `exempt_dirs`, `swagger_paths`, `env_hints`, `ignore_staleness`. **Ariadne-managed** (written by `discover`): `index_kinds`, `scip:` block. Manual edits to the managed fields get regenerated on next `discover` run.
+**User-authored fields** under `sources.<name>:`: `path`, `depends_on`, `parent`, `branches`, `ref`, `exclude`, `exclude_dirs`, `exempt_dirs`, `swagger_paths`, `env_hints`, `ignore_staleness`, `low_confidence_doc_languages`. **Ariadne-managed** (written by `discover`): `index_kinds`, `scip:` block. Manual edits to the managed fields get regenerated on next `discover` run.
 
 **`ignore_staleness`** (opt-in, default off) exempts a source from staleness checks — for repos that update rarely (e.g. only on releases), where the constant "stale, regenerate" nag is noise. Set `ignore_staleness: true` to exempt the whole source (this also disables the SCIP index-age gate, so an old `.scip` index is reused instead of forcing a re-index), or give a list of globs (`["vendor/**", "legacy/*.py"]`) to exempt only matching files. It suppresses the *content-changed → stale* signal only; never-documented files still surface as coverage gaps. Set it via `ariadne source add NAME --ignore-staleness`, in `ariadne.yaml`, or when `ariadne onboard` prompts.
+
+**`low_confidence_doc_languages`** (default `[rst, markdown]`) marks which source languages are *human-authored prose* rather than code-derived ground truth. Docs generated from these languages are tagged `provenance: human-doc` and rank **below** code-derived docs for the same query, so stale or aspirational prose can't outrank what the code actually does. Give an explicit list to add languages (e.g. `[rst, markdown, html]`) or `[]` to opt a source out entirely.
 
 Rather than hand-editing `ariadne.yaml`, you can manage the user-authored fields from the CLI with `ariadne source`:
 ```bash
@@ -100,6 +102,7 @@ sources:
     branches: ["feature/*"]       # Branch patterns where active
     ref: main                     # Pin to specific git ref
     ignore_staleness: true        # Opt out of staleness checks (or a glob list)
+    low_confidence_doc_languages: [rst, markdown]  # Human-prose langs ranked below code (default)
 ```
 
 ### Scope-Aware Commands

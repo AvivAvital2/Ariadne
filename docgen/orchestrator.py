@@ -39,6 +39,32 @@ _logger = logging.getLogger(__name__)
 MAX_VALIDATION_RETRIES = 2
 
 
+def _doc_provenance_for_files(source_files, low_confidence_languages) -> str:
+    """Provenance for a doc from the language of the file(s) it documents:
+    ``human-doc`` if any documented file is a low-confidence (human-authored)
+    language, else ``code-derived``. The basis for provenance down-ranking.
+    """
+    from config import CODE_PROVENANCE, HUMAN_DOC_PROVENANCE, doc_provenance
+    from docgen.catalog_extractor import _detect_language
+
+    for f in source_files:
+        if doc_provenance(_detect_language(Path(f)), low_confidence_languages) == HUMAN_DOC_PROVENANCE:
+            return HUMAN_DOC_PROVENANCE
+    return CODE_PROVENANCE
+
+
+def _provenance_for_doc(gen_doc, low_confidence_languages) -> str:
+    """A doc's provenance: prefer the language the generator stamped on the
+    bundle (``metadata['language']``); fall back to detecting from the documented
+    files for group/topic docs that span files and carry no single language.
+    """
+    lang = gen_doc.metadata.get('language')
+    if lang is not None:
+        from config import doc_provenance
+        return doc_provenance(lang, low_confidence_languages)
+    return _doc_provenance_for_files(gen_doc.source_files, low_confidence_languages)
+
+
 @frozen
 class OrchestratorConfig:
     """Configuration for the documentation generation orchestrator.
@@ -321,6 +347,7 @@ class DocGenOrchestrator:
     _writer: LibraryWriter | None = field(default=None, init=False)
     _generator: DocGenerator | None = field(default=None, init=False)
     _staleness: StalenessTracker | None = field(default=None, init=False)
+    _low_confidence_langs: tuple[str, ...] | None = field(default=None, init=False)
     _validator: ContentValidator = field(factory=ContentValidator, init=False)
     _analyzer: SourceAnalyzer = field(factory=SourceAnalyzer, init=False)
     # Cross-source SCIP graph loaded from ariadne.db at __aenter__.
@@ -368,6 +395,16 @@ class DocGenOrchestrator:
         else:
             self._scoped = make_scoped_library(cfg, self._library, source)
         return self._scoped
+
+    def _low_confidence_languages(self) -> tuple[str, ...]:
+        """The source's human-prose languages (cached; resolved once, like
+        :meth:`_scoped_lib`). Basis for each doc's provenance tag.
+        """
+        if self._low_confidence_langs is None:
+            from config import DEFAULT_LOW_CONFIDENCE_DOC_LANGUAGES, get_config
+            sc = get_config().get_source_config(self.config.source_name) if self.config.source_name else None
+            self._low_confidence_langs = sc.low_confidence_doc_languages if sc else DEFAULT_LOW_CONFIDENCE_DOC_LANGUAGES
+        return self._low_confidence_langs
 
     async def __aenter__(self) -> DocGenOrchestrator:
         """Enter async context and initialize components."""
@@ -1707,6 +1744,7 @@ class DocGenOrchestrator:
             return None
 
         source_name = self.config.source_name
+        gen_doc.metadata['provenance'] = _provenance_for_doc(gen_doc, self._low_confidence_languages())
         # Deterministic doc_id keyed on (source, content_type, primary_key).
         # Re-running generate on the same file therefore updates the same row
         # rather than appending a duplicate (the prior UUID4 scheme produced
@@ -1729,6 +1767,7 @@ class DocGenOrchestrator:
                     content=gen_doc.content,
                     source_files=list(gen_doc.source_files),
                     source_name=source_name,
+                    metadata=gen_doc.metadata,
                     doc_id=doc_id,
                 )
             elif gen_doc.doc_type == 'qa':
@@ -1750,6 +1789,7 @@ class DocGenOrchestrator:
                     dot_code=dot_code,
                     source_files=list(gen_doc.source_files),
                     source_name=source_name,
+                    metadata=gen_doc.metadata,
                     doc_id=doc_id,
                 )
             else:

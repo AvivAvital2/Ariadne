@@ -52,6 +52,8 @@ You author the **user fields** below. The **Ariadne-managed fields** are filled 
 | `exempt_dirs` | list | Directory **names** removed from the global exclusion policy for this source — opt-in to walking a directory the policy would normally skip (e.g., `[dist]` if your project's `dist/` legitimately holds source). |
 | `swagger_paths` | list | OpenAPI / Swagger spec files to ingest into `api_endpoints` (relative to source root). |
 | `env_hints` | dict | Per-source indexer hints, e.g., `python_path: /path/to/conda/envs/X/bin/python` for non-standard Python environments. |
+| `ignore_staleness` | bool \| list | Exempt this source from staleness checks — `true` for the whole source, or a list of globs (`["vendor/**"]`) for specific files. For repos that update rarely. |
+| `low_confidence_doc_languages` | list | Source languages treated as human-authored prose (default `[rst, markdown]`). Docs from these are tagged `provenance: human-doc` and rank **below** code-derived docs for the same query; `[]` opts out. |
 
 **Ariadne-managed fields** (written by `ariadne discover`):
 

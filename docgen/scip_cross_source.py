@@ -7,7 +7,7 @@ equality on the canonical_id. Cross-language joins do not happen by
 construction — ``scip-python python ...`` symbols cannot collide with
 ``scip-java maven ...`` symbols.
 
-Per design decisions:
+Per design decisions in ``designs/scip-everywhere.md``:
 
 - **No fallbacks** (#4). A source either has a current ``.scip``
   registered via ``add_source()`` or it contributes nothing. There is no
@@ -143,6 +143,7 @@ class CrossSourceGraph:
         # has_scip checks this set so load-from-DB callers can query
         # without re-registering sources.
         self._known_source_names: set[str] = set()
+        self._rst_autodoc: dict[str, list[str]] = {}
 
     # -- registration -----------------------------------------------------
 
@@ -478,6 +479,12 @@ class CrossSourceGraph:
                 edge_type=row[2], file=row[3], line=row[4],
                 confidence=row[5],
             ))
+        self._rst_autodoc = {}
+        for row in conn.execute(
+            'SELECT symbol_qualified_name, rst_section_qualified_name '
+            'FROM rst_autodoc_links',
+        ):
+            self._rst_autodoc.setdefault(row[0], []).append(row[1])
 
     # -- symbol resolution (decision #3) ----------------------------------
 
@@ -536,6 +543,12 @@ class CrossSourceGraph:
             )
 
         return SymbolResolution(symbol=None, candidates=(), match_tier='none')
+    
+    def rst_sections_documenting(self, symbol_qualified_name: str) -> tuple[str, ...]:
+        """rst section qualified-names that document ``symbol_qualified_name``
+    (reverse autodoc lookup, ingested by :meth:`load_from`). () when none.
+    """
+        return tuple(sorted(self._rst_autodoc.get(symbol_qualified_name, ())))
 
 
 # ---------------------------------------------------------------------------

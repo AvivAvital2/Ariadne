@@ -113,6 +113,9 @@ def persist_all_sources(
                         None,  # per-indexer versions live in manifest.json
                     ),
                 )
+            
+            for source_name, source_root in loaded_pairs:
+                persist_rst_autodoc_index(conn, source_root, source_name, graph)
             conn.commit()
     finally:
         library.close()
@@ -535,3 +538,53 @@ def persist_akka_http_endpoints(
 __all__ = [
     'persist_akka_http_endpoints', 'persist_all_sources', 'persist_api_endpoints', 'persist_config_reads', 'persist_config_values', 'persist_express_routes', 'persist_js_http_clients', 'persist_python_http_clients', 'persist_python_routes', 'persist_scala_http_clients', 'persist_string_literals', 'persist_url_resolver'
 ]
+
+
+def persist_rst_autodoc_index(conn, source_root, source_name, graph) -> None:
+    """Resolve a source's rst autodoc directives against the materialized
+    SCIP graph and persist the (symbol -> rst section) reverse index to
+    ``rst_autodoc_links``.
+
+    Run at persist time, after ``save_to``, so the reverse index is in the
+    DB before doc-gen's ``load_from`` reads it — code docs are reverse-
+    enriched in the same run. rst is re-extracted from disk (cheap at rst
+    volumes) rather than threading catalog state through the pipeline.
+    """
+    from pathlib import Path as _P
+
+    from docgen.catalog_enrich import _resolve_autodoc_links
+    from docgen.catalog_extractor import extract_elements
+    from docgen.staleness import find_catalog_files
+    from library.scip import persist_rst_autodoc_links
+
+    root = _P(source_root)
+    links = []
+    for f in find_catalog_files(root):
+        if f.suffix.lower() == '.rst':
+            links.extend(_resolve_autodoc_links(extract_elements(f, root), graph))
+    persist_rst_autodoc_links(conn, source_name, links)
+
+
+def dangling_autodoc(source_root, graph, ignore_staleness=False):
+    """rst autodoc targets that no longer resolve to a code symbol -- the rst
+    references code that's gone or renamed (a stale-doc signal). Returns
+    ``(rst_section_qualified_name, target)`` pairs. Files matching
+    ``ignore_staleness`` are skipped (don't nag sources opted out of staleness).
+    """
+    from pathlib import Path as _P
+
+    from config import ignore_staleness_matches
+    from docgen.catalog_enrich import _resolve_autodoc_links
+    from docgen.catalog_extractor import extract_elements
+    from docgen.staleness import find_catalog_files
+
+    root = _P(source_root)
+    dangling = []
+    for f in find_catalog_files(root):
+        if f.suffix.lower() == '.rst':
+            rel = str(f.relative_to(root))
+            if not ignore_staleness_matches(ignore_staleness, rel):
+                for link in _resolve_autodoc_links(extract_elements(f, root), graph):
+                    if not link.resolved:
+                        dangling.append((link.section_qualified_name, link.target))
+    return dangling
