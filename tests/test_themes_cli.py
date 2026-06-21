@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from cli.main import create_parser
 from cli.themes_cmd import cmd_themes
 from library import Library
 
@@ -274,6 +275,41 @@ class TestThemesBuild:
         assert captured.get('batch_strategy') is sentinel, (
             'the resolved BatchStrategy must reach refresh_themes'
         )
+
+
+class TestThemesConcurrency:
+    """`themes build` must expose -c and forward it into refresh_themes, so
+    theme summarization fans out at the user's chosen width instead of
+    generate_themes' hardcoded default."""
+
+    def test_build_parser_exposes_concurrency_flag(self) -> None:
+        parser = create_parser()
+        assert parser.parse_args(['themes', 'build']).concurrency == 3
+        assert parser.parse_args(['themes', 'build', '-c', '7']).concurrency == 7
+        assert parser.parse_args(
+            ['themes', 'build', '--concurrency', '5'],
+        ).concurrency == 5
+
+    def test_build_threads_concurrency_into_refresh(
+        self, patched_get_library: Library, monkeypatch,
+    ) -> None:
+        captured: dict = {}
+
+        async def fake_refresh(library, writer, **kwargs):
+            captured.update(kwargs)
+            return {
+                'path': 'noop', 'changed': 0, 'recluster_full': False,
+                'summarized': 0, 'incoherent': 0, 'failed': 0, 'total_dirty': 0,
+            }
+
+        monkeypatch.setattr('docgen.themes.refresh_themes', fake_refresh)
+
+        args = argparse.Namespace(
+            themes_action='build', db=None, cluster_id=None,
+            coherent_only=True, source=None, limit=50, concurrency=7,
+        )
+        assert cmd_themes(args) == 0
+        assert captured['summarize_kwargs']['concurrency'] == 7
 
 
 # ---------------------------------------------------------------------------

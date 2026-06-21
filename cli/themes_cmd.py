@@ -50,6 +50,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     themes_build.add_argument('--batch', action='store_true',
         help='Summarize dirty themes via the provider batch API '
              '(~50%% off, up to 24h) instead of the live per-theme path')
+    themes_build.add_argument('--concurrency', '-c', type=int, default=3, help='Max concurrent LLM calls for theme summarization')
 
     themes_list = themes_sub.add_parser(
         'list', help='List discovered themes',
@@ -170,6 +171,7 @@ async def cmd_themes_build(args: argparse.Namespace) -> int:
                     )
 
                 summarize_kwargs = {'on_progress': on_progress}
+                summarize_kwargs['concurrency'] = getattr(args, 'concurrency', 3)
                 if batch_strategy is not None:
                     summarize_kwargs['on_stage'] = on_stage
 

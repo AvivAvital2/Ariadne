@@ -55,6 +55,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
                               help='Compare against main branch instead of last sync point')
     sync_parser.add_argument('--branch', action='store_true',
                               help='Tag regenerated docs as branch-specific (experimental, with TTL)')
+    sync_parser.add_argument('--concurrency', '-c', type=int, default=3, help='Max concurrent LLM calls for regeneration and theme summarization')
 
 
 def _maybe_auto_discover_for_new_language(
@@ -126,6 +127,23 @@ def _maybe_auto_discover_for_new_language(
         'exists, catalog extraction for the new language fails loud by '
         'design (no silent ast-grep fallback).[/yellow]',
     )
+
+
+async def _refresh_themes_after_regen(library, cfg, *, concurrency: int) -> None:
+    """Refresh cross-cutting theme clusters after a sync regeneration.
+
+    Honors the user's ``--concurrency`` so theme summarization fans out at the
+    same width as doc regeneration (and the generate/onboard paths), instead of
+    ``generate_themes``' hardcoded default.
+    """
+    from docgen.themes import refresh_themes
+    from writer import LibraryWriter as _LibraryWriter
+    async with _LibraryWriter(library) as _writer:
+        await refresh_themes(
+            library, _writer,
+            enabled=getattr(cfg, 'themes_enabled', True),
+            summarize_kwargs={'concurrency': concurrency},
+        )
 
 
 async def cmd_sync(args: argparse.Namespace) -> int:
@@ -272,7 +290,7 @@ async def cmd_sync(args: argparse.Namespace) -> int:
                     doc_types=('explanation', 'architecture', 'catalog', 'qa', 'gotcha', 'diagram'),
                     force_regenerate=True,
                     source_config=_scip_cfg,
-                ignore_staleness=cfg.source_ignore_staleness(source_name))
+                ignore_staleness=cfg.source_ignore_staleness(source_name), concurrency=args.concurrency)
 
                 docs_created = 0
                 docs_failed = 0
@@ -346,13 +364,7 @@ async def cmd_sync(args: argparse.Namespace) -> int:
 
             # Refresh themes (cross-cutting clusters) — pull-based, gated by config.
             try:
-                from docgen.themes import refresh_themes
-                from writer import LibraryWriter as _LibraryWriter
-                async with _LibraryWriter(library) as _writer:
-                    await refresh_themes(
-                        library, _writer,
-                        enabled=getattr(cfg, 'themes_enabled', True),
-                    )
+                await _refresh_themes_after_regen(library, cfg, concurrency=args.concurrency)
             except Exception as e:
                 console.print(f'[yellow]Themes refresh failed: {e}[/yellow]')
 
@@ -501,7 +513,7 @@ async def cmd_sync(args: argparse.Namespace) -> int:
                 doc_types=('explanation', 'architecture', 'catalog', 'qa', 'gotcha', 'diagram'),
                 force_regenerate=True,
                 source_config=_scip_cfg,
-            ignore_staleness=cfg.source_ignore_staleness(source_name))
+            ignore_staleness=cfg.source_ignore_staleness(source_name), concurrency=args.concurrency)
 
             docs_created = 0
             docs_failed = 0
@@ -564,13 +576,7 @@ async def cmd_sync(args: argparse.Namespace) -> int:
 
         # Refresh themes (cross-cutting clusters) — pull-based, gated by config.
         try:
-            from docgen.themes import refresh_themes
-            from writer import LibraryWriter as _LibraryWriter
-            async with _LibraryWriter(library) as _writer:
-                await refresh_themes(
-                    library, _writer,
-                    enabled=getattr(cfg, 'themes_enabled', True),
-                )
+            await _refresh_themes_after_regen(library, cfg, concurrency=args.concurrency)
         except Exception as e:
             console.print(f'[yellow]Themes refresh failed: {e}[/yellow]')
 
