@@ -44,6 +44,7 @@ dependencies = [
     # (full-screen tree of per-directory generate cost). Tested on 8.2.5.
     "textual>=5.0",
     "docutils>=0.23",
+    "dockerfile-parse>=2.0.1",
 ]
 
 [project.optional-dependencies]

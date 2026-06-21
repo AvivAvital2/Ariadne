@@ -788,7 +788,7 @@ def find_catalog_files(
         Sorted list of catalog-supported file paths.
     """
     from config import DEFAULT_EXCLUDE_FILE_PATTERNS, DEFAULT_EXCLUDE_POLICY
-    from docgen.catalog_writer import CATALOG_EXTS, is_catalog_noise, is_vue_companion
+    from docgen.catalog_writer import CATALOG_EXTS, is_catalog_noise, is_vue_companion, is_catalog_file
 
     if exclude_patterns is None:
         exclude_patterns = DEFAULT_EXCLUDE_FILE_PATTERNS
@@ -808,7 +808,7 @@ def find_catalog_files(
 
         for filename in filenames:
             ext = Path(filename).suffix.lower()
-            if ext not in CATALOG_EXTS:
+            if not is_catalog_file(Path(filename)):
                 continue
             if is_vue_companion(filename):
                 continue

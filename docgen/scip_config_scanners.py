@@ -252,6 +252,49 @@ def scan_hocon(file: Path) -> list[ConfigValue]:
 _SCANNER_BY_EXT: dict[str, Callable[[Path], list[ConfigValue]]] = {
     '.conf': scan_hocon,
 }
+def _parse_dockerfile_kv(value):
+    """Parse an ENV/ARG instruction value into (key, value) pairs.
+
+    Handles ``KEY=val`` (one or more space-separated), the legacy
+    ``KEY rest of line`` ENV form, and bare ``ARG NAME`` (no default -> "")."""
+    value = (value or "").strip()
+    if not value:
+        return []
+    if "=" in value:
+        pairs = []
+        for tok in value.split():
+            if "=" in tok:
+                k, _, v = tok.partition("=")
+                pairs.append([k, v])
+            elif pairs:
+                pairs[-1][1] = pairs[-1][1] + " " + tok
+        return [(k, v) for k, v in pairs]
+    toks = value.split(None, 1)
+    return [(toks[0], toks[1] if len(toks) > 1 else "")]
+
+
+def scan_dockerfile(file: Path) -> list[ConfigValue]:
+    """Extract ENV/ARG keys from a Dockerfile as ConfigValues, so a Dockerfile
+    env becomes a config key Layer C can resolve to its code read sites. Parse
+    errors return [] (one bad file never aborts the scan)."""
+    import io
+    try:
+        raw = file.read_bytes()
+    except OSError:
+        return []
+    try:
+        from dockerfile_parse import DockerfileParser
+        structure = DockerfileParser(fileobj=io.BytesIO(raw)).structure
+    except Exception:
+        return []
+    out = []
+    for item in structure:
+        if item.get("instruction") not in ("ENV", "ARG"):
+            continue
+        line = int(item.get("startline", 0)) + 1
+        for key, val in _parse_dockerfile_kv(item.get("value", "")):
+            out.append(ConfigValue(file=file, key=key, value=val, line_start=line))
+    return out
 
 
 def _scanner_for_file(file: Path) -> Callable[[Path], list[ConfigValue]] | None:
@@ -266,6 +309,8 @@ def _scanner_for_file(file: Path) -> Callable[[Path], list[ConfigValue]] | None:
     name = file.name
     if name == '.env' or name.startswith('.env.'):
         return scan_dotenv
+    if name == "Dockerfile" or name.startswith("Dockerfile.") or ext == ".dockerfile":
+        return scan_dockerfile
     return None
 
 
@@ -327,4 +372,5 @@ __all__ = [
     'scan_config_sources',
     'scan_dotenv',
     'scan_hocon',
+    'scan_dockerfile',
 ]

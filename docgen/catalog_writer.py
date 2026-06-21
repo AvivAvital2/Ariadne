@@ -161,6 +161,20 @@ def _file_index_metadata(source_name: str, language: str, file_sha: str, element
     }                                                                                                                                                                                
  
                                                                                                                                                                                      
+def is_dockerfile(path) -> bool:
+    """True for Dockerfiles, matched by NAME (they carry no extension):
+    ``Dockerfile``, ``Dockerfile.<suffix>``, or ``*.dockerfile``."""
+    return (
+        path.name == "Dockerfile"
+        or path.name.startswith("Dockerfile.")
+        or path.suffix.lower() == ".dockerfile"
+    )
+
+
+def is_catalog_file(path) -> bool:
+    """The single catalog-eligibility gate: a known extension OR a Dockerfile
+    (the first filename-matched type — an extension set can't express it)."""
+    return path.suffix.lower() in CATALOG_EXTS or is_dockerfile(path)
 def _detect_language(path: Path) -> str:
     """Return language string for a catalog file_index entry.
 
@@ -209,7 +223,7 @@ def iter_catalog_files(
             continue
         if not path.is_file():
             continue
-        if path.suffix.lower() not in CATALOG_EXTS:
+        if not is_catalog_file(path):
             continue
         if is_vue_companion(path):
             continue
@@ -534,7 +548,7 @@ async def notify_changed(
         from docgen.scip_config import ScipError
         for rel in rels:
             path = Path(source_root) / rel
-            if path.exists() and path.is_file() and path.suffix.lower() in CATALOG_EXTS:
+            if path.exists() and path.is_file() and is_catalog_file(path):
                 try:
                     new_elements = extract_elements(
                         path, source_root, source_config=source_config,

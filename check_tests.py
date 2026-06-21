@@ -4,8 +4,11 @@
 Usage:
     uv run python check_tests.py green tests/test_foo.py tests/test_bar.py -v
     uv run python check_tests.py red tests/test_foo.py -k "test_broken"
+    uv run python check_tests.py coverage --source=pkg.mod [--include=PAT] tests/test_foo.py
 
-First arg is the expectation (green=all pass, red=all fail).
+First arg is the expectation: green=all pass, red=all fail, or coverage=run
+under coverage and print the report (the only sanctioned way to measure
+coverage — never a bare pytest).
 Remaining args are forwarded to pytest.
 """
 
@@ -92,6 +95,70 @@ def report_red(report: dict) -> bool:
         print(f"  {RED}PASSED (unexpected){RESET} {nodeid}")
     print()
     return False
+def parse_coverage_args(args):
+    """Split coverage-mode args into (source, include, pytest_args).
+
+    Accepts ``--source=X`` / ``--source X`` (required; comma-separated modules
+    for ``coverage run --source``) and optional ``--include=PAT`` /
+    ``--include PAT`` for the report filter. Everything else is forwarded to
+    pytest verbatim.
+    """
+    source = None
+    include = None
+    pytest_args = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a.startswith("--source="):
+            source = a[len("--source="):]
+        elif a == "--source":
+            i += 1
+            source = args[i] if i < len(args) else None
+        elif a.startswith("--include="):
+            include = a[len("--include="):]
+        elif a == "--include":
+            i += 1
+            include = args[i] if i < len(args) else None
+        else:
+            pytest_args.append(a)
+        i += 1
+    return source, include, pytest_args
+
+
+def build_coverage_run_cmd(source, pytest_args):
+    """The numpy/py3.14-safe coverage run: pytest UNDER coverage."""
+    return [
+        sys.executable, "-m", "coverage", "run",
+        f"--source={source}",
+        "-m", "pytest", "--import-mode=prepend",
+        *pytest_args,
+    ]
+
+
+def build_coverage_report_cmd(include):
+    cmd = [sys.executable, "-m", "coverage", "report", "-m"]
+    if include:
+        cmd.append(f"--include={include}")
+    return cmd
+
+
+def run_coverage(args):
+    """``check_tests.py coverage --source MODS [--include PAT] <pytest args>``.
+
+    Runs the suite exactly once under coverage, then prints the report.
+    Returns pytest's exit code (0 = green). The single sanctioned way to
+    measure coverage without invoking a bare ``pytest``.
+    """
+    source, include, pytest_args = parse_coverage_args(args)
+    if not source:
+        print(f"{RED}coverage mode requires --source <modules>{RESET}", file=sys.stderr)
+        return 2
+    run = subprocess.run(build_coverage_run_cmd(source, pytest_args))
+    # Always show the report, even when some tests failed.
+    subprocess.run(build_coverage_report_cmd(include))
+    if run.returncode != 0:
+        print(f"{RED}{BOLD}✗ tests failed under coverage (see above).{RESET}", file=sys.stderr)
+    return run.returncode
 
 
 def main() -> int:
@@ -101,8 +168,10 @@ def main() -> int:
         return 2
 
     mode = sys.argv[1].lower()
+    if mode == "coverage":
+        return run_coverage(sys.argv[2:])
     if mode not in ("green", "red"):
-        print(f"First argument must be 'green' or 'red', got '{mode}'", file=sys.stderr)
+        print(f"First argument must be 'green', 'red', or 'coverage', got '{mode}'", file=sys.stderr)
         return 2
 
     pytest_args = sys.argv[2:]

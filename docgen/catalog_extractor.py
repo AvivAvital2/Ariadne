@@ -27,6 +27,8 @@ Language = Literal[
     'css',
     # reStructuredText (Sphinx docs): file_index-only extraction; see designs/rst-support.md
     'rst',
+    # Dockerfile — file_index only (Phase 1); matched by NAME, not extension.
+    'dockerfile',
 ]
 Subtype = Literal[
     'function', 'async_function', 'class', 'method', 'variable',
@@ -40,6 +42,8 @@ Subtype = Literal[
     'java_class', 'java_interface', 'java_enum',
     'java_method', 'java_constructor', 'java_field',
     'rst_section',
+    # Dockerfile (Phase 2): one stage per FROM, plus ENV/ARG/EXPOSE instructions.
+    'dockerfile_stage', 'dockerfile_env', 'dockerfile_arg', 'dockerfile_expose',
 ]               
                                                                                                                                                                                      
 _HTML_SEMANTIC = {
@@ -109,6 +113,8 @@ def _detect_language(path: Path) -> Language | None:
         return 'css'
     if ext == '.rst':
         return 'rst'
+    if path.name == 'Dockerfile' or path.name.startswith('Dockerfile.') or ext == '.dockerfile':
+        return 'dockerfile'
     return None
 def _first_identifier(node) -> str | None:
     for child in node.children():
@@ -723,6 +729,100 @@ def _js_elements_from_src(
             ))
                                                                                                                                                                         
     return out  
+def _os_for_base_image(image):
+    """Best-effort OS family for a resolved base image (None for scratch)."""
+    img = (image or "").lower()
+    if img == "scratch":
+        return None
+    if "distroless" in img:
+        return "debian (distroless)"
+    if "alpine" in img:
+        return "alpine"
+    if "ubuntu" in img:
+        return "ubuntu"
+    if "bookworm" in img or "bullseye" in img or "debian" in img:
+        return "debian"
+    return None
+
+
+def _extract_dockerfile(src, path, source_root):
+    import re as _re
+    """Structured Dockerfile extraction: one ``dockerfile_stage`` element per
+    FROM (the stage DAG), plus ENV/ARG/EXPOSE instruction elements scoped to
+    their stage via ``parent_qualified_name``. The runtime base is resolved
+    through the FINAL stage's lineage (e.g. ``scratch`` — not a builder) and
+    attached to the final stage's ``documentation``. On a parse failure the
+    function returns ``[]`` so the file degrades to the file-index/text path.
+    """
+    import io as _io
+    from attrs import evolve as _evolve
+    from dockerfile_parse import DockerfileParser
+    file_s = str(path.resolve())
+    try:
+        structure = DockerfileParser(
+            fileobj=_io.BytesIO(src.encode("utf-8"))).structure
+    except Exception:
+        return []
+
+    def _from_parts(value):
+        parts = _re.split(r"\s+[Aa][Ss]\s+", (value or "").strip(), maxsplit=1)
+        base = parts[0].strip()
+        alias = parts[1].strip() if len(parts) > 1 else None
+        toks = [t for t in base.split() if not t.startswith("--")]
+        return (toks[0] if toks else base), alias
+
+    out = []
+    stages = []
+    current = None
+    idx = 0
+    sub_for = {"ENV": "dockerfile_env", "ARG": "dockerfile_arg",
+               "EXPOSE": "dockerfile_expose"}
+    for item in structure:
+        instr = item.get("instruction", "")
+        value = item.get("value", "") or ""
+        content = item.get("content", "") or ""
+        ls = int(item.get("startline", 0)) + 1
+        le = int(item.get("endline", 0)) + 1
+        if instr == "FROM":
+            image, alias = _from_parts(value)
+            name = alias or f"stage{idx}"
+            stages.append({"name": name, "image": image, "el": len(out)})
+            current = stages[-1]
+            idx += 1
+            out.append(ElementInfo(
+                language="dockerfile", subtype="dockerfile_stage", file=file_s,
+                qualified_name=name, signature=_signature(content),
+                line_start=ls, line_end=le, col_start=0, col_end=0,
+                parent_qualified_name=None, body_sha=_sha(content),
+            ))
+        elif instr in sub_for:
+            parent = current["name"] if current else None
+            key = value.split("=")[0].split()[0] if value.strip() else instr
+            qn = f"{parent}.{key}" if parent else key
+            out.append(ElementInfo(
+                language="dockerfile", subtype=sub_for[instr], file=file_s,
+                qualified_name=qn, signature=_signature(content),
+                line_start=ls, line_end=le, col_start=0, col_end=0,
+                parent_qualified_name=parent, body_sha=_sha(content),
+            ))
+
+    if stages:
+        by_name = {s["name"]: s for s in stages}
+        cur = stages[-1]
+        seen = set()
+        lineage = []
+        while cur is not None and cur["name"] not in seen:
+            seen.add(cur["name"])
+            lineage.append(cur["image"])
+            ref = by_name.get(cur["image"])
+            cur = ref if ref is not None and ref is not cur else None
+        runtime_base = lineage[-1] if lineage else stages[-1]["image"]
+        doc = {"runtime_base": runtime_base, "lineage": lineage,
+               "os": _os_for_base_image(runtime_base)}
+        fi = stages[-1]["el"]
+        out[fi] = _evolve(out[fi], documentation=doc)
+
+    return out
 def extract_elements(
     path: Path,
     source_root: Path,
@@ -799,6 +899,8 @@ def extract_elements(
     if lang == 'hocon':
         from docgen.hocon_extractor import _extract_hocon
         return _extract_hocon(src, path, source_root)
+    if lang == "dockerfile":
+        return _extract_dockerfile(src, path, source_root)
     return []
 
 
