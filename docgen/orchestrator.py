@@ -97,6 +97,7 @@ class OrchestratorConfig:
     # the generator uses. Default "openai" preserves historical behavior.
     provider: str = 'openai'
     doc_types: tuple[DocType, ...] = ('explanation', 'architecture', 'catalog', 'qa', 'gotcha', 'diagram')
+    doc_types_by_language: dict[str, tuple[str, ...]] = field(factory=dict)
     concurrency: int = 3
     validate: bool = True
     inject_crossrefs: bool = True
@@ -347,6 +348,7 @@ class DocGenOrchestrator:
     _writer: LibraryWriter | None = field(default=None, init=False)
     _generator: DocGenerator | None = field(default=None, init=False)
     _staleness: StalenessTracker | None = field(default=None, init=False)
+    _doc_types_by_file: dict = field(factory=dict, init=False)
     _low_confidence_langs: tuple[str, ...] | None = field(default=None, init=False)
     _validator: ContentValidator = field(factory=ContentValidator, init=False)
     _analyzer: SourceAnalyzer = field(factory=SourceAnalyzer, init=False)
@@ -469,7 +471,7 @@ class DocGenOrchestrator:
         await self._generator.__aenter__()
 
         self._emit('Opening staleness DB...')
-        self._staleness = StalenessTracker(self.config.staleness_db_path)
+        self._staleness = StalenessTracker(self.config.staleness_db_path, doc_types_by_language=self.config.doc_types_by_language)
 
         return self
 
@@ -553,28 +555,15 @@ class DocGenOrchestrator:
         # Type-aware: a file with explanation but no architecture is stale
         # when --types architecture is requested, even with matching sha.
         # Eliminates the need for --force when adding doc types incrementally.
-        if self.config.force_regenerate:
-            files_to_process = all_files
-        elif self.config.restrict_to_files is not None:
-            # Commit-diff gate: generate exactly the files changed since the
-            # last synced commit (∩ discovery). No hash/doc-type staleness —
-            # unchanged code yields an empty set and nothing is generated.
-            restrict = self.config.restrict_to_files
-
-            def _rel(f: Path) -> str:
-                try:
-                    return f.relative_to(self.config.source_path).as_posix()
-                except ValueError:
-                    return f.as_posix()
-
-            files_to_process = [f for f in all_files if _rel(f) in restrict]
-        else:
-            files_to_process = self._staleness.get_stale_files(
-                all_files,
-                base_path=self.config.source_path,
-                requested_types=self.config.doc_types,
-                library=self._library,
-            is_exempt=self._staleness_exempt())
+        files_to_process, self._doc_types_by_file = self._staleness.files_for_generation(
+            all_files,
+            base_path=self.config.source_path,
+            requested_types=self.config.doc_types,
+            library=self._library,
+            is_exempt=self._staleness_exempt(),
+            restrict_to_files=self.config.restrict_to_files,
+            force=self.config.force_regenerate,
+        )
 
         files_skipped = len(all_files) - len(files_to_process)
         _logger.info(
@@ -839,6 +828,21 @@ class DocGenOrchestrator:
             validation_recovered=val_recovered,
         )
 
+    def _doc_types_for(self, path):
+        """Doc types to (re)generate for ``path``: the per-file narrowed set from
+        staleness (only the missing/changed types), or the full configured set
+        when not narrowed (force/restrict, or an unmapped file) — then capped by
+        any per-language override (``doc_types_by_language``: the doc-type
+        screen's per-format excludes)."""
+        narrowed = getattr(self, "_doc_types_by_file", {}).get(path)
+        base = tuple(narrowed) if narrowed else self.config.doc_types
+        override = self.config.doc_types_by_language
+        if override:
+            from docgen.catalog_extractor import _detect_language
+            from docgen.prompts import filter_doc_types_for_language
+            base = filter_doc_types_for_language(base, _detect_language(path), override)
+        return base
+
     async def _legacy_generate(
         self, path: Path,
     ) -> tuple[list[GeneratedDoc] | None, int]:
@@ -857,7 +861,7 @@ class DocGenOrchestrator:
             self._store_file_map(metadata)
 
         generated_docs = await self._generator.generate_for_module(
-            metadata, self.config.doc_types,
+            metadata, self._doc_types_for(path),
         )
         return generated_docs, metadata.line_count
 
@@ -887,7 +891,7 @@ class DocGenOrchestrator:
             return None, 0
 
         generated_docs = await self._generator.generate_from_elements(
-            bundle, doc_types=self.config.doc_types,
+            bundle, doc_types=self._doc_types_for(path),
         )
         return generated_docs, bundle.line_count
 
@@ -939,7 +943,7 @@ class DocGenOrchestrator:
                 )
                 return []
             return await self._generator.build_prompts_for_bundle(
-                bundle, doc_types=self.config.doc_types,
+                bundle, doc_types=self._doc_types_for(path),
             )
 
         # Legacy path: analyze_file may raise SyntaxError; let it
@@ -948,7 +952,7 @@ class DocGenOrchestrator:
         if metadata.line_count > 200 and not self.config.dry_run:
             self._store_file_map(metadata)
         return await self._generator.build_prompts_for_module(
-            metadata, self.config.doc_types,
+            metadata, self._doc_types_for(path),
         )
 
     async def _collect_prompts(

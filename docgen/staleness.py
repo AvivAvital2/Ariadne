@@ -91,6 +91,10 @@ class StalenessTracker:
     """
 
     db_path: Path = field(converter=Path)
+    # Per-language doc-type override (the doc-type screen's per-format
+    # excludes), {language: (doc_type, ...)}: caps the effective set per
+    # language so the gate/estimate ignore an excluded format. Default {}.
+    doc_types_by_language: dict = field(factory=dict)
     _conn: sqlite3.Connection | None = field(default=None, init=False)
     _lock: asyncio.Lock = field(factory=asyncio.Lock, init=False)
 
@@ -193,41 +197,42 @@ class StalenessTracker:
 
     def record_documentation(
         self,
-        source_path: Path,
-        doc_ids: list[str],
-        base_path: Path | None = None,
-    ) -> SourceRecord:
+        source_path,
+        doc_ids,
+        base_path=None,
+    ):
         """Record that a source file has been documented.
 
-        Args:
-            source_path: Path to the source file.
-            doc_ids: IDs of the generated documents.
-            base_path: Base path for computing relative paths.
-
-        Returns:
-            The created SourceRecord.
+        Merges ``doc_ids`` with any existing record's doc_ids so a partial-type
+        generation (e.g. adding qa/gotcha to a file that already has
+        explanation/architecture) does NOT drop the doc_ids of the types it
+        didn't regenerate. Doc ids are deterministic per (source, content_type),
+        so the union dedupes cleanly — a regenerated type keeps its id, no stale
+        accumulation. A re-run sees the now-complete file and skips it.
         """
         if self._conn is None:
             msg = 'Database connection not open'
             raise RuntimeError(msg)
 
-        # Compute relative path
         if base_path:
             rel_path = str(source_path.relative_to(base_path))
         else:
             rel_path = str(source_path)
 
-        # Compute current hash
         file_hash = _compute_file_hash(source_path)
         documented_at = datetime.now(UTC).isoformat()
 
-        # Store record
+        existing = self.get_record(rel_path)
+        merged = list(dict.fromkeys(
+            [*(existing.doc_ids if existing else ()), *doc_ids]
+        ))
+
         self._conn.execute(
             '''
             INSERT OR REPLACE INTO source_records (path, hash, documented_at, doc_ids)
             VALUES (?, ?, ?, ?)
             ''',
-            (rel_path, file_hash, documented_at, json.dumps(doc_ids)),
+            (rel_path, file_hash, documented_at, json.dumps(merged)),
         )
         self._conn.commit()
 
@@ -235,7 +240,7 @@ class StalenessTracker:
             path=rel_path,
             hash=file_hash,
             documented_at=documented_at,
-            doc_ids=tuple(doc_ids),
+            doc_ids=tuple(merged),
         )
 
     async def record_documentation_async(
@@ -365,10 +370,6 @@ class StalenessTracker:
             if self.is_stale(path, base_path, is_exempt=is_exempt):
                 stale.append(path)
                 continue
-            if is_exempt is not None and is_exempt(
-                str(path.relative_to(base_path)) if base_path else str(path)
-            ):
-                continue
 
             if not type_aware:
                 continue
@@ -386,11 +387,7 @@ class StalenessTracker:
                 stale.append(path)
                 continue
 
-            existing_types: set[str] = set()
-            for doc_id in record.doc_ids:
-                doc = library.get_document(doc_id)
-                if doc is not None:
-                    existing_types.add(doc.content_type)
+            existing_types = self._existing_doc_types(record, library)
 
             # Filter requested_set down to what this file's LANGUAGE supports.
             # Without this, JSON/YAML/MD files (which only get `explanation`
@@ -405,9 +402,125 @@ class StalenessTracker:
 
         return stale
 
-    @staticmethod
+    def stale_doc_types(self, paths, base_path=None, requested_types=None,
+                        library=None, is_exempt=None):
+        """Per file, the requested doc types that still need generating.
+
+        Returns ``{path: (doc_type, ...)}`` for files needing work. The requested
+        set is first intersected with what the file's LANGUAGE supports
+        (``LANGUAGE_DOC_TYPES``). A file whose source **changed** (hash mismatch)
+        or that was never documented needs every effective type; an **unchanged**
+        file needs only the effective types not already present in its recorded
+        docs (resolved precisely via ``record.doc_ids``, never basename-matched).
+        Files needing nothing are omitted, so generation/pricing do only the
+        missing work.
+
+        Staleness exemption suppresses only the **content-changed** signal: an
+        exempt file whose source changed is not re-flagged, but a missing
+        requested type still surfaces as a coverage gap (never-documented files
+        always surface too). ``ignore_staleness`` quiets the regenerate nag; it
+        does not hide absent docs.
+        """
+        out = {}
+        requested_set = set(requested_types or ())
+        for path in paths:
+            if not path.is_file():
+                continue
+            rel_path = str(path.relative_to(base_path)) if base_path else str(path)
+            effective = self._filter_requested_by_language(path, requested_set)
+            if not effective:
+                continue
+            record = self.get_record(rel_path)
+            if record is None:
+                out[path] = tuple(sorted(effective))
+                continue
+            exempt = is_exempt is not None and is_exempt(rel_path)
+            if not exempt and _compute_file_hash(path) != record.hash:
+                out[path] = tuple(sorted(effective))
+                continue
+            if library is None:
+                continue
+            existing = self._existing_doc_types(record, library)
+            missing = effective - existing
+            if missing:
+                out[path] = tuple(sorted(missing))
+        return out
+
+    def coverage_gaps(self, paths, base_path=None, requested_types=None, library=None):
+        """Per file, the requested doc types ABSENT from its docs — ignoring content
+        staleness (this does not hash) and exemption (a missing doc is a coverage
+        gap that surfaces regardless of ``ignore_staleness``, which suppresses only
+        the content-changed signal). A never-documented file needs every effective
+        type; a recorded file needs only the effective types not already present
+        (via ``record.doc_ids``). The cheap "what doc-type coverage is missing?"
+        half of ``files_for_generation``; with no ``library`` only never-documented
+        files are reported."""
+        out = {}
+        requested_set = set(requested_types or ())
+        for path in paths:
+            if not path.is_file():
+                continue
+            rel_path = str(path.relative_to(base_path)) if base_path else str(path)
+            effective = self._filter_requested_by_language(path, requested_set)
+            if not effective:
+                continue
+            record = self.get_record(rel_path)
+            if record is None:
+                out[path] = tuple(sorted(effective))
+                continue
+            if library is None:
+                continue
+            existing = self._existing_doc_types(record, library)
+            missing = effective - existing
+            if missing:
+                out[path] = tuple(sorted(missing))
+        return out
+
+    def files_for_generation(self, all_files, *, base_path, requested_types,
+                             library, is_exempt, restrict_to_files, force):
+        """The files the next generate run will process and the doc types each
+        needs — the single selection shared by ``DocGenOrchestrator.run`` and the
+        dry-run estimate, so the preview can't diverge from the run.
+
+        - ``force`` → every file at the full requested set (empty narrowing map).
+        - commit-diff gate (``restrict_to_files`` not None) → files changed since
+          the sync baseline UNION files missing a requested doc type
+          (``coverage_gaps``), so a synced-but-unchanged source still fills
+          newly-requested types. Changed files regenerate the full set (omitted
+          from the map); coverage-gap files only their missing types.
+        - otherwise → the full type-aware staleness pass.
+
+        Returns ``(files_to_process, doc_types_by_file)``; the map omits files
+        that regenerate the full requested set (callers fall back to it).
+        """
+        if force:
+            return list(all_files), {}
+        if restrict_to_files is not None:
+            def _rel(f):
+                try:
+                    return f.relative_to(base_path).as_posix()
+                except ValueError:
+                    return f.as_posix()
+            changed = [f for f in all_files if _rel(f) in restrict_to_files]
+            changed_set = set(changed)
+            gaps = self.coverage_gaps(
+                all_files, base_path=base_path, requested_types=requested_types,
+                library=library, )
+            extra = [p for p in gaps if p not in changed_set]
+            doc_types = {p: t for p, t in gaps.items() if p not in changed_set}
+            return changed + extra, doc_types
+        files = self.get_stale_files(
+            all_files, base_path=base_path, requested_types=requested_types,
+            library=library, is_exempt=is_exempt,
+        )
+        doc_types = self.stale_doc_types(
+            files, base_path=base_path, requested_types=requested_types,
+            library=library, is_exempt=is_exempt,
+        )
+        return files, doc_types
+
     def _filter_requested_by_language(
-        path: 'Path', requested: set[str],
+        self, path: 'Path', requested: set[str],
     ) -> set[str]:
         """Intersect ``requested`` doc types with what the file's language
         actually supports per ``LANGUAGE_DOC_TYPES``.
@@ -421,7 +534,20 @@ class StalenessTracker:
         lang = _detect_language(path)
         if lang is None:
             return requested
-        return set(filter_doc_types_for_language(tuple(requested), lang))
+        return set(filter_doc_types_for_language(tuple(requested), lang, override=self.doc_types_by_language))
+
+    @staticmethod
+    def _existing_doc_types(record, library):
+        """Content types already documented for ``record``, resolved precisely via
+        its ``doc_ids`` (never basename-matched). Callers pass a non-None
+        ``library``. Single source of truth for the existing-types lookup shared
+        by ``get_stale_files`` and ``stale_doc_types``."""
+        existing = set()
+        for doc_id in record.doc_ids:
+            doc = library.get_document(doc_id)
+            if doc is not None:
+                existing.add(doc.content_type)
+        return existing
 
     def get_undocumented_files(
         self,

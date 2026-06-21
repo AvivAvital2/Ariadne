@@ -37,6 +37,9 @@ import pytest
 
 from docgen.generator import DocGenerator
 from docgen.orchestrator import DocGenOrchestrator, OrchestratorConfig
+import numpy as np
+from docgen.staleness import StalenessTracker
+from library import Library
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +100,30 @@ def _make_config(
     return OrchestratorConfig(**base)
 
 
+def _seed_complete(tmp_path, source, rel, doc_types=('explanation',)):
+    """Document ``rel`` with ``doc_types`` in the DBs the run uses, so it is a
+    complete, unchanged file (no coverage gap) under the commit-diff gate."""
+    src_file = source / rel
+    lib = Library(tmp_path / 'ariadne.db')
+    try:
+        ids = [
+            lib.add_document(
+                content_type=ct, title=f'doc-{ct}', content='body',
+                source_files=[str(src_file)],
+                embedding=np.zeros(3072, dtype=np.float32),
+                metadata={}, source_name='test',
+            ).id
+            for ct in doc_types
+        ]
+    finally:
+        lib.close()
+    tracker = StalenessTracker(tmp_path / 'staleness.db')
+    try:
+        tracker.record_documentation(src_file, ids, base_path=source)
+    finally:
+        tracker.close()
+
+
 # Long enough to clear any "minimum content length" floor in
 # ContentValidator. Used as the canned LLM response for happy-path
 # tests where validation is off — but the content must still exist
@@ -125,10 +152,16 @@ class TestRestrictToFiles:
     async def test_restrict_scopes_generation_to_listed_files(
         self, tmp_path: Path,
     ) -> None:
+        """The commit gate scopes to the changed (listed) files: among complete,
+        documented files, restrict={a.py} regenerates only a.py — b.py, unchanged
+        and not listed, is skipped. (A file MISSING a requested type would also
+        surface as a coverage gap; see test_orchestrator_partial_generation.)"""
         source = _make_source_tree(tmp_path, {
             'a.py': '"""a."""\ndef foo(): pass\n',
             'b.py': '"""b."""\ndef bar(): pass\n',
         })
+        _seed_complete(tmp_path, source, 'a.py')
+        _seed_complete(tmp_path, source, 'b.py')
         config = _make_config(
             tmp_path, source, restrict_to_files=frozenset({'a.py'}),
         )
@@ -138,20 +171,20 @@ class TestRestrictToFiles:
         ) as mock_llm:
             async with DocGenOrchestrator(config) as orch:
                 result = await orch.run()
-        assert mock_llm.call_count == 1          # only a.py generated
+        assert mock_llm.call_count == 1          # only the changed/listed file
         assert result.files_processed == 1
-        assert result.files_skipped == 1          # b.py not in the changed set
+        assert result.files_skipped == 1          # b.py complete + not in the changed set
     @pytest.mark.asyncio
     async def test_post_process_gated_on_generation_success(
         self, tmp_path: Path, monkeypatch,
     ) -> None:
-        """Post-processing (themes/crossrefs) runs after a CLEAN generation — even
-    a no-op one, since the Leiden rebuild is deterministic and free — but is
-    SKIPPED when generation hit errors, so a failed run never reclusters over a
-    partial catalog and clobbers existing themes."""
+        """Post-processing runs after a CLEAN generation — even a no-op one (the
+        Leiden rebuild is deterministic and free) — but is SKIPPED when generation
+        hit errors, so a failed run never reclusters over a partial catalog."""
         source = _make_source_tree(tmp_path, {
             "a.py": '"""a."""\ndef foo(): pass\n',
         })
+        _seed_complete(tmp_path, source, 'a.py')
         calls: list[int] = []
 
         async def fake_pp(self, results, *, crossref_progress=None):
@@ -159,7 +192,8 @@ class TestRestrictToFiles:
 
         monkeypatch.setattr(DocGenOrchestrator, "_post_process", fake_pp)
 
-        # Clean run with nothing to (re)generate → post-processing still runs.
+        # Clean run, complete + unchanged source (empty restrict) → nothing to
+        # regenerate, but post-processing still runs.
         cfg_clean = _make_config(
             tmp_path, source, restrict_to_files=frozenset(), themes_enabled=True,
         )
@@ -174,7 +208,9 @@ class TestRestrictToFiles:
             raise RuntimeError("generation failed")
 
         monkeypatch.setattr(DocGenOrchestrator, "_process_file", boom)
-        cfg_err = _make_config(tmp_path, source, themes_enabled=True)
+        cfg_err = _make_config(
+            tmp_path, source, themes_enabled=True, force_regenerate=True,
+        )
         async with DocGenOrchestrator(cfg_err) as orch:
             await orch.run()
         assert calls == [], "post-processing must be skipped when generation errored"
@@ -183,10 +219,13 @@ class TestRestrictToFiles:
     async def test_empty_restrict_generates_nothing(
         self, tmp_path: Path,
     ) -> None:
-        """Unchanged code → empty changed-set → zero generation (the $0 case)."""
+        """A COMPLETE, unchanged source with an empty changed-set generates nothing
+        (the $0 case). An INCOMPLETE file would surface as a coverage gap even
+        under an empty restrict (see test_orchestrator_partial_generation)."""
         source = _make_source_tree(tmp_path, {
             'a.py': '"""a."""\ndef foo(): pass\n',
         })
+        _seed_complete(tmp_path, source, 'a.py')
         config = _make_config(
             tmp_path, source, restrict_to_files=frozenset(),
         )

@@ -7,6 +7,8 @@ opens the interactive explorer. Wired into the parser via this module's
 """
 from __future__ import annotations
 
+from schema import CATALOG_KIND_ELEMENT
+
 import argparse
 import asyncio
 import io
@@ -378,7 +380,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
         candidates = [
             d for d in all_catalog
             if d.metadata.get('source_name') == source_name
-            and d.metadata.get('kind') == 'element'
+            and d.metadata.get('kind') == CATALOG_KIND_ELEMENT
             and not d.metadata.get('description')
         ]
         # Calibration: use real per-call tokens from past runs when the
@@ -465,7 +467,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                 base_path=source_path,
                 doc_types=requested_doc_types,
                 library=library,
-            )
+            doc_types_by_language=cfg.source_doc_types_by_language(source_name))
         else:
             gen_files = files
         gen_skipped = len(files) - len(gen_files)

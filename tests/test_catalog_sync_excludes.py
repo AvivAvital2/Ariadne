@@ -142,3 +142,26 @@ async def test_sync_source_catalog_forwards_exclude_dir_names(
         assert not any('secrets' in s.file for s in summaries)
     finally:
         lib.close()
+def test_default_policy_prunes_claude_tooling_dir(tmp_path):
+    """`.claude` (Claude Code's project config: settings.local.json, hooks,
+    skills) is tooling, not source. The default exclude policy must prune it —
+    like .vscode/.idea — so the estimate walk (find_catalog_files) never scans
+    it. Without this it leaks into the dry-run, as it did when documenting
+    Ariadne itself."""
+    from config import DEFAULT_EXCLUDE_POLICY
+    from docgen.staleness import find_catalog_files
+
+    (tmp_path / 'app.py').write_text('x = 1\n', encoding='utf-8')
+    claude = tmp_path / '.claude'
+    claude.mkdir()
+    (claude / 'settings.local.json').write_text('{}', encoding='utf-8')
+    (claude / 'skills').mkdir()
+    (claude / 'skills' / 's.md').write_text('# skill\n', encoding='utf-8')
+
+    found = list(find_catalog_files(
+        tmp_path, exclude_patterns=(), exclude_dir_names=DEFAULT_EXCLUDE_POLICY))
+    rels = sorted(str(f.relative_to(tmp_path)) for f in found)
+    assert 'app.py' in rels
+    assert not any('.claude' in r for r in rels), (
+        f'.claude tooling dir leaked into the catalog: {rels}'
+    )

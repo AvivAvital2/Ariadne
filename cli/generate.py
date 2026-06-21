@@ -451,15 +451,7 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
     import logging  # noqa: F401 — used by the body below
     from datetime import UTC, datetime  # noqa: F401
 
-    from rich.progress import (
-        BarColumn,
-        MofNCompleteColumn,
-        Progress,
-        SpinnerColumn,
-        TextColumn,
-        TimeElapsedColumn,
-        TimeRemainingColumn,
-    )
+    from cli.progress import make_progress
 
     from docgen.orchestrator import DocGenOrchestrator, OrchestratorConfig
 
@@ -543,7 +535,7 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
             base_path=source_path,
             library=_library_for_estimate(args.db),
             force=args.force,
-        )
+        doc_types_by_language=cfg.source_doc_types_by_language(source_name))
 
     # Commit-diff gate: regenerate only files changed since the source's last
     # synced commit, then promote HEAD on success. ``restrict_to_files=None``
@@ -579,20 +571,9 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
         batch_mode=getattr(args, 'batch_mode', 'auto'),
         auto_batch_threshold=getattr(args, 'auto_batch_threshold', 200),
         restrict_to_files=restrict_to_files,
-    ignore_staleness=cfg.source_ignore_staleness(source_name))
+    ignore_staleness=cfg.source_ignore_staleness(source_name), doc_types_by_language=cfg.source_doc_types_by_language(source_name))
 
-    progress_columns = (
-        SpinnerColumn(),
-        TextColumn('[bold cyan]{task.description}'),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TextColumn('·'),
-        TimeElapsedColumn(),
-        TextColumn('eta'),
-        TimeRemainingColumn(),
-    )
-
-    with Progress(*progress_columns, console=console) as progress:
+    with make_progress(console=console) as progress:
         task_id = progress.add_task(
             f'Generating docs for {source_name}', total=0,
         )

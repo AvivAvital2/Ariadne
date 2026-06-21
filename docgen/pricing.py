@@ -145,6 +145,7 @@ def estimate_cost(
     output_tokens_for=None,
     input_tokens_for=None,
     prompt_overhead_for=None,
+    per_file_types=None,
 ) -> CostEstimate:
     """Estimate total cost for a generation run.
 
@@ -209,7 +210,10 @@ def estimate_cost(
     for path, size in files_list:
         lang = _detect_language(path)
         supported = _supported_doc_types_for(lang)
-        effective = tuple(t for t in doc_types if t in supported)
+        if per_file_types is not None and path in per_file_types:
+            effective = tuple(t for t in per_file_types[path] if t in supported)
+        else:
+            effective = tuple(t for t in doc_types if t in supported)
         calls = len(effective)
         if calls == 0:
             continue

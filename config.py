@@ -41,7 +41,7 @@ _SOURCE_KNOWN_KEYS: frozenset[str] = frozenset({
     'swagger_paths',
     # SCIP-related keys consumed by get_source_scip_config
     'scip',
-    'index_kinds','ignore_staleness', 'low_confidence_doc_languages'
+    'index_kinds','ignore_staleness', 'low_confidence_doc_languages', 'doc_types_by_language'
 })
 
 
@@ -98,7 +98,7 @@ DEFAULT_EXCLUDE_POLICY: tuple[str, ...] = (
     # Generated docs / static sites
     '_site', 'generated-docs', '_build',
     # IDE / editor metadata
-    '.idea', '.vscode', '.vs', '.fleet',
+    '.idea', '.vscode', '.vs', '.claude', '.fleet',
     # Vendored deps (Go, PHP, ...)
     'vendor',
     # CI / VCS-platform config (workflows, hooks, release tooling)
@@ -190,6 +190,11 @@ class SourceConfig:
     swagger_paths: tuple[str, ...] = ()
     ignore_staleness: bool | tuple[str, ...] = False
     low_confidence_doc_languages: tuple[str, ...] = DEFAULT_LOW_CONFIDENCE_DOC_LANGUAGES
+    # Per-language doc-type override (the doc-type screen's per-format
+    # excludes): {language: (doc_type, ...)}. Caps which doc types a
+    # given language receives, replacing its LANGUAGE_DOC_TYPES default.
+    # Empty means no override (each language uses its static default).
+    doc_types_by_language: dict[str, tuple[str, ...]] = field(factory=dict)
 
 # Config file names to search for
 CONFIG_FILENAME = 'ariadne.yaml'
@@ -527,7 +532,7 @@ class Config:
                 env_hints=dict(raw.get('env_hints') or {}),
                 swagger_paths=tuple(raw.get('swagger_paths', []) or ()),
             ignore_staleness=_coerce_ignore_staleness(raw.get('ignore_staleness', False)),
-                low_confidence_doc_languages=tuple(raw.get('low_confidence_doc_languages', DEFAULT_LOW_CONFIDENCE_DOC_LANGUAGES)))
+                low_confidence_doc_languages=tuple(raw.get('low_confidence_doc_languages', DEFAULT_LOW_CONFIDENCE_DOC_LANGUAGES)), doc_types_by_language=_coerce_doc_types_by_language(raw.get('doc_types_by_language')))
         return None
 
     def hydrate_relations(self, all_relations: dict) -> None:
@@ -594,7 +599,7 @@ class Config:
         return SourceScipConfig(
             repo=source_name,
             artifact_path=Path(artifact),
-            max_staleness_days=int(scip.get('max_staleness_days', 7)),
+            max_staleness_days=None if self.source_staleness_exempt(source_name) else int(scip.get('max_staleness_days', 7)),
             index_kinds=dict(raw.get('index_kinds', {})),
             allow_degraded=False,
             vue_mappings=self._load_vue_mappings(Path(artifact)),
@@ -785,7 +790,8 @@ class Config:
         ref: str | None = None,
         exclude: list[str] | None = None,
         exclude_dirs: list[str] | None = None,
-    ignore_staleness: bool | None = None) -> bool:
+        exempt_dirs: list[str] | None = None,
+    ignore_staleness: bool | None = None, doc_types_by_language: dict | None = None) -> bool:
         """Persist full source configuration to ariadne.yaml.
 
         Creates the ``sources.<name>`` entry if it does not exist, else
@@ -825,8 +831,14 @@ class Config:
                 current['exclude'] = exclude
             if exclude_dirs is not None:
                 current['exclude_dirs'] = exclude_dirs
+            if exempt_dirs is not None:
+                current['exempt_dirs'] = exempt_dirs
             if ignore_staleness is not None:
                 current['ignore_staleness'] = ignore_staleness
+            if doc_types_by_language is not None:
+                current['doc_types_by_language'] = {
+                    lang: list(types) for lang, types in doc_types_by_language.items()
+                }
             sources[source_name] = current
 
         return self._mutate_config(mutate)
@@ -1191,6 +1203,13 @@ class Config:
         sc = self.get_source_config(source_name) if source_name else None
         return sc.ignore_staleness if sc is not None else False
 
+    def source_doc_types_by_language(self, source_name):
+        """The per-language doc-type override the CLI passes to
+    OrchestratorConfig / StalenessTracker: ``{language: (doc_type, ...)}``
+    (empty for an unknown or unset source — no override)."""
+        sc = self.get_source_config(source_name) if source_name else None
+        return sc.doc_types_by_language if sc is not None else {}
+
 
 # Global config instance - loaded lazily
 _global_config: Config | None = None
@@ -1222,6 +1241,23 @@ def _coerce_ignore_staleness(value):
     if isinstance(value, (list, tuple)):
         return tuple(str(v) for v in value)
     return False
+
+
+def _coerce_doc_types_by_language(raw):
+    """Normalize a ``doc_types_by_language`` config value to
+    ``{language: (doc_type, ...)}``. YAML lists become tuples; a bare scalar
+    (``python: explanation``) becomes a one-element tuple; ``None``/absent
+    becomes ``{}``. This is the per-language override the doc-type screen
+    persists per source."""
+    if not raw:
+        return {}
+    coerced = {}
+    for language, types in raw.items():
+        if isinstance(types, (list, tuple)):
+            coerced[str(language)] = tuple(types)
+        else:
+            coerced[str(language)] = (types,)
+    return coerced
 def ignore_staleness_matches(value, rel_path) -> bool:
     """True iff ``value`` -- a ``SourceConfig.ignore_staleness`` (``True``
     for the whole source, a tuple of globs for specific files, or

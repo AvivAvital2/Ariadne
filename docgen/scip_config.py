@@ -27,7 +27,7 @@ class SourceScipConfig:
     """
     repo: str
     artifact_path: Path
-    max_staleness_days: int = 7
+    max_staleness_days: int | None = 7
     index_kinds: dict[str, str] = field(factory=dict)
     allow_degraded: bool = False
     # Merged Vue companion→.vue mapping across all of the source's

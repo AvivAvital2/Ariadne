@@ -775,14 +775,22 @@ def render_user_template(
 
 def filter_doc_types_for_language(
     requested: tuple[DocType, ...], language: str,
+    override: dict[str, tuple[str, ...]] | None = None,
 ) -> tuple[DocType, ...]:
     """Intersect ``requested`` with what ``language`` supports.
 
     For Python/JS this is a no-op (full doc-type set). For data formats
     (JSON/YAML/MD) it filters down to ('explanation',) so we don't try
     to write architecture docs for a config dict.
+
+    ``override`` is a per-source ``{language: (doc_type, ...)}`` map (the
+    doc-type screen's per-format excludes). When it has an entry for
+    ``language`` it REPLACES the static ``LANGUAGE_DOC_TYPES`` default for that
+    language; languages without an entry keep their default.
     """
-    allowed = LANGUAGE_DOC_TYPES.get(language)
+    allowed = (override or {}).get(language)
+    if allowed is None:
+        allowed = LANGUAGE_DOC_TYPES.get(language)
     if allowed is None:
         return requested
     return tuple(t for t in requested if t in allowed)

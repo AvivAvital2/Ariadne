@@ -263,3 +263,158 @@ def test_pricing_table_has_entries_for_supported_models():
         assert m in LLM_PRICING, f'{m} missing from LLM_PRICING'
         in_rate, out_rate = LLM_PRICING[m]
         assert in_rate > 0 and out_rate > 0
+
+
+def test_estimate_prices_only_per_file_doc_types_when_given():
+    """Per-doc-type staleness (Tier 3): when a per-file doc-type map is supplied
+    (the narrowed missing set from staleness), the estimate prices only those
+    types per file — not the full requested set — so an already-partly-documented
+    file isn't priced for the types it already has.
+    """
+    from docgen.pricing import estimate_cost
+
+    files = [(Path('a.py'), 4000)]  # python supports all five requested types
+    types = ('explanation', 'architecture', 'qa', 'gotcha', 'diagram')
+
+    full = estimate_cost(files=files, doc_types=types, model='gpt-5.4')
+    assert full.total_calls == 5, 'baseline: all requested types priced'
+
+    narrowed = estimate_cost(
+        files=files, doc_types=types, model='gpt-5.4',
+        per_file_types={Path('a.py'): ('qa', 'gotcha', 'diagram')},
+    )
+    assert narrowed.total_calls == 3, 'only the per-file missing types priced'
+    assert narrowed.total_cost_usd < full.total_cost_usd
+def test_select_for_estimate_models_commit_gate_union(tmp_path, monkeypatch):
+    """The dry-run estimate selects exactly what the run will process — the
+    commit-diff gate (changed since sync) UNION coverage gaps — via the shared
+    files_for_generation. With a restrict set, a complete *changed* file AND a
+    file *missing* a requested type are both priced, while an unchanged complete
+    file is skipped. So the estimate matches generate, not a staleness-only
+    guess; the gap file prices only its missing type, the changed file the full
+    set (fallback)."""
+    import numpy as np
+
+    from cli import generate_cost
+    from cli.generate_cost import _select_for_estimate
+    from docgen.staleness import StalenessTracker
+    from library import Library
+
+    src = tmp_path / 'src'
+    src.mkdir()
+    changed = src / 'changed.py'
+    changed.write_text('c = 1\n', encoding='utf-8')
+    gap = src / 'gap.py'
+    gap.write_text('g = 1\n', encoding='utf-8')
+    complete = src / 'complete.py'
+    complete.write_text('k = 1\n', encoding='utf-8')
+
+    lib = Library(tmp_path / 'ariadne.db')
+    try:
+        def _seed(f, types):
+            ids = []
+            for ct in types:
+                d = lib.add_document(
+                    content_type=ct, title=f'd-{ct}', content='b',
+                    source_files=[str(f)], embedding=np.zeros(3072, dtype=np.float32),
+                    metadata={}, source_name='s',
+                )
+                ids.append(d.id)
+            return ids
+        ids_changed = _seed(changed, ('explanation', 'architecture'))  # complete
+        ids_gap = _seed(gap, ('explanation',))                          # missing architecture
+        ids_complete = _seed(complete, ('explanation', 'architecture'))  # complete
+        tracker = StalenessTracker(tmp_path / 'staleness.db')
+        try:
+            tracker.record_documentation(changed, ids_changed, base_path=src)
+            tracker.record_documentation(gap, ids_gap, base_path=src)
+            tracker.record_documentation(complete, ids_complete, base_path=src)
+        finally:
+            tracker.close()
+
+        # Commit gate: only changed.py changed since the sync baseline.
+        monkeypatch.setattr(
+            generate_cost, '_commit_scope',
+            lambda *a, **k: (frozenset({'changed.py'}), 'head'),
+        )
+
+        full_files = [(changed, 10), (gap, 10), (complete, 10)]
+        selected, per_file_types = _select_for_estimate(
+            full_files,
+            staleness_db_path=tmp_path / 'staleness.db',
+            base_path=src,
+            doc_types=('explanation', 'architecture'),
+            library=lib,
+            source_name='s',
+            source_path=src,
+            target_path=None,
+        )
+        assert {p.name for p, _ in selected} == {'changed.py', 'gap.py'}, (
+            f'changed file + coverage gap priced; unchanged complete file skipped; '
+            f'got {sorted(p.name for p, _ in selected)}'
+        )
+        assert set(per_file_types.get(gap, ())) == {'architecture'}
+        assert changed not in per_file_types  # changed → full requested set (fallback)
+        sel2, types2 = _select_for_estimate(
+            full_files,
+            staleness_db_path=tmp_path / 'staleness.db',
+            base_path=src,
+            doc_types=('explanation', 'architecture'),
+            library=lib,
+            source_name='s',
+            source_path=src,
+            target_path=None,
+            doc_types_by_language={'python': ('explanation',)},
+        )
+        assert {p.name for p, _ in sel2} == {'changed.py'}, (
+            f'override drops the architecture-only gap; got '
+            f'{sorted(p.name for p, _ in sel2)}'
+        )
+        assert gap not in types2, (
+            'gap.py drops from the priced map too once the override excludes its '
+            'only missing type (contrast: it priced architecture without the override)'
+        )
+    finally:
+        lib.close()
+def test_stale_subset_for_estimate_respects_doc_type_override(tmp_path):
+    """_stale_subset_for_estimate drops a file whose only missing type the
+    override excludes. A python file with explanation present (architecture
+    missing) is stale WITHOUT the override but complete once python is capped to
+    explanation — so the staleness-only dry-run prices nothing for it. Mirrors
+    the _select_for_estimate override contract for the older selector."""
+    import numpy as np
+
+    from cli.generate_cost import _stale_subset_for_estimate
+    from docgen.staleness import StalenessTracker
+    from library import Library
+
+    src = tmp_path / 'src'
+    src.mkdir()
+    f = src / 'mod.py'
+    f.write_text('m = 1\n', encoding='utf-8')
+    lib = Library(tmp_path / 'ariadne.db')
+    try:
+        d = lib.add_document(
+            content_type='explanation', title='d', content='b',
+            source_files=[str(f)], embedding=np.zeros(3072, dtype=np.float32),
+            metadata={}, source_name='s',
+        )
+        tracker = StalenessTracker(tmp_path / 'staleness.db')
+        try:
+            tracker.record_documentation(f, [d.id], base_path=src)
+        finally:
+            tracker.close()
+        files = [(f, 10)]
+        common = dict(
+            staleness_db_path=tmp_path / 'staleness.db', base_path=src,
+            doc_types=('explanation', 'architecture'), library=lib,
+        )
+        # Without override: architecture missing → stale → priced.
+        assert _stale_subset_for_estimate(files, **common) == [(f, 10)]
+        # Override caps python to explanation → file complete → not priced.
+        assert _stale_subset_for_estimate(
+            files, **common,
+            doc_types_by_language={'python': ('explanation',)},
+        ) == []
+    finally:
+        lib.close()

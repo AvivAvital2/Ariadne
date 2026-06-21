@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from attrs import frozen
+
 from rich.console import Console
 from rich.table import Table
 
@@ -84,7 +86,7 @@ def _stale_subset_for_estimate(
     base_path: Path,
     doc_types: tuple[str, ...],
     library: object | None = None,
-) -> list[tuple[Path, int]]:
+doc_types_by_language=None) -> list[tuple[Path, int]]:
     """Subset of ``files_with_size`` the next generate run would actually
     process — stale or never-documented — using the SAME staleness logic
     as :meth:`DocGenOrchestrator.run` (type-aware when ``library`` is
@@ -96,7 +98,7 @@ def _stale_subset_for_estimate(
     from docgen.staleness import StalenessTracker
 
     paths = [p for p, _ in files_with_size]
-    with StalenessTracker(staleness_db_path) as tracker:
+    with StalenessTracker(staleness_db_path, doc_types_by_language=doc_types_by_language or {}) as tracker:
         stale = set(
             tracker.get_stale_files(
                 paths,
@@ -106,6 +108,36 @@ def _stale_subset_for_estimate(
             ),
         )
     return [(p, size) for (p, size) in files_with_size if p in stale]
+def _select_for_estimate(full_files, *, staleness_db_path, base_path, doc_types,
+                         library, source_name=None, source_path=None,
+                         target_path=None, doc_types_by_language=None):
+    """The ``(file, size)`` subset the next generate run will process, with the
+    per-file doc types — modeling the SAME selection as
+    ``DocGenOrchestrator.run`` (the commit-diff gate UNION coverage gaps) via the
+    shared ``files_for_generation``, so the dry-run estimate matches the run
+    instead of a staleness-only guess. Subdirectory (``target_path``) runs and
+    unsynced / ``--force`` sources fall back to the full staleness pass. The
+    returned map omits files that regenerate the full requested set (the changed
+    files); ``estimate_cost`` prices those at the full ``doc_types``."""
+    from docgen.staleness import StalenessTracker
+
+    restrict_to_files = None
+    if source_name and target_path is None and library is not None:
+        restrict_to_files, _ = _commit_scope(
+            Path(library._conn_provider.path), source_name, source_path, False,
+        )
+    with StalenessTracker(staleness_db_path, doc_types_by_language=doc_types_by_language or {}) as tracker:
+        selected, per_file_types = tracker.files_for_generation(
+            [p for p, _ in full_files],
+            base_path=base_path,
+            requested_types=doc_types,
+            library=library,
+            is_exempt=None,
+            restrict_to_files=restrict_to_files,
+            force=False,
+        )
+    chosen = set(selected)
+    return [(p, s) for (p, s) in full_files if p in chosen], per_file_types
 
 
 def _calibrated_generate_hooks(store, model, file_counter):
@@ -139,6 +171,202 @@ def _calibrated_generate_hooks(store, model, file_counter):
     return input_tokens_for, output_tokens_for
 
 
+@frozen
+class GenerateEstimate:
+    """Structured generate-phase cost preview — the data behind
+    ``dry-run -i`` and the web onboarding "Preview" step. Holds the raw
+    docgen value objects (CostEstimate / NodeCost); callers map to their
+    own wire format.
+    """
+
+    base_path: Path
+    file_count: int
+    doc_types: tuple
+    total: object                # CostEstimate (live)
+    total_batched: object        # CostEstimate (~50% batch discount)
+    by_doc_type: tuple           # ((doc_type, CostEstimate), ...) live
+    by_doc_type_batched: dict    # doc_type -> CostEstimate
+    by_directory: dict           # rel_path -> NodeCost (the explorer tree)
+    languages: tuple             # ((language, file_count), ...) desc by count
+
+
+def language_histogram(files) -> tuple:
+    """``((language, file_count), ...)`` sorted by count desc — the
+    detected-language bar shown in discover/preview. ``files`` is
+    ``(path, size)`` pairs; unknown extensions bucket as ``'other'``.
+    """
+    from collections import Counter
+
+    from docgen.pricing import _detect_language
+
+    counts: Counter = Counter()
+    for path, _size in files:
+        counts[_detect_language(path) or 'other'] += 1
+    return tuple(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def _build_generate_hooks(cfg, model, db_path=None) -> tuple[dict, bool]:
+    """``(hooks, caching_enabled)`` for the generate cost estimate — the
+    calibrated input/output/scaffold token hooks plus whether prompt caching
+    applies. Shared by :func:`build_estimate` and :func:`exclusion_savings`
+    so their per-file pricing is byte-for-byte identical.
+    """
+    from docgen.calibration import CalibrationStore
+    from docgen.token_count import file_token_counter
+
+    caching_enabled = model.startswith('claude')
+    try:
+        store = CalibrationStore(str(db_path or cfg.db_path))
+    except Exception:
+        store = None  # fresh project / no db → hooks fall back to heuristics
+    input_for, output_for = _calibrated_generate_hooks(
+        store, model, file_token_counter(model))
+    hooks = {
+        'output_tokens_for': output_for,
+        'input_tokens_for': input_for,
+        'prompt_overhead_for': _scaffold_overhead_counter(model),
+    }
+    return hooks, caching_enabled
+
+
+@frozen
+class ExclusionCost:
+    """What one configured exclusion does to the generate cost.
+
+    ``saved_usd`` > 0 means the setting removes that much from scope (an
+    exclude glob or excluded dir); < 0 means it adds that much (an exempt
+    dir force-includes default-skipped files).
+    """
+
+    pattern: str
+    kind: str                    # 'glob' | 'dir' | 'exempt'
+    files: int
+    saved_usd: float
+    saved_batched_usd: float
+
+
+def exclusion_savings(cfg, source_name, *, model, doc_types=None, db_path=None) -> list:
+    """Per configured exclusion, the LLM cost it removes from the generate
+    scope — so the UI can show "``**/*.rst`` saves ~$4" beside each handle.
+
+    Walks the *universe* the user prunes from (default-allowed files, exempt
+    dirs force-included, no user globs/excluded-dirs applied) once, then
+    prices the subset each setting matches with the SAME hooks
+    :func:`build_estimate` uses. Gross per setting (overlapping patterns each
+    count the shared files), which is the stable "this handle covers $X"
+    reading. No LLM calls.
+    """
+    from cli.generate import DEFAULT_GENERATE_DOC_TYPES
+    from config import DEFAULT_EXCLUDE_FILE_PATTERNS, DEFAULT_EXCLUDE_POLICY
+    from docgen.pricing import estimate_cost
+    from docgen.staleness import find_catalog_files
+
+    source_path = cfg.resolve_source(source_name)
+    if source_path is None or not source_path.exists():
+        raise ValueError(f'Source {source_name!r} has no resolvable path.')
+
+    sc = cfg.get_source_config(source_name)
+    globs = tuple((sc.exclude if sc else None) or ())
+    exclude_dirs = tuple((sc.exclude_dirs if sc else None) or ())
+    exempt = tuple((sc.exempt_dirs if sc else None) or ())
+    if not (globs or exclude_dirs or exempt):
+        return []
+
+    requested = tuple(doc_types) if doc_types else DEFAULT_GENERATE_DOC_TYPES
+    hooks, caching = _build_generate_hooks(cfg, model, db_path)
+
+    universe_dirs = tuple(set(DEFAULT_EXCLUDE_POLICY) - set(exempt))
+    sized: list = []
+    for p in find_catalog_files(
+        source_path,
+        exclude_patterns=DEFAULT_EXCLUDE_FILE_PATTERNS,
+        exclude_dir_names=universe_dirs,
+    ):
+        try:
+            sized.append((p, p.stat().st_size))
+        except OSError:
+            continue
+
+    def cost_of(subset: list) -> tuple[float, float]:
+        if not subset:
+            return 0.0, 0.0
+        live = estimate_cost(
+            files=tuple(subset), doc_types=requested, model=model,
+            caching_enabled=caching, **hooks).total_cost_usd
+        batched = estimate_cost(
+            files=tuple(subset), doc_types=requested, model=model,
+            caching_enabled=caching, batch_enabled=True, **hooks).total_cost_usd
+        return live, batched
+
+    def under_dir(name: str) -> list:
+        return [(p, s) for (p, s) in sized
+                if name in p.relative_to(source_path).parts]
+
+    out: list = []
+    for g in globs:
+        sub = [(p, s) for (p, s) in sized if p.match(g)]
+        live, batched = cost_of(sub)
+        out.append(ExclusionCost(g, 'glob', len(sub), live, batched))
+    for d in exclude_dirs:
+        sub = under_dir(d)
+        live, batched = cost_of(sub)
+        out.append(ExclusionCost(d, 'dir', len(sub), live, batched))
+    for e in exempt:
+        sub = under_dir(e)
+        live, batched = cost_of(sub)
+        out.append(ExclusionCost(e, 'exempt', len(sub), -live, -batched))
+    return out
+
+
+def build_estimate(cfg, source_name, *, model, doc_types=None, db_path=None) -> GenerateEstimate:
+    """Compute the full generate-phase cost preview for a source.
+
+    Walks the source honoring its excludes, then runs the pure
+    ``estimate_*`` helpers with calibrated token hooks — the SAME building
+    blocks ``dry-run`` uses, so the figures agree. No LLM calls; safe to
+    call on every UI change.
+    """
+    from cli.dry_run import _discover_files_for_estimate
+    from cli.generate import DEFAULT_GENERATE_DOC_TYPES
+    from docgen.cost_by_dir import cost_by_directory
+    from docgen.pricing import estimate_cost, estimate_generate_by_doc_type
+
+    source_path = cfg.resolve_source(source_name)
+    if source_path is None or not source_path.exists():
+        raise ValueError(f'Source {source_name!r} has no resolvable path.')
+
+    files = _discover_files_for_estimate(cfg, source_name, source_path)
+    requested = tuple(doc_types) if doc_types else DEFAULT_GENERATE_DOC_TYPES
+    hooks, caching_enabled = _build_generate_hooks(cfg, model, db_path)
+
+    total = estimate_cost(
+        files=files, doc_types=requested, model=model,
+        caching_enabled=caching_enabled, **hooks)
+    total_batched = estimate_cost(
+        files=files, doc_types=requested, model=model,
+        caching_enabled=caching_enabled, batch_enabled=True, **hooks)
+    by_type = estimate_generate_by_doc_type(
+        files, requested, model, caching_enabled=caching_enabled, **hooks)
+    by_type_batched = dict(estimate_generate_by_doc_type(
+        files, requested, model, caching_enabled=caching_enabled,
+        batch_enabled=True, **hooks))
+    by_dir = cost_by_directory(files, source_path, requested, model, **hooks)
+
+    languages = language_histogram(files)
+
+    return GenerateEstimate(
+        base_path=source_path,
+        file_count=len(files),
+        doc_types=requested,
+        total=total,
+        total_batched=total_batched,
+        by_doc_type=tuple(by_type),
+        by_doc_type_batched=by_type_batched,
+        by_directory=by_dir,
+        languages=languages,
+    )
+
+
 def _print_cost_estimate(
     *,
     source_path: Path,
@@ -156,7 +384,7 @@ def _print_cost_estimate(
     base_path: Path | None = None,
     library: object | None = None,
     force: bool = False,
-) -> int:
+doc_types_by_language=None) -> int:
     """Discover files, run the cost estimator, and print a Rich table.
 
     Used by ``--dry-run`` so users see expected cost before paying for
@@ -202,14 +430,18 @@ def _print_cost_estimate(
     # everything, so it bypasses the filter.
     total_files = len(full_files)
     if staleness_db_path is not None and not force:
-        files_with_size = _stale_subset_for_estimate(
+        files_with_size, _per_file_types = _select_for_estimate(
             full_files,
             staleness_db_path=staleness_db_path,
             base_path=base_path or source_path,
             doc_types=doc_types,
             library=library,
-        )
+            source_name=source_name,
+            source_path=source_path,
+            target_path=target_path,
+        doc_types_by_language=doc_types_by_language)
     else:
+        _per_file_types = None
         files_with_size = full_files
     stale_count = len(files_with_size)
 
@@ -262,6 +494,7 @@ def _print_cost_estimate(
             model=model,
             caching_enabled=caching_enabled,
             batch_enabled=False,
+            per_file_types=_per_file_types,
         )
         planned_calls = provisional.total_calls
     else:
@@ -295,6 +528,7 @@ def _print_cost_estimate(
         input_tokens_for=_input_tokens,
         output_tokens_for=_output_tokens,
         prompt_overhead_for=_scaffold,
+        per_file_types=_per_file_types,
     )
 
     # Full-regeneration figure for the note — only recomputed when some

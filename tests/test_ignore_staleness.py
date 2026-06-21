@@ -326,3 +326,38 @@ def test_apply_explorer_staleness_noop_when_declined_or_already_exempt(tmp_path)
     # Already exempt → no redundant write.
     assert _apply_explorer_staleness(
         cfg, "src1", chosen=True, currently_exempt=True) is False
+def test_get_source_scip_config_honors_ignore_staleness(tmp_path):
+    """``get_source_scip_config`` is what generation uses to load the SCIP index.
+    For a staleness-exempt source it must disable the age gate
+    (``max_staleness_days=None``) so an existing index is reused at GENERATE time
+    (matching ``ariadne index``); a tracked source keeps its configured value."""
+    exempt = _write_cfg(
+        tmp_path,
+        "sources:\n"
+        "  src1:\n"
+        "    path: __SRC1__\n"
+        "    ignore_staleness: true\n"
+        "    index_kinds:\n"
+        "      python: scip\n"
+        "    scip:\n"
+        "      artifact_path: /tmp/x.scip\n"
+        "      max_staleness_days: 7\n",
+    )
+    sc = exempt.get_source_scip_config("src1")
+    assert sc is not None and sc.max_staleness_days is None, (
+        "ignore_staleness must disable the generate-time SCIP age gate "
+        f"(reuse existing index); got max_staleness_days={sc.max_staleness_days if sc else sc}"
+    )
+
+    tracked = _write_cfg(
+        tmp_path,
+        "sources:\n"
+        "  src1:\n"
+        "    path: __SRC1__\n"
+        "    index_kinds:\n"
+        "      python: scip\n"
+        "    scip:\n"
+        "      artifact_path: /tmp/x.scip\n"
+        "      max_staleness_days: 30\n",
+    )
+    assert tracked.get_source_scip_config("src1").max_staleness_days == 30
