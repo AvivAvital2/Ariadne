@@ -22,6 +22,28 @@ _logger = logging.getLogger(__name__)
 # Default embedding model
 DEFAULT_MODEL = 'text-embedding-3-large'
 EMBEDDING_DIM = 3072
+def _parse_retry_after(response: httpx.Response) -> float | None:
+    """Seconds to wait per the server hint (Retry-After header or body note), else None."""
+    import re
+    header = response.headers.get('retry-after')
+    if header:
+        try:
+            return float(header)
+        except ValueError:
+            pass
+    match = re.search(r'try again in ([\d.]+)\s*(ms|s)', response.text or '')
+    if match:
+        value = float(match.group(1))
+        return value / 1000 if match.group(2) == 'ms' else value
+    return None
+
+
+def _retry_delay_for(response: httpx.Response, attempt: int) -> float:
+    """Honor the server hint (+ small buffer, capped); else exponential backoff."""
+    hint = _parse_retry_after(response)
+    if hint is not None:
+        return min(hint + 0.1, 30.0)
+    return 2 ** attempt
 
 
 @frozen
@@ -145,7 +167,7 @@ class EmbeddingService:
 
         import httpx
 
-        max_retries = 3
+        max_retries = 6
         last_error: Exception | None = None
         for attempt in range(max_retries):
             try:
@@ -163,12 +185,12 @@ class EmbeddingService:
                 last_error = RuntimeError(
                     f'Embedding API HTTP {e.response.status_code}: {detail}'
                 )
-                # 4xx is a permanent client error — retrying won't help and
-                # delays the eventual failure. Bail out immediately.
-                if 400 <= e.response.status_code < 500:
+                # Most 4xx are permanent client errors — bail out. But 429
+                # (rate limit) and 408 (timeout) are transient: fall through
+                if 400 <= e.response.status_code < 500 and e.response.status_code not in (408, 429):
                     raise last_error from e
                 if attempt < max_retries - 1:
-                    delay = 2 ** attempt  # 1s, 2s, 4s
+                    delay = _retry_delay_for(e.response, attempt)  # 1s, 2s, 4s
                     _logger.warning(
                         'Embedding API request failed (attempt %d/%d), retrying in %ds: %s',
                         attempt + 1, max_retries, delay, detail,
