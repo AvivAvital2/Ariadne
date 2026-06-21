@@ -20,6 +20,27 @@ class AgentReply:
     score: int | None = None
 
 
+_SCORE_LINE_RE = re.compile(
+    r'^\s*[>*_`]*\s*score:\s*\d+\b.*$',
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _strip_score_line(text: str) -> str:
+    """Remove a self-rating line (``score:N — reason``) the agent may echo into
+    its visible answer.
+
+    The score belongs in the ``ariadne_log_hit`` feedback (captured separately
+    into ``AgentReply.score``), never in the user-facing reply — but the model
+    sometimes repeats it in prose. Strip any standalone ``score:N …`` line so the
+    Slack message stays clean; the parsed score is unaffected.
+    """
+    if not text:
+        return text
+    cleaned = _SCORE_LINE_RE.sub('', text)
+    return re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+
+
 def build_agent_options(
     *,
     system_prompt: str,
@@ -114,6 +135,7 @@ class AgentRunner:
         text_out = ''.join(parts).strip()
         if not text_out and result is not None:
             text_out = getattr(result, 'result', '') or ''
+        text_out = _strip_score_line(text_out)
         return AgentReply(
             text=text_out,
             is_error=bool(getattr(result, 'is_error', False)),

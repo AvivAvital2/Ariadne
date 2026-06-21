@@ -67,6 +67,9 @@ accuracy grounded in actual documents (not just snippets), mapping to specific \
 source files by name, and including a diagram. \
 Example: `score:8 — clear LRU explanation from the caching doc, cited cache.py`. \
 This score is what records the answer for the team's best-of showcase.
+- The `score:N — …` goes ONLY in that `ariadne_log_hit`/`ariadne_log_miss` \
+feedback. Do NOT include the score in your reply to the user — it is internal \
+bookkeeping, and repeating it in the answer just confuses the reader.
 '''
 
 

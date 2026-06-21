@@ -146,3 +146,48 @@ async def test_ask_score_is_none_without_a_log_hit():
     client = _FakeClient([_assistant('ans'), _result(session_id='S')])
     reply = await AgentRunner(client).ask('q')
     assert reply.score is None
+
+
+def test_strip_score_line_removes_standalone_rating_lines():
+    """The pure strip used to hide an echoed self-rating from the visible reply.
+
+    It removes a standalone ``score:N — reason`` line wherever it lands (the
+    model tends to tack it on the end), tolerating Slack-bold wrapping and the
+    hyphen-vs-em-dash separator — but leaves prose that merely *mentions* the
+    word ``score`` mid-sentence untouched."""
+    from slack_bridge.agent_runner import _strip_score_line
+
+    # Trailing rating (the reported leak) is removed, body kept.
+    assert _strip_score_line(
+        'The answer about the auth flow.\n\nscore:9 — grounded in the docs'
+    ) == 'The answer about the auth flow.'
+    # Leading rating, hyphen separator.
+    assert _strip_score_line('score:7 - ok\nThe answer.') == 'The answer.'
+    # Slack-bold wrapped rating.
+    assert _strip_score_line('*score:10 — perfect*\nBody') == 'Body'
+    # No rating → unchanged.
+    assert _strip_score_line('A normal answer.') == 'A normal answer.'
+    # A sentence that merely contains the word is NOT a rating line.
+    assert _strip_score_line(
+        'The test score: 95% pass rate is fine.'
+    ) == 'The test score: 95% pass rate is fine.'
+
+
+async def test_ask_strips_echoed_score_line_but_keeps_parsed_score():
+    """End-to-end: the agent both self-scores via ``ariadne_log_hit`` AND echoes
+    ``score:N — …`` into its prose. The bridge hides that line from the Slack
+    reply yet still captures the score off the tool call — the visible text and
+    the recorded score are independent."""
+    client = _FakeClient([
+        _assistant(
+            'Here is the answer about the auth flow.\n\n'
+            'score:9 — comprehensive answer grounded in the docs, cited auth.py'
+        ),
+        _tool_use('mcp__ariadne__ariadne_log_hit', event_id=1,
+                  feedback='score:9 — comprehensive answer grounded in the docs'),
+        _result(session_id='S'),
+    ])
+    reply = await AgentRunner(client).ask('q')
+    assert reply.text == 'Here is the answer about the auth flow.'
+    assert 'score:' not in reply.text.lower()
+    assert reply.score == 9

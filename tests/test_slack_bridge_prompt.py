@@ -45,3 +45,7 @@ def test_scoring_directive_is_added_only_when_feedback_is_enabled():
     assert 'ariadne_log_hit' in low
     assert 'score:' in low
     assert '1' in on and '10' in on
+    # The score belongs in the tool feedback only — the agent must be told NOT
+    # to echo it into the user-facing reply (the deterministic strip is the
+    # backstop, but the directive keeps the model from emitting it at all).
+    assert 'not include the score in your reply' in low
