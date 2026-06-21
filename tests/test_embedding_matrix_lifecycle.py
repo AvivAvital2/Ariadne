@@ -66,7 +66,7 @@ class _FakeWriter:
     async def __aexit__(self, *exc) -> bool:
         return False
 
-    async def rebuild_all_embeddings(self) -> int:
+    async def rebuild_all_embeddings(self, only_missing: bool = False, on_progress=None) -> int:
         return 1
 
 

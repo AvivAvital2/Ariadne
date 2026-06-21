@@ -1,6 +1,8 @@
 """LLM description pass for catalog elements."""                                                                                                                        
 from __future__ import annotations
 
+from schema import CATALOG_KIND_ELEMENT
+
 import asyncio
 import logging
 from collections.abc import Callable
@@ -88,7 +90,7 @@ async def describe_source_elements(
     candidates = [                                                                                                                                                                   
         d for d in all_catalog
         if d.metadata.get('source_name') == source_name                                                                                                                              
-        and d.metadata.get('kind') == 'element'
+        and d.metadata.get('kind') == CATALOG_KIND_ELEMENT
     ]                                                                                                                                                                                
     if force:   
         to_describe = list(candidates)
@@ -314,7 +316,7 @@ async def describe_source_elements_batched(
     candidates = [
         d for d in all_catalog
         if d.metadata.get('source_name') == source_name
-        and d.metadata.get('kind') == 'element'
+        and d.metadata.get('kind') == CATALOG_KIND_ELEMENT
     ]
     to_describe = (
         list(candidates) if force

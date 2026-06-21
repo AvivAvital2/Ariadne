@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING
 from attrs import frozen
 
 from docgen.catalog_extractor import ElementInfo, extract_elements
-from schema import generate_deterministic_id
+from schema import (
+    CATALOG_KIND_ELEMENT,
+    CATALOG_KIND_FILE_INDEX,
+    generate_deterministic_id,
+)
 
 if TYPE_CHECKING:
     from library import Library
@@ -130,7 +134,7 @@ def _element_content(el: ElementInfo) -> str:
                                                                                                                                                                                      
 def _element_metadata(el: ElementInfo, source_name: str) -> dict:
     meta: dict = {
-        'kind': 'element',
+        'kind': CATALOG_KIND_ELEMENT,
         'source_name': source_name,
         'language': el.language,
         'subtype': el.subtype,
@@ -151,8 +155,8 @@ def _element_metadata(el: ElementInfo, source_name: str) -> dict:
                                                                                                                                                                                      
                 
 def _file_index_metadata(source_name: str, language: str, file_sha: str, element_ids: list[str]) -> dict:
-    return {                                                                                                                                                                         
-        'kind': 'file_index',
+    return {
+        'kind': CATALOG_KIND_FILE_INDEX,
         'source_name': source_name,                                                                                                                                                  
         'language': language,
         'file_sha': file_sha,                                                                                                                                                        
@@ -382,11 +386,12 @@ async def sync_file_catalog(
     if existing_index:                                                                                                                                                
         library.update_document(index_id, content=index_content, metadata=index_meta)                                                                                   
     else:                                                                                                                                                               
-        await writer.add_document(
+        library.add_document(
             content_type='catalog',
             title=f'file_index:{source_name}:{rel}',
             content=index_content,
             source_files=[str(file)],
+            embedding=None,
             metadata=index_meta,
             doc_id=index_id,
             source_name=source_name,
@@ -697,11 +702,12 @@ async def notify_changed(
             if existing_idx is not None:                                                                                                                                             
                 library.update_document(idx_id, content=content, metadata=meta)
             else:
-                await writer.add_document(
+                library.add_document(
                     content_type='catalog',
                     title=f'file_index:{source_name}:{rel}',
                     content=content,
                     source_files=[str(st['path'])],
+                    embedding=None,
                     metadata=meta,
                     doc_id=idx_id,
                     source_name=source_name,
@@ -711,10 +717,88 @@ async def notify_changed(
         _release_all(locks)
 
 
+def regenerate_file_index_docs(library, *, source_root_for=None) -> int:
+    """Rebuild per-file ``file_index`` docs from the library's element docs.
+
+    file_index docs are pure derived index data, excluded from export/import
+    (and stored unembedded — they were ~28% of all embeddings). After
+    importing a database the per-file indexes are therefore absent; this
+    reconstructs them purely from ``library.list_documents()`` — grouping the
+    ``element`` docs by their source file — with no source tree read and no
+    embeddings.
+
+    ``source_root_for(source_name) -> Path | None`` maps a source to its root
+    so absolute element paths can be relativized back to the same key the
+    catalog uses (``file.relative_to(source_root)``); a regenerated index then
+    shares its id with what a later sync would write, so the sync updates it
+    rather than duplicating. Defaults to the configured source path.
+
+    Returns the number of file_index docs (re)written. Files with no element
+    docs (e.g. symbol-less HOCON/CSS, whose only doc was the excluded index)
+    leave nothing to rebuild from and are not recovered.
+    """
+    if source_root_for is None:
+        from config import get_config
+        source_root_for = get_config().resolve_source
+
+    # Group the element docs by (source, source file) — one file_index per group.
+    groups: dict[tuple[str, str], list] = {}
+    for doc in library.list_documents_lite(content_type='catalog'):
+        if doc.metadata.get('kind') != CATALOG_KIND_ELEMENT:
+            continue
+        source_name = str(doc.metadata.get('source_name') or '')
+        if not source_name or not doc.source_files:
+            continue
+        groups.setdefault((source_name, doc.source_files[0]), []).append(doc)
+
+    # Element docs store absolute paths; relativize back to the catalog's key
+    # (file.relative_to(source_root)) so the regenerated id matches a sync's.
+    roots: dict[str, Path | None] = {}
+
+    def _rel_path(source_name: str, abs_file: str) -> str:
+        if source_name not in roots:
+            roots[source_name] = source_root_for(source_name)
+        root = roots[source_name]
+        if root is not None:
+            try:
+                return str(Path(abs_file).relative_to(root))
+            except ValueError:
+                pass  # not under the configured root (e.g. a foreign machine)
+        return abs_file
+
+    written = 0
+    for (source_name, abs_file), element_docs in groups.items():
+        rel = _rel_path(source_name, abs_file)
+        element_ids = sorted(d.id for d in element_docs)
+        language = str(element_docs[0].metadata.get('language') or 'unknown')
+        idx_id = _file_index_doc_id(source_name, rel)
+        # file_sha is unknown without the source tree; leave it empty so the
+        # next real sync (which has the file) treats the index as needing a
+        # freshness re-check rather than trusting a fabricated sha.
+        meta = _file_index_metadata(source_name, language, '', element_ids)
+        content = f'Catalog index for {rel} -- {len(element_ids)} elements.'
+        if library.get_document(idx_id) is not None:
+            library.update_document(idx_id, content=content, metadata=meta)
+        else:
+            library.add_document(
+                content_type='catalog',
+                title=f'file_index:{source_name}:{rel}',
+                content=content,
+                source_files=[abs_file],
+                embedding=None,
+                metadata=meta,
+                doc_id=idx_id,
+                source_name=source_name,
+            )
+        written += 1
+    return written
+
+
 __all__ = [
     'SyncSummary',
     'iter_catalog_files',
     'notify_changed',
+    'regenerate_file_index_docs',
     'sync_file_catalog',
     'sync_source_catalog',
 ]

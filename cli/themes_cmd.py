@@ -91,15 +91,7 @@ async def cmd_themes_build(args: argparse.Namespace) -> int:
     as a phase). The standalone CLI dispatch goes through the sync
     ``_cmd_themes_build`` wrapper below, which supplies the event loop.
     """
-    from rich.progress import (
-        BarColumn,
-        MofNCompleteColumn,
-        Progress,
-        SpinnerColumn,
-        TextColumn,
-        TimeElapsedColumn,
-        TimeRemainingColumn,
-    )
+    from cli.progress import make_progress
 
     from docgen.themes import refresh_themes
     from writer import LibraryWriter
@@ -122,18 +114,8 @@ async def cmd_themes_build(args: argparse.Namespace) -> int:
 
     library = get_library(getattr(args, 'db', None))
     try:
-        progress_columns = (
-            SpinnerColumn(),
-            TextColumn('[bold cyan]{task.description}'),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn('·'),
-            TimeElapsedColumn(),
-            TextColumn('eta'),
-            TimeRemainingColumn(),
-        )
         async def _build() -> dict:
-            with Progress(*progress_columns, console=console) as progress:
+            with make_progress(console=console) as progress:
                 task_id = progress.add_task(
                     'Themes: clustering & summarizing', total=0,
                 )

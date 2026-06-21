@@ -7,6 +7,8 @@ module's ``register_commands`` + ``HANDLERS`` (assembled in cli/main.py).
 """
 from __future__ import annotations
 
+from schema import CATALOG_KIND_FILE_INDEX
+
 import argparse
 import asyncio
 from pathlib import Path
@@ -378,7 +380,7 @@ def cmd_migrate(args: argparse.Namespace) -> int:
             updated = 0
             unchanged = 0
             for doc in docs:
-                if doc.metadata.get('kind') != 'file_index':
+                if doc.metadata.get('kind') != CATALOG_KIND_FILE_INDEX:
                     continue
                 if not doc.source_files:
                     continue

@@ -21,6 +21,13 @@ DEFAULT_DB_PATH = Path('ariadne.db')
 DEFAULT_EXPORT_PATH = Path('docs')
 
 console = Console()
+EMBED_TOKENS_PER_DOC = 500
+EMBED_COST_PER_1M_TOKENS = 0.13
+EMBED_CONFIRM_THRESHOLD = 1000
+# Rough embedding throughput (docs/sec) with the default batch size +
+# concurrency, used only for the up-front time estimate. The live progress
+# bar's ETA refines this from the actual rate once the run starts.
+EMBED_DOCS_PER_SEC = 100
 
 
 def get_library(db_path: Path | None = None) -> 'Library':
@@ -109,7 +116,11 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
                                help='Skip embedding regeneration')
 
     # rebuild
-    subparsers.add_parser('rebuild', help='Rebuild all embeddings')
+    rebuild_parser = subparsers.add_parser('rebuild', help='Rebuild all embeddings')
+    rebuild_parser.add_argument('--only-missing', action='store_true',
+                                help='Embed only documents missing an embedding (cheap top-up); default re-embeds all')
+    rebuild_parser.add_argument('--yes', '-y', action='store_true',
+                                help='Skip the confirmation prompt for a large rebuild')
 
     # tag
     tag_parser = subparsers.add_parser('tag', help='Tag a document with metadata')
@@ -575,8 +586,19 @@ def cmd_import_(args: argparse.Namespace) -> int:
 
         if not args.skip_embeddings:
             console.print('Regenerating embeddings...')
-            asyncio.run(_rebuild_embeddings(library))
+            asyncio.run(_rebuild_embeddings(library, only_missing=True, assume_yes=True))
             console.print('[green]Embeddings regenerated.[/green]')
+
+        # file_index docs are excluded from export/import (derived index data,
+        # never embedded). Rebuild them from the imported element docs so the
+        # per-file catalog index is present again — no source tree, no API.
+        from docgen.catalog_writer import regenerate_file_index_docs
+        rebuilt = regenerate_file_index_docs(library)
+        if rebuilt:
+            console.print(
+                f'[green]Rebuilt {rebuilt} file index doc(s) from the '
+                f'imported catalog.[/green]'
+            )
 
         return 0
 
@@ -629,7 +651,7 @@ async def cmd_rebuild(args: argparse.Namespace) -> int:
     library = get_library(args.db)
 
     try:
-        await _rebuild_embeddings(library)
+        await _rebuild_embeddings(library, only_missing=getattr(args, 'only_missing', False), assume_yes=getattr(args, 'yes', False))
         console.print('[green]All embeddings rebuilt.[/green]')
         return 0
 
@@ -637,14 +659,37 @@ async def cmd_rebuild(args: argparse.Namespace) -> int:
         library.close()
 
 
-async def _rebuild_embeddings(library: 'Library') -> None:
-    """Rebuild all embeddings, then refresh the shared embedding matrix."""
+async def _rebuild_embeddings(library: 'Library', only_missing: bool = False, assume_yes: bool = False) -> None:
+    """Rebuild embeddings (cost-estimated; confirms before a large full run)."""
+    from cli.progress import format_duration, make_progress
+
+    n = library.count_missing_embeddings() if only_missing else library.count_documents()
+    tokens = n * EMBED_TOKENS_PER_DOC
+    cost = tokens / 1_000_000 * EMBED_COST_PER_1M_TOKENS
+    eta = format_duration(n / EMBED_DOCS_PER_SEC)
+    console.print(
+        f'Embedding {n} document(s) - ~{tokens:,} tokens, ~${cost:.2f}, ~{eta}'
+    )
+    if n == 0:
+        console.print('Nothing to embed - already up to date.')
+        return
+    if not assume_yes and n >= EMBED_CONFIRM_THRESHOLD:
+        prompt = f'Proceed embedding {n} documents (~${cost:.2f}, ~{eta})? [y/N] '
+        if not console.input(prompt).strip().lower().startswith('y'):
+            console.print('Aborted - nothing embedded.')
+            return
     from writer import LibraryWriter
-
     async with LibraryWriter(library) as writer:
-        count = await writer.rebuild_all_embeddings()
-        console.print(f'Updated {count} documents')
+        with make_progress(console=console) as progress:
+            task_id = progress.add_task('Embedding documents', total=n)
 
+            def _on_progress(completed: int, total: int) -> None:
+                progress.update(task_id, completed=completed, total=total)
+
+            count = await writer.rebuild_all_embeddings(
+                only_missing=only_missing, on_progress=_on_progress,
+            )
+        console.print(f'Updated {count} documents')
     from library.embedding_matrix import ensure_matrix
     ensure_matrix(library)
 

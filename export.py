@@ -15,7 +15,7 @@ from typing import Any
 from attrs import frozen
 
 from library import Library
-from schema import ContentType, Document
+from schema import CATALOG_KIND_FILE_INDEX, ContentType, Document
 
 # Path to locate project's CLAUDE.md relative to source
 PROJECT_CLAUDE_MD_PATHS = ('CLAUDE.md', 'docs/CLAUDE.md')
@@ -181,6 +181,11 @@ class LibraryExporter:
         paths: list[Path] = []
 
         for doc in docs:
+            # file_index docs are derived index data, not authored knowledge —
+            # never export them. They're regenerated from the element docs on
+            # import (see catalog_writer.regenerate_file_index_docs).
+            if doc.metadata.get('kind') == CATALOG_KIND_FILE_INDEX:
+                continue
             path = self.export_document(doc, output_dir)
             paths.append(path)
 
@@ -731,6 +736,11 @@ def import_from_markdown(
         metadata = frontmatter.get('metadata', {})
         if not isinstance(metadata, dict):
             metadata = {}
+
+        # Skip any file_index docs left over in an older export — they're
+        # derived index data, regenerated from the element docs after import.
+        if metadata.get('kind') == CATALOG_KIND_FILE_INDEX:
+            continue
 
         library.add_document(
             content_type=content_type,

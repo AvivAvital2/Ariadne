@@ -7,6 +7,8 @@ module's ``register_commands`` + ``HANDLERS`` (assembled in cli/main.py).
 """
 from __future__ import annotations
 
+from schema import CATALOG_KIND_ELEMENT
+
 import argparse
 import asyncio
 from pathlib import Path
@@ -130,30 +132,10 @@ async def cmd_catalog_sync(args: argparse.Namespace) -> int:
 
     library = get_library(args.db)
     try:
-        from rich.progress import (
-            BarColumn,
-            MofNCompleteColumn,
-            Progress,
-            SpinnerColumn,
-            TextColumn,
-            TimeElapsedColumn,
-            TimeRemainingColumn,
-        )
+        from cli.progress import make_progress
 
-        progress_columns = (
-            SpinnerColumn(),
-            TextColumn('[bold cyan]{task.description}'),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn('·'),
-            TimeElapsedColumn(),
-            TextColumn('eta'),
-            TimeRemainingColumn(),
-        )
-
-        with Progress(
-            *progress_columns, console=console,
-            transient=getattr(args, 'quiet', False),
+        with make_progress(
+            console=console, transient=getattr(args, 'quiet', False),
         ) as progress:
             task_id = progress.add_task(
                 f'Syncing catalog for {source_name}', total=0,
@@ -264,7 +246,7 @@ def _print_catalog_describe_cost_estimate(
     candidates = [
         d for d in all_catalog
         if d.metadata.get('source_name') == source_name
-        and d.metadata.get('kind') == 'element'
+        and d.metadata.get('kind') == CATALOG_KIND_ELEMENT
     ]
     if force:
         to_describe = list(candidates)
@@ -484,31 +466,10 @@ async def cmd_catalog_describe(args: argparse.Namespace) -> int:
                     )
             return 0
 
-        from rich.progress import (
-            BarColumn,
-            MofNCompleteColumn,
-            Progress,
-            SpinnerColumn,
-            TextColumn,
-            TimeElapsedColumn,
-            TimeRemainingColumn,
-        )
-
-        progress_columns = (
-            SpinnerColumn(),
-            TextColumn('[bold cyan]{task.description}'),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn('·'),
-            TimeElapsedColumn(),
-            TextColumn('eta'),
-            TimeRemainingColumn(),
-        )
+        from cli.progress import make_progress
 
         quiet = getattr(args, 'quiet', False)
-        with Progress(
-            *progress_columns, console=console, transient=quiet,
-        ) as progress:
+        with make_progress(console=console, transient=quiet) as progress:
             task_id = progress.add_task(
                 f'Describing catalog for {source_name}', total=0,
             )

@@ -7,12 +7,21 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from schema import Chunk, ContentType, Document, Section
+from schema import CATALOG_KIND_FILE_INDEX, Chunk, ContentType, Document, Section
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 _logger = logging.getLogger(__name__)
+
+# file_index docs are pure derived index data (one per source file, listing
+# its element ids). They are stored deliberately unembedded, so a NULL
+# embedding on them is the intended state — not a doc "missing" its vector.
+# Every "needs (re)embedding" query filters them out with this predicate so an
+# only_missing rebuild can't keep re-embedding them.
+_EMBEDDING_EXEMPT_SQL = (
+    f"COALESCE(json_extract(metadata, '$.kind'), '') != '{CATALOG_KIND_FILE_INDEX}'"
+)
 
 
 class CoreMixin:
@@ -253,6 +262,31 @@ class CoreMixin:
             rows = conn.execute(query, params).fetchall()
 
         return [self._row_to_document(row) for row in rows]
+    
+    def count_missing_embeddings(self) -> int:
+        """Count documents whose embedding is NULL (the incremental embed path's "needs (re)embedding" set)."""
+        with self._conn_provider.acquire() as conn:
+            row = conn.execute(
+                f'SELECT COUNT(*) FROM documents WHERE embedding IS NULL '
+                f'AND {_EMBEDDING_EXEMPT_SQL}'
+            ).fetchone()
+        return int(row[0])
+
+    def list_documents_without_embedding(self, limit: int | None = None) -> list[Document]:
+        """List documents missing an embedding (``embedding IS NULL``), newest first."""
+        query = (
+            'SELECT id, content_type, title, content, source_files, embedding, '
+            'created_at, updated_at, metadata, source_name FROM documents '
+            f'WHERE embedding IS NULL AND {_EMBEDDING_EXEMPT_SQL} '
+            'ORDER BY updated_at DESC'
+        )
+        params: list[object] = []
+        if limit is not None:
+            query += ' LIMIT ?'
+            params.append(limit)
+        with self._conn_provider.acquire() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._row_to_document(row) for row in rows]
 
     def list_documents_lite(
         self,
@@ -364,6 +398,7 @@ class CoreMixin:
         existing = self.get_document(doc_id)
         if existing is None:
             return None
+        content_changed = content is not None and content != existing.content
 
         updates: list[str] = []
         params: list[object] = []
@@ -383,6 +418,11 @@ class CoreMixin:
         if metadata is not None:
             updates.append('metadata = ?')
             params.append(json.dumps(metadata))
+        # Content changed without a fresh embedding: the stored vector (and
+        # chunks) are now stale. NULL it so the incremental embed path re-does
+        # this doc; drop the stale chunks below.
+        if content_changed and embedding is None:
+            updates.append('embedding = NULL')
 
         if updates:
             from schema import _now_iso
@@ -395,6 +435,8 @@ class CoreMixin:
                     f'UPDATE documents SET {", ".join(updates)} WHERE id = ?',
                     params,
                 )
+        if content_changed and embedding is None:
+            self.delete_chunks(doc_id)
 
         return self.get_document(doc_id)
 

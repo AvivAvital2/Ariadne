@@ -23,7 +23,7 @@ from attrs import frozen
 from diagram_format import fence_dot
 from embedding import EmbeddingConfig, EmbeddingService
 from library import Library
-from schema import Chunk, ContentType, Document, Section
+from schema import CATALOG_KIND_FILE_INDEX, Chunk, ContentType, Document, Section
 
 if TYPE_CHECKING:
     pass
@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 # Default chunking parameters
 DEFAULT_CHUNK_SIZE = 500  # characters
 DEFAULT_CHUNK_OVERLAP = 50  # characters
+EMBED_BATCH_SIZE = 100
+EMBED_MAX_CONCURRENT = 3
 
 
 @frozen
@@ -442,33 +444,40 @@ class LibraryWriter:
 
         return self.library.update_document(doc_id, embedding=new_embedding)
 
-    async def rebuild_all_embeddings(self) -> int:
-        """Regenerate embeddings for all documents.
+    async def rebuild_all_embeddings(
+        self, only_missing: bool = False, on_progress=None,
+    ) -> int:
+        """Regenerate embeddings; return the count successfully (re)embedded.
 
-        rebuild_concurrent_v1: batched + concurrent (N=5) via asyncio.gather.
+        With only_missing, embeds only docs whose embedding is NULL (new
+        or content-changed); otherwise the whole library. Batches run
+        concurrently (capped at EMBED_MAX_CONCURRENT); a batch that fails
+        after the client's retries is logged and skipped, so one failure
+        cannot abort the run and skipped docs stay NULL for a re-run.
 
-        Returns:
-            Number of documents updated.
+        ``on_progress(completed, total)`` is invoked after each batch with the
+        running done-count and the total work size, so a caller (the CLI) can
+        drive a progress bar / ETA. When omitted, progress is silent.
         """
         import asyncio
 
-        docs = self.library.list_documents()
+        docs = (
+            self.library.list_documents_without_embedding()
+            if only_missing
+            else self.library.list_documents()
+        )
+        # file_index docs are pure derived index data, stored deliberately
+        # unembedded — a full rebuild must not re-embed them (only_missing
+        # already excludes them at the query level).
+        docs = [d for d in docs if d.metadata.get('kind') != CATALOG_KIND_FILE_INDEX]
         service = await self._get_embedding_service()
 
-        BATCH_SIZE = 100
-        MAX_CONCURRENT = 5
-
-        doc_texts = [
-            f'{d.title}\n\n{d.content[:2000]}'
-            for d in docs
-        ]
+        doc_texts = [f'{d.title}\n\n{d.content[:2000]}' for d in docs]
         batches = []
-        for i in range(0, len(docs), BATCH_SIZE):
-            batches.append(
-                (docs[i:i + BATCH_SIZE], doc_texts[i:i + BATCH_SIZE])
-            )
+        for i in range(0, len(docs), EMBED_BATCH_SIZE):
+            batches.append((docs[i:i + EMBED_BATCH_SIZE], doc_texts[i:i + EMBED_BATCH_SIZE]))
 
-        semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+        semaphore = asyncio.Semaphore(EMBED_MAX_CONCURRENT)
 
         async def fetch_batch(batch_docs, batch_texts):
             async with semaphore:
@@ -477,18 +486,23 @@ class LibraryWriter:
 
         tasks = [fetch_batch(bd, bt) for bd, bt in batches]
         count = 0
+        failed = 0
         total = len(docs)
-
         for coro in asyncio.as_completed(tasks):
-            batch_docs, batch_embeddings = await coro
+            try:
+                batch_docs, batch_embeddings = await coro
+            except Exception as exc:
+                failed += 1
+                print(f'  rebuild: a batch failed after retries, skipping ({exc})')
+                continue
             for doc, emb in zip(batch_docs, batch_embeddings):
                 self.library.update_document(doc.id, embedding=emb)
                 self.library.delete_chunks(doc.id)
                 if len(doc.content) > self.chunk_config.chunk_size:
-                    await self._create_chunks(
-                        doc.id, doc.content, service,
-                    )
+                    await self._create_chunks(doc.id, doc.content, service)
                 count += 1
-            print(f'  rebuild: {count}/{total} docs done')
-
+            if on_progress is not None:
+                on_progress(count, total)
+        if failed:
+            print(f'  rebuild: {failed} batch(es) failed — re-run to embed the remainder')
         return count

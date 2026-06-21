@@ -5,6 +5,8 @@ Miss path: fuzzy match against all catalog element qualified_names.
 """                                                                                                                                                                                  
 from __future__ import annotations
 
+from schema import CATALOG_KIND_ELEMENT
+
 import difflib
 from typing import TYPE_CHECKING, Any
 
@@ -36,7 +38,7 @@ def lookup_symbol(
     """                                                                                                                                                                              
     doc_id = _element_doc_id(source_name, qualified_name)                                                                                                                            
     doc = library.get_document(doc_id)                                                                                                                                               
-    if doc is not None and doc.metadata.get('kind') == 'element':
+    if doc is not None and doc.metadata.get('kind') == CATALOG_KIND_ELEMENT:
         loc = doc.metadata.get('location') or {}                                                                                                                                     
         return {
             'found': True,                                                                                                                                                           
@@ -84,7 +86,7 @@ def fuzzy_suggestions(
     for d in all_catalog:                                                                                                                                                            
         if d.metadata.get('source_name') != source_name:
             continue                                                                                                                                                                 
-        if d.metadata.get('kind') != 'element':
+        if d.metadata.get('kind') != CATALOG_KIND_ELEMENT:
             continue                                                                                                                                                                 
         qn = d.metadata.get('qualified_name') or ''
         if not qn:                                                                                                                                                                   
@@ -118,7 +120,7 @@ def list_elements_in_file(
     for d in all_catalog:
         if d.metadata.get('source_name') != source_name:
             continue
-        if d.metadata.get('kind') != 'element':
+        if d.metadata.get('kind') != CATALOG_KIND_ELEMENT:
             continue
         qn = d.metadata.get('qualified_name') or ''
         if not qn:
@@ -201,7 +203,7 @@ def config_usage(
     definitions: list[dict[str, Any]] = []
     for d in library.list_documents(content_type='catalog'):
         md = d.metadata or {}
-        if md.get('source_name') != source_name or md.get('kind') != 'element':
+        if md.get('source_name') != source_name or md.get('kind') != CATALOG_KIND_ELEMENT:
             continue
         if md.get('subtype') != 'hocon_key':
             continue

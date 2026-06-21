@@ -16,8 +16,12 @@ from numpy.typing import NDArray
 
 __all__ = [
     'ARIADNE_NAMESPACE',
+    'CATALOG_KINDS',
+    'CATALOG_KIND_ELEMENT',
+    'CATALOG_KIND_FILE_INDEX',
     'CONTENT_TYPES',
     'EMBEDDING_DIM',
+    'CatalogKind',
     'Chunk',
     'ContentType',
     'Document',
@@ -32,10 +36,20 @@ ContentType = Literal[
     'explanation', 'architecture', 'qa', 'diagram', 'catalog',
     'finding', 'gotcha', 'theme',
     # Role-aware optional layer: cached LLM-adapted response for a
-    # non-default audience (e.g., product_manager).
+    # non-default audience (e.g., product_manager). See
+    # designs/role-aware-responses.md.
     'audience_response',
 ]
 CONTENT_TYPES: tuple[str, ...] = get_args(ContentType)
+
+# Discriminator stored in ``metadata['kind']`` on ``content_type='catalog'``
+# docs: one ``element`` doc per extracted symbol (embedded, the searchable
+# unit) and one ``file_index`` doc per source file (derived index data —
+# stored unembedded, excluded from export/import, regenerated on import).
+CatalogKind = Literal['element', 'file_index']
+CATALOG_KIND_ELEMENT: CatalogKind = 'element'
+CATALOG_KIND_FILE_INDEX: CatalogKind = 'file_index'
+CATALOG_KINDS: tuple[str, ...] = get_args(CatalogKind)
 
 EMBEDDING_DIM = 3072  # OpenAI text-embedding-3-small dimension
 
