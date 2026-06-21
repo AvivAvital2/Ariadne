@@ -157,6 +157,68 @@ def _by_name(name: str) -> LanguageDef:
     raise KeyError(f'no language named {name!r} in registry')
 
 
+def _read_marker_name(marker: Path) -> str | None:
+    """The package/project name declared inside a marker file, or None.
+
+    Reads the npm ``name`` from ``package.json``, the ``name :=`` setting from
+    ``build.sbt``, the project ``<artifactId>`` from ``pom.xml`` (ignoring the
+    ``<parent>`` block), and ``rootProject.name`` from a gradle settings file.
+    Best-effort: any read/parse failure returns None so the caller falls back
+    to the directory name.
+    """
+    import json
+
+    fn = marker.name
+    try:
+        text = marker.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return None
+    if fn == 'package.json':
+        try:
+            nm = json.loads(text).get('name')
+        except (ValueError, AttributeError):
+            return None
+        return nm.strip() if isinstance(nm, str) and nm.strip() else None
+    if fn == 'build.sbt':
+        m = re.search(r'\bname\s*:=\s*"([^"]+)"', text)
+        return m.group(1).strip() if m else None
+    if fn == 'pom.xml':
+        without_parent = re.sub(r'<parent>.*?</parent>', '', text, flags=re.S)
+        m = re.search(r'<artifactId>\s*([^<\s][^<]*?)\s*</artifactId>', without_parent)
+        return m.group(1).strip() if m else None
+    if fn in ('build.gradle', 'build.gradle.kts'):
+        settings = marker.with_name('settings.gradle')
+        for cand in (settings, marker.with_name('settings.gradle.kts')):
+            try:
+                st = cand.read_text(encoding='utf-8', errors='ignore')
+            except OSError:
+                continue
+            m = re.search(r'rootProject\.name\s*=\s*["\']([^"\']+)["\']', st)
+            if m:
+                return m.group(1).strip()
+    return None
+
+
+def package_label(marker: Path, *, source_root: Path) -> str:
+    """Human name for a discovered package marker, for the onboarding UI.
+
+    Prefers the name *read from the marker file* (npm/sbt/maven/gradle); else
+    the marker's directory relative to the source root, or — when the marker
+    sits at the repository root — the repository's own folder name. It is
+    NEVER the Ariadne source/config name (which has no relation to the
+    project's real package, e.g. a Scala repo showing up as ``LBS``).
+    """
+    name = _read_marker_name(marker)
+    if name:
+        return name
+    parent = marker.parent
+    try:
+        rel = parent.relative_to(source_root).as_posix()
+    except ValueError:
+        return parent.name
+    return source_root.name if rel in ('', '.') else rel
+
+
 def discover(
     source_root: Path,
     *,

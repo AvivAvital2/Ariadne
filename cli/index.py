@@ -869,6 +869,102 @@ def _ensure_gitignore_entry(source_path: Path, line: str) -> None:
         gitignore.write_text(line + '\n', encoding='utf-8')
 
 
+def run_discover(cfg, source_name: str) -> dict:
+    """Non-interactive ``discover`` core, shared by ``cmd_discover`` and the
+    ``ariadne_discover`` MCP tool so detection + persistence can't drift.
+
+    Detects SCIP indexers, writes ``<source>/.ariadne/manifest.json`` (plus
+    the ``intermediate`` staging dir and a ``.gitignore`` entry), and
+    auto-authors the ``index_kinds``/``scip`` block in ariadne.yaml.
+
+    Returns ``{source_path, indexers, index_kinds, manifest_path}``.
+    Raises ``ValueError`` for an unconfigured source or missing path.
+    """
+    import json
+
+    from config import DEFAULT_EXCLUDE_POLICY
+    from docgen.scip_discovery import discover, package_label
+
+    sc = cfg.get_source_config(source_name)
+    if sc is None or not sc.path:
+        raise ValueError(
+            f'Source {source_name!r} is not configured with a path.')
+    source_path = Path(sc.path).expanduser().resolve()
+    if not source_path.exists():
+        raise ValueError(f'Source path does not exist: {source_path}')
+
+    global_excl = set(
+        cfg._config.get('exclude_policy') or DEFAULT_EXCLUDE_POLICY)
+    effective_excl = (global_excl | set(sc.exclude_dirs)) - set(sc.exempt_dirs)
+    entries = discover(
+        source_path,
+        exclude_dirs=frozenset(effective_excl),
+        exempt_dirs=frozenset(sc.exempt_dirs),
+        exclude_patterns=frozenset(sc.exclude or ()),
+    )
+
+    def _rel(p: Path) -> str:
+        try:
+            rel = p.relative_to(source_path)
+            return '.' if str(rel) == '.' else str(rel)
+        except ValueError:
+            return str(p)
+
+    indexers = [
+        {
+            'kind': e.kind,
+            'cwd': _rel(e.cwd),
+            'markers': [_rel(m) for m in e.markers],
+            'names': [package_label(m, source_root=source_path) for m in e.markers],
+            'entry_kind': e.entry_kind,
+        }
+        for e in entries
+    ]
+    manifest = {
+        'ariadne_version': '1',
+        'source_name': source_name,
+        'indexers': indexers,
+    }
+
+    manifest_dir = source_path / '.ariadne'
+    manifest_dir.mkdir(exist_ok=True)
+    (manifest_dir / 'intermediate').mkdir(exist_ok=True)
+    manifest_path = manifest_dir / 'manifest.json'
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2), encoding='utf-8')
+    _ensure_gitignore_entry(source_path, '.ariadne/')
+
+    # discovery kind → catalog languages whose extraction routes through SCIP
+    # (mirrors cmd_discover; python is indexed but its catalog stays ast-grep).
+    catalog_scip_languages: set[str] = set()
+    for e in entries:
+        if e.kind == 'typescript':
+            catalog_scip_languages.add('javascript')
+        elif e.kind == 'java':
+            catalog_scip_languages.add('scala')
+            catalog_scip_languages.add('java')
+
+    config_path = cfg.config_path
+    if catalog_scip_languages and config_path is not None:
+        from docgen.yaml_writer import write_source_scip_config
+        try:
+            write_source_scip_config(
+                Path(config_path),
+                source_name,
+                catalog_scip_languages=catalog_scip_languages,
+                artifact_path=manifest_dir / 'index.scip',
+            )
+        except (FileNotFoundError, KeyError):
+            pass
+
+    return {
+        'source_path': source_path,
+        'indexers': indexers,
+        'index_kinds': sorted(catalog_scip_languages),
+        'manifest_path': manifest_path,
+    }
+
+
 def cmd_discover(args: argparse.Namespace) -> int:
     """Walk a source tree, detect SCIP indexer locations, write
     ``<source>/.ariadne/manifest.json``, AND auto-author the SCIP

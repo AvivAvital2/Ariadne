@@ -398,6 +398,7 @@ _register_admin(mcp)
 if __name__ == '__main__':
     import asyncio
     import atexit
+    import os
 
     def _cleanup() -> None:
         """Clean up AriadneService and LLM client resources on shutdown."""
@@ -415,6 +416,15 @@ if __name__ == '__main__':
 
     atexit.register(_cleanup)
     _warn_if_no_sources()
+
+    # The lowlevel MCP server logs an INFO line per request ("Processing
+    # request of type CallToolRequest") — one per UI click under `ariadne
+    # serve`, and per tool call in the agent's MCP logs. Quiet it to WARNING
+    # so real problems still surface but the per-call chatter doesn't. Set
+    # ARIADNE_MCP_VERBOSE=1 to restore it.
+    if not os.environ.get('ARIADNE_MCP_VERBOSE'):
+        logging.getLogger('mcp.server.lowlevel.server').setLevel(logging.WARNING)
+
     mcp.run(transport='stdio')
                                                                                                                                                                   
                 

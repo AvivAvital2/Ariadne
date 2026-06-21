@@ -88,6 +88,64 @@ def get_changed_files_since(commit: str, cwd: Path) -> list[str] | None:
         return None
 
 
+def _is_work_tree(path: Path) -> bool:
+    """True when ``path`` is inside a git working tree."""
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--is-inside-work-tree'],
+            capture_output=True, text=True, check=True, cwd=path,
+        )
+        return result.stdout.strip() == 'true'
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def _last_commit_relative(path: Path) -> str | None:
+    """Human-relative age of the last commit (e.g. "3 months ago"), or
+    None when there are no commits / ``path`` isn't a repo."""
+    try:
+        result = subprocess.run(
+            ['git', 'log', '-1', '--format=%ar'],
+            capture_output=True, text=True, check=True, cwd=path,
+        )
+        return result.stdout.strip() or None
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def get_repo_info(path: Path) -> dict:
+    """Filesystem + git metadata for a candidate source directory.
+
+    Returns ``{is_repo, branch, last_commit_relative, file_count,
+    size_bytes}``. The file count and total size come from a working-tree
+    walk with ``.git`` excluded and are always populated; branch and
+    last-commit are None when ``path`` is not a git work tree. Best-effort
+    — unreadable files are skipped rather than raising.
+    """
+    import os
+
+    file_count = 0
+    size_bytes = 0
+    for root, dirs, files in os.walk(path):
+        if '.git' in dirs:
+            dirs.remove('.git')
+        for name in files:
+            file_count += 1
+            try:
+                size_bytes += (Path(root) / name).stat().st_size
+            except OSError:
+                pass
+
+    is_repo = _is_work_tree(path)
+    return {
+        'is_repo': is_repo,
+        'branch': get_current_branch(path) if is_repo else None,
+        'last_commit_relative': _last_commit_relative(path) if is_repo else None,
+        'file_count': file_count,
+        'size_bytes': size_bytes,
+    }
+
+
 def get_commit_message(git_hash: str, cwd: Path) -> str | None:
     """Get the commit message for a given hash.
 

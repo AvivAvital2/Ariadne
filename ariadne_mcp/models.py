@@ -379,3 +379,170 @@ class TaskContextResponse(BaseModel):
     checklist_items: list[dict[str, str]] = Field(default_factory=list)
     file_tests: list[FileTests] = Field(default_factory=list)
     event_id: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Onboarding — source add
+# ---------------------------------------------------------------------------
+
+
+class GitInfo(BaseModel):
+    """Filesystem + git metadata for a candidate source directory.
+
+    Drives the onboarding "Connect" screen's "Git repository detected"
+    banner. ``file_count``/``size_bytes`` come from a working-tree walk and
+    are always populated; ``branch``/``last_commit_relative`` are None when
+    the path is not a git work tree.
+    """
+
+    is_repo: bool
+    branch: str | None = None
+    file_count: int | None = None
+    size_bytes: int | None = None
+    last_commit_relative: str | None = None
+
+
+class SourceAddResponse(BaseModel):
+    """Response from ariadne_source_add — the persisted source config."""
+
+    source: str
+    path: str | None = None
+    created: bool  # True when a new source was created, False on update
+    is_default: bool
+    depends_on: list[str] = Field(default_factory=list)
+    parent: str | None = None
+    branches: list[str] = Field(default_factory=list)
+    ref: str | None = None
+    exclude: list[str] = Field(default_factory=list)
+    exclude_dirs: list[str] = Field(default_factory=list)
+    exempt_dirs: list[str] = Field(default_factory=list)
+    ignore_staleness: bool | list[str] = False
+    doc_types_by_language: dict[str, list[str]] = Field(default_factory=dict)
+    git: GitInfo | None = None
+
+
+# ---------------------------------------------------------------------------
+# Onboarding — cost estimate (the "Preview" step)
+# ---------------------------------------------------------------------------
+
+
+class LanguageCount(BaseModel):
+    """One bar of the detected-language histogram."""
+
+    language: str
+    files: int
+    percent: float
+
+
+class ModelPrice(BaseModel):
+    """A selectable LLM with its per-million-token rates."""
+
+    model: str
+    input_per_million: float
+    output_per_million: float
+
+
+class DocTypeCostModel(BaseModel):
+    """Cost of generating one doc type across the whole source."""
+
+    doc_type: str
+    count: int  # generation calls for this type
+    cost_usd: float
+    cost_batched_usd: float
+
+
+class DirCostModel(BaseModel):
+    """Per-directory (and per-file) cost node — the explorer tree."""
+
+    rel_path: str
+    docs: int
+    total_usd: float
+    ingestion_usd: float
+
+
+class ExclusionSaving(BaseModel):
+    """What one configured exclusion (or force-include) does to the cost.
+
+    ``saved_usd`` is how much the setting removes from the generate scope:
+    positive for an exclude glob / excluded dir (you pay that much less),
+    negative for an exempt (force-included) dir (it ADDS that much).
+    """
+
+    pattern: str
+    kind: str  # 'glob' | 'dir' | 'exempt'
+    files: int
+    saved_usd: float
+    saved_batched_usd: float
+
+
+class EstimateResponse(BaseModel):
+    """Response from ariadne_estimate — a no-LLM cost preview."""
+
+    source: str
+    model: str
+    input_per_million: float
+    output_per_million: float
+    file_count: int
+    total_calls: int
+    input_tokens: int
+    output_tokens: int
+    embedding_tokens: int
+    total_cost_usd: float
+    total_cost_batched_usd: float
+    cost_lower_bound: float
+    cost_upper_bound: float
+    embedding_cost_usd: float
+    languages: list[LanguageCount] = Field(default_factory=list)
+    by_doc_type: list[DocTypeCostModel] = Field(default_factory=list)
+    by_directory: list[DirCostModel] = Field(default_factory=list)
+    available_models: list[ModelPrice] = Field(default_factory=list)
+    language_doc_types: dict[str, list[str]] = Field(default_factory=dict)
+    exclusion_savings: list[ExclusionSaving] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Onboarding — discover (the "Discover" step)
+# ---------------------------------------------------------------------------
+
+
+class IndexerPlan(BaseModel):
+    """One SCIP indexer the discover step detected and will run."""
+
+    kind: str  # python | typescript | java
+    cwd: str
+    markers: list[str] = Field(default_factory=list)
+    names: list[str] = Field(default_factory=list)  # real package name per marker
+    entry_kind: str  # package | scripts
+
+
+class DiscoverResponse(BaseModel):
+    """Response from ariadne_discover — language histogram + index plan."""
+
+    source: str
+    file_count: int
+    dir_count: int
+    languages: list[LanguageCount] = Field(default_factory=list)
+    indexers: list[IndexerPlan] = Field(default_factory=list)
+    index_kinds: list[str] = Field(default_factory=list)
+    manifest_written: bool
+
+
+# ---------------------------------------------------------------------------
+# Onboarding — list configured sources (the dependency picker)
+# ---------------------------------------------------------------------------
+
+
+class SourceEntry(BaseModel):
+    """A configured source in ariadne.yaml."""
+
+    name: str
+    path: str | None = None
+    is_default: bool = False
+    depends_on: list[str] = Field(default_factory=list)
+
+
+class SourceListResponse(BaseModel):
+    """Response from ariadne_list_sources."""
+
+    sources: list[SourceEntry] = Field(default_factory=list)
+    default_source: str | None = None

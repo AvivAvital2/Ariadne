@@ -4,7 +4,13 @@ from __future__ import annotations
 from mcp.server.fastmcp import Context
 
 from docgen.trace_flow_llm_bridge import build_llm_bridge
-from ariadne_mcp.models import AdminActionResponse
+from ariadne_mcp.models import (
+    AdminActionResponse,
+    DiscoverResponse,
+    EstimateResponse,
+    SourceAddResponse,
+    SourceListResponse,
+)
 
 
 async def ariadne_branch_sync(
@@ -398,6 +404,136 @@ async def ariadne_docs_read(
     return {'type': doc_type, 'path': str(path), 'content': content}
 
 
+async def ariadne_source_add(
+    name: str,
+    path: str | None = None,
+    depends_on: list[str] | None = None,
+    parent: str | None = None,
+    branches: list[str] | None = None,
+    ref: str | None = None,
+    exclude: list[str] | None = None,
+    exclude_dirs: list[str] | None = None,
+    exempt_dirs: list[str] | None = None,
+    ignore_staleness: bool | None = None,
+    set_default: bool | None = None,
+    doc_types_by_language: dict | None = None, ctx: Context | None = None,
+) -> SourceAddResponse:
+    """Add or update a source in ariadne.yaml — the onboarding "Connect"/"Scope" step.
+
+    Mirrors ``ariadne source add``: bootstraps ariadne.yaml when a project
+    has none, makes the first source the default, and on re-runs updates
+    only the fields you pass (idempotent). Returns the persisted source
+    config plus detected git metadata (branch / file count / size / last
+    commit) for the connect screen.
+
+    Run ``ariadne_discover`` next to detect languages and the index plan.
+
+    Args:
+        name: Source name — scopes queries; lowercase, no spaces.
+        path: Filesystem path to the source root. Required for a new
+            source; optional when updating an existing one.
+        depends_on: Source names to load as context.
+        parent: Parent source, for a subdirectory source.
+        branches: Git branch patterns this source is active on.
+        ref: Pin indexing to a fixed git ref instead of the working tree.
+        exclude: Glob patterns to exclude (e.g. ``**/*.min.js``).
+        exclude_dirs: Directory names to exclude (e.g. ``build``).
+        exempt_dirs: Directory names to FORCE-INCLUDE even though a default
+            policy would skip them (e.g. ``vendor``, ``tests``) — the
+            override knob for the default excludes.
+        ignore_staleness: Exempt this source from staleness checks.
+        set_default: Force or refuse default-source status; defaults to the
+            "first source becomes default" rule.
+    """
+    from ariadne_mcp.service import AriadneService
+
+    if ctx:
+        await ctx.info(f'Writing source {name!r} to ariadne.yaml')
+    return AriadneService.get().source_add(
+        name,
+        path=path,
+        depends_on=depends_on,
+        parent=parent,
+        branches=branches,
+        ref=ref,
+        exclude=exclude,
+        exclude_dirs=exclude_dirs,
+        exempt_dirs=exempt_dirs,
+        ignore_staleness=ignore_staleness,
+        set_default=set_default,
+    doc_types_by_language=doc_types_by_language)
+
+
+async def ariadne_estimate(
+    source: str | None = None,
+    model: str | None = None,
+    doc_types: list[str] | None = None,
+    ctx: Context | None = None,
+) -> EstimateResponse:
+    """Estimate the LLM cost of documenting a source — the onboarding "Preview" step.
+
+    Pure preview, no LLM calls: walks the source (honoring its excludes) and
+    runs the same cost model ``ariadne dry-run`` uses. Returns totals (live
+    + ~50%-off batched), a per-directory/per-file cost tree (the explorer),
+    a per-doc-type split, the detected language histogram, the model price
+    list, and which doc types apply per language — everything the preview
+    needs so a user can trim scope and pick a model/speed before paying for
+    ``ariadne_onboard``.
+
+    Args:
+        source: Source name (defaults to the configured default_source).
+        model: Model to price against (defaults to the configured model).
+        doc_types: Doc types to include (defaults to the standard set).
+    """
+    from ariadne_mcp.service import AriadneService
+
+    if ctx:
+        await ctx.info(f'Estimating documentation cost for {source or "(default)"}')
+    return AriadneService.get().estimate(source, model=model, doc_types=doc_types)
+
+
+async def ariadne_discover(
+    source: str | None = None,
+    ctx: Context | None = None,
+) -> DiscoverResponse:
+    """Detect languages and the SCIP index plan for a source — the onboarding "Discover" step.
+
+    Walks the source tree, detects which SCIP indexers apply
+    (python/typescript/java) from filesystem markers, writes
+    ``<source>/.ariadne/manifest.json``, and auto-authors the
+    ``index_kinds``/``scip`` block in ariadne.yaml. Returns the structured
+    plan: the detected-language histogram, the per-language indexer plan,
+    ``index_kinds``, and file/dir counts.
+
+    This is the structured, in-process counterpart of
+    ``ariadne_discover_source`` (which shells out and returns plain text).
+    Sequence: ``ariadne_source_add`` → ``ariadne_discover`` →
+    ``ariadne_estimate`` (cost preview) → ``ariadne_onboard`` (build).
+
+    Args:
+        source: Source name (defaults to the configured default_source).
+    """
+    from ariadne_mcp.service import AriadneService
+
+    if ctx:
+        await ctx.info(
+            f'Discovering languages and index plan for {source or "(default)"}')
+    return AriadneService.get().discover(source)
+
+
+def ariadne_list_sources() -> SourceListResponse:
+    """List the sources configured in ariadne.yaml.
+
+    Returns each source's name, path, default flag, and declared
+    dependencies. Used by the onboarding dependency picker to offer the
+    project's existing sources, and useful any time you need to know what's
+    configured without reading ariadne.yaml directly.
+    """
+    from ariadne_mcp.service import AriadneService
+
+    return AriadneService.get().list_sources()
+
+
 def register_tools(mcp) -> None:
     """Register admin tools with the MCP server."""
     from mcp.types import ToolAnnotations
@@ -467,6 +603,38 @@ def register_tools(mcp) -> None:
         title='Read Generated Docs',
         readOnlyHint=True,
     ))(ariadne_docs_read)
+
+    mcp.tool(annotations=ToolAnnotations(
+        title='Add Source',
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ))(ariadne_source_add)
+
+    mcp.tool(annotations=ToolAnnotations(
+        title='Estimate Documentation Cost',
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ))(ariadne_estimate)
+
+    mcp.tool(annotations=ToolAnnotations(
+        title='Discover Languages and Index Plan',
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ))(ariadne_discover)
+
+    mcp.tool(annotations=ToolAnnotations(
+        title='List Configured Sources',
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ))(ariadne_list_sources)
 
     mcp.tool(annotations=ToolAnnotations(
         title='Trace Cross-Language Flow',

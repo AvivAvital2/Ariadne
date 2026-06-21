@@ -6,6 +6,7 @@ from ariadne_mcp.models import (
     AskResponse,
     ExplainDocument,
     ExplainResponse,
+    ReviewResponse,
     TaskContextResponse,
 )
 
@@ -35,7 +36,7 @@ def ariadne_review_checklist(
 async def ariadne_review(
     task_description: str,
     changed_files: list[str] | None = None,
-) -> 'ReviewResponse':
+) -> ReviewResponse:
     """Composite architecture review for design deliberation.
 
     Combines semantic search, per-file explanation, impact analysis,
@@ -54,7 +55,7 @@ async def ariadne_review(
 async def ariadne_task_context(
     task_description: str,
     file_paths: list[str],
-) -> 'TaskContextResponse':
+) -> TaskContextResponse:
     """One-shot briefing for a worker starting a task.
 
     Bundles search, per-file explain, review checklist, and find_tests
