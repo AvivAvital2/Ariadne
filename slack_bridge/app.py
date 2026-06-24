@@ -102,7 +102,7 @@ async def _run_scan(cfg: BridgeConfig, *, max_pairs: int | None = None,
     cost); with ``generate_scores`` it also LLM-scores history the DB never
     scored — which *does* run the agent, so the cost gate is enforced.
     """
-    from slack_bridge.scan import scan
+    from slack_bridge.scan import backfill_usage, scan
 
     score_fn = None
     if generate_scores:
@@ -122,10 +122,13 @@ async def _run_scan(cfg: BridgeConfig, *, max_pairs: int | None = None,
         recorded = await scan(
             client, conn, store_dir=store_dir, bot_user_id=bot_user_id,
             max_pairs=max_pairs, channels=channels, score_fn=score_fn, rescore=rescore)
+        usage_recorded = await backfill_usage(
+            client, conn, store_dir=store_dir, bot_user_id=bot_user_id, channels=channels)
     finally:
         conn.close()
     _logger.info('Backfilled %d testimonial(s) from public channels into %s',
                  recorded, store_dir)
+    _logger.info('Backfilled %d per-user usage record(s) into %s', usage_recorded, store_dir)
     return recorded
 
 

@@ -6,11 +6,13 @@ import types
 
 import pytest
 
+import slack_usage
 import testimonials
 from slack_bridge.diagram import dot_available
 from slack_bridge.handlers import (
     _channel_is_shared,
     _org_context,
+    _resolve_user_name,
     command_to_event,
     handle_event,
     is_dm_message,
@@ -731,21 +733,27 @@ async def test_slow_turn_posts_still_working_notice_then_answers_same_run():
     assert slack.updated[-1][2] == 'the answer'                # real answer still landed
 
 
-async def test_turn_exceeding_hard_cap_notices_then_times_out():
-    """Past the hard cap the bot cancels and surfaces the timeout message — but
-    it still posted the 'still working' notice first, and ran the turn once."""
+async def test_turn_exceeding_hard_cap_gives_up_with_a_distinct_budget_message(caplog):
+    """Past the hard cap the bot cancels and surfaces a DISTINCT 'I hit my time
+    budget' message — it names the limit (so a too-low cap is visible) and is NOT
+    the same 'narrow the question' text an inner timeout produces. It still posts
+    the 'still working' notice first, ran the turn once, and logs the give-up."""
     reply = types.SimpleNamespace(text='late', is_error=False, session_id='S')
     pool = _FakePool(_SlowSession(reply, delay=5.0), contains=True)
     slack = _FakeSlack()
     cfg = bridge_config(channels=frozenset({'C1'}), soft_timeout_seconds=0.05, turn_timeout_seconds=0.3)
     event = {'user': 'U1', 'channel': 'C1', 'ts': 'T1', 'text': '<@UBOT> big question'}
 
-    await handle_event(cfg=cfg, pool=pool, slack=slack, bot_user_id='UBOT', ack=_noop_ack, event=event)
+    with caplog.at_level(logging.WARNING):
+        await handle_event(cfg=cfg, pool=pool, slack=slack, bot_user_id='UBOT', ack=_noop_ack, event=event)
 
     assert pool._session.asked == ['big question']             # ran once, not restarted
     notices = [t for _, _, t in slack.updated if t.startswith('⏳')]
     assert len(notices) == 1                                   # notice posted before giving up
-    assert 'too long' in slack.updated[-1][2].lower()          # final = timeout message
+    final = slack.updated[-1][2]
+    assert '0.3' in final                                      # names OUR limit → distinct, surfaces a low cap
+    assert 'budget' in final.lower() or 'limit' in final.lower()
+    assert '0.3' in caplog.text                                # give-up logged for the operator
 
 
 class _TimeoutSession:
@@ -779,6 +787,40 @@ async def test_fast_internal_timeout_is_not_mistaken_for_soft_deadline(caplog):
     assert not [t for _, _, t in slack.updated if t.startswith('⏳')]     # NO false 'still working'
     assert 'too long' in slack.updated[-1][2].lower()                    # honest timeout message
     assert any(r.exc_info for r in caplog.records)                       # real error logged, not masked
+
+
+class _FlakyUpdateSlack(_FakeSlack):
+    """chat_update raises a transient ConnectionError on its first call, then
+    succeeds — to prove the bridge retries an idempotent Slack edit instead of
+    losing the computed answer to a one-off network blip."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.update_attempts = 0
+
+    async def chat_update(self, *, channel, ts, text):
+        self.update_attempts += 1
+        if self.update_attempts == 1:
+            raise ConnectionError('transient slack blip')
+        await super().chat_update(channel=channel, ts=ts, text=text)
+
+
+async def test_transient_slack_update_failure_is_retried_so_the_answer_lands():
+    """A transient ConnectionError on the answer edit is retried (the edit is
+    idempotent), so the computed answer still reaches the thread — not lost to a
+    one-off blip. Post/upload are NOT retried (could double-post); edits only."""
+    reply = types.SimpleNamespace(text='the answer', is_error=False, session_id='S')
+    pool = _FakePool(_FakeSession(reply), contains=True)
+    slack = _FlakyUpdateSlack()
+    cfg = bridge_config(channels=frozenset({'C1'}))
+    event = {'user': 'U1', 'channel': 'C1', 'ts': 'T1', 'text': '<@UBOT> q'}
+
+    await handle_event(cfg=cfg, pool=pool, slack=slack, bot_user_id='UBOT', ack=_noop_ack, event=event)
+
+    assert slack.update_attempts == 2            # first edit blipped, then retried
+    assert slack.updated[-1][2] == 'the answer'  # answer delivered despite the blip
+
+
 def test_is_dm_message_accepts_file_share():
     """A Slack file upload is a `message` with subtype 'file_share' carrying
     files[] — a real user message, not edit/system noise. The DM gate must
@@ -840,3 +882,73 @@ async def test_bridge_records_a_testimonial_only_for_scored_turns(monkeypatch, t
     await run(feedback=True, slack=flaky)
     kept = testimonials.top(store)
     assert any(t.score == 8 and t.permalink is None for t in kept)
+
+
+def _slack_with_names(names: dict[str, str]) -> _FakeSlack:
+    """A fake Slack whose users_info resolves ids → display names."""
+    s = _FakeSlack()
+
+    async def users_info(*, user):  # noqa: N802 — mirrors slack_sdk
+        return {'user': {'profile': {'display_name': names.get(user, '')}}}
+
+    s.users_info = users_info
+    return s
+
+
+async def test_bridge_records_per_user_usage(monkeypatch, tmp_path):
+    """Evolving: every answered turn appends a per-user usage record (counts +
+    resolved name, no question text) regardless of enable_feedback; declined and
+    empty-question turns (no agent run) record nothing."""
+    store = testimonials.local_dir(tmp_path)
+    reply = types.SimpleNamespace(
+        text='the answer', is_error=False, session_id='S', score=8, outcome='hit')
+
+    async def fake_aq(**kw):
+        return reply
+
+    monkeypatch.setattr('slack_bridge.handlers.answer_question', fake_aq)
+
+    async def run(event, *, feedback=True):
+        cfg = bridge_config(
+            channels=frozenset({'C1'}), enable_feedback=feedback, ariadne_dir=tmp_path)
+        await handle_event(
+            cfg=cfg, pool=_FakePool(_FakeSession(None)),
+            slack=_slack_with_names({'U_alice': 'alice', 'U_bob': 'bob'}),
+            bot_user_id='UBOT', ack=_noop_ack, event=event)
+
+    # D1 — an answered, hit turn records the id, resolved name, and outcome.
+    await run({'user': 'U_alice', 'channel': 'C1', 'ts': 'T1', 'text': '<@UBOT> q?'})
+    rows = slack_usage.aggregate(store)
+    assert [(r.actor, r.name, r.questions, r.hits, r.misses) for r in rows] == [
+        ('U_alice', 'alice', 1, 1, 0),
+    ]
+
+    # D2 — a not-allowlisted user is declined: no agent turn, nothing recorded.
+    await run({'user': 'U_evil', 'channel': 'CX', 'ts': 'T2', 'text': '<@UBOT> q?'})
+    assert [r.actor for r in slack_usage.aggregate(store)] == ['U_alice']
+
+    # D3 — an empty question replies with help, runs no agent turn, records nothing.
+    await run({'user': 'U_alice', 'channel': 'C1', 'ts': 'T3', 'text': '<@UBOT>'})
+    assert [(r.actor, r.questions) for r in slack_usage.aggregate(store)] == [
+        ('U_alice', 1),
+    ]
+
+    # D4 — feedback OFF still counts the question (outcome 'answered', not a hit).
+    reply.outcome, reply.score = None, None
+    await run({'user': 'U_bob', 'channel': 'C1', 'ts': 'T4', 'text': '<@UBOT> q?'},
+              feedback=False)
+    bob = next(r for r in slack_usage.aggregate(store) if r.actor == 'U_bob')
+    assert (bob.name, bob.questions, bob.hits, bob.misses) == ('bob', 1, 0, 0)
+
+
+async def test_resolve_user_name_handles_empty_and_lookup_failure():
+    """Name resolution is best-effort: no id → empty; a Slack failure falls
+    back to the id so the usage record always has an actor."""
+    assert await _resolve_user_name(_slack_with_names({'U_a': 'alice'}), '') == ''
+    assert await _resolve_user_name(_slack_with_names({'U_a': 'alice'}), 'U_a') == 'alice'
+
+    class _Boom:
+        async def users_info(self, *, user):  # noqa: N802 — mirrors slack_sdk
+            raise RuntimeError('slack hiccup')
+
+    assert await _resolve_user_name(_Boom(), 'U_x') == 'U_x'

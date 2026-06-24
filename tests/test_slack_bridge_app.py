@@ -73,6 +73,15 @@ async def test_run_scan_opens_the_db_and_backfills(monkeypatch, tmp_path):
 
     monkeypatch.setattr('slack_bridge.scan.scan', fake_scan)
 
+    usage_captured: dict = {}
+
+    async def fake_backfill(slack, conn, *, store_dir, bot_user_id, channels=None):
+        usage_captured.update(store_dir=store_dir, bot_user_id=bot_user_id,
+                              channels=channels)
+        return 5
+
+    monkeypatch.setattr('slack_bridge.scan.backfill_usage', fake_backfill)
+
     class _FakeClient:
         async def auth_test(self):
             return {'user_id': 'UBOT'}
@@ -81,7 +90,7 @@ async def test_run_scan_opens_the_db_and_backfills(monkeypatch, tmp_path):
     (tmp_path / 'ariadne.db').touch()
 
     n = await app._run_scan(bridge_config(ariadne_dir=tmp_path), max_pairs=7, channels=['C1'])
-    assert n == 3
+    assert n == 3                                        # still returns the testimonial count
     assert captured['bot_user_id'] == 'UBOT'
     assert captured['max_pairs'] == 7
     assert captured['channels'] == ['C1']
@@ -89,6 +98,9 @@ async def test_run_scan_opens_the_db_and_backfills(monkeypatch, tmp_path):
     assert captured['rescore'] is False                  # delta by default (no re-judge)
     assert captured['store_dir'] == testimonials.local_dir(tmp_path)
     assert isinstance(captured['slack'], _FakeClient)
+    # the same pass also backfills per-user usage from the same channel history
+    assert usage_captured == {'store_dir': testimonials.local_dir(tmp_path),
+                              'bot_user_id': 'UBOT', 'channels': ['C1']}
 
 
 async def test_run_scan_wires_an_llm_scorer_when_generating(monkeypatch, tmp_path):
@@ -101,6 +113,11 @@ async def test_run_scan_wires_an_llm_scorer_when_generating(monkeypatch, tmp_pat
         return 0
 
     monkeypatch.setattr('slack_bridge.scan.scan', fake_scan)
+
+    async def fake_backfill(slack, conn, *, store_dir, bot_user_id, channels=None):
+        return 0
+
+    monkeypatch.setattr('slack_bridge.scan.backfill_usage', fake_backfill)
 
     class _FakeClient:
         async def auth_test(self):

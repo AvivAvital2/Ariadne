@@ -140,12 +140,27 @@ async def test_ask_captures_score_from_log_hit_tool_call():
     reply = await AgentRunner(client).ask('q')
     assert reply.text == 'here is the answer'
     assert reply.score == 8
+    assert reply.outcome == 'hit'        # which feedback tool fired, for per-user usage
+
+
+async def test_ask_captures_miss_outcome_from_log_miss_tool_call():
+    """A ``log_miss`` self-report is recorded as a miss outcome (with its score)."""
+    client = _FakeClient([
+        _assistant('no relevant docs found'),
+        _tool_use('mcp__ariadne__ariadne_log_miss', event_id=1,
+                  feedback='score:2 - nothing relevant'),
+        _result(session_id='S'),
+    ])
+    reply = await AgentRunner(client).ask('q')
+    assert reply.outcome == 'miss'
+    assert reply.score == 2
 
 
 async def test_ask_score_is_none_without_a_log_hit():
     client = _FakeClient([_assistant('ans'), _result(session_id='S')])
     reply = await AgentRunner(client).ask('q')
     assert reply.score is None
+    assert reply.outcome is None         # no feedback tool fired
 
 
 def test_strip_score_line_removes_standalone_rating_lines():

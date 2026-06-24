@@ -20,6 +20,8 @@ READ_ONLY_TOOLS: tuple[str, ...] = (
     'mcp__ariadne__ariadne_source_path',
     'mcp__ariadne__ariadne_config_usage',
     'mcp__ariadne__ariadne_ask',
+    'mcp__ariadne__ariadne_trace_flow',
+    'mcp__ariadne__ariadne_graph',
 )
 
 # Opt-in: these WRITE to the ``usage_events`` table (hit/miss feedback). Off by

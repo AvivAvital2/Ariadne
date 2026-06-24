@@ -19,8 +19,9 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+import slack_usage
 import testimonials
-from slack_bridge.scan import scan
+from slack_bridge.scan import backfill_usage, scan
 
 _BOT = 'UBOT'
 _CHANS = [
@@ -39,7 +40,7 @@ def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(':memory:')
     conn.execute(
         'CREATE TABLE usage_events (id INTEGER PRIMARY KEY AUTOINCREMENT, '
-        'timestamp TEXT, quality_score INTEGER)')
+        'timestamp TEXT, outcome TEXT, quality_score INTEGER)')
     return conn
 
 
@@ -66,12 +67,13 @@ class _FakeSlack:
         self._page(channel, page).append(msg)
 
     def add_qa(self, conn: sqlite3.Connection, channel: str, root_ts: str, question: str,
-               answer_ts: str, answer: str, *, score: int | None = None, page: int = 0,
+               answer_ts: str, answer: str, *, score: int | None = None,
+               outcome: str | None = None, user: str = 'U1', page: int = 0,
                diagram: bool = False) -> None:
         self._page(channel, page).append(
-            {'ts': root_ts, 'user': 'U1', 'text': f'<@{_BOT}> {question}', 'reply_count': 1})
+            {'ts': root_ts, 'user': user, 'text': f'<@{_BOT}> {question}', 'reply_count': 1})
         replies = [
-            {'ts': root_ts, 'user': 'U1', 'text': f'<@{_BOT}> {question}'},
+            {'ts': root_ts, 'user': user, 'text': f'<@{_BOT}> {question}'},
             {'ts': answer_ts, 'user': _BOT, 'text': answer},
         ]
         if diagram:                                 # the bot's rendered-diagram upload, post-answer
@@ -79,9 +81,10 @@ class _FakeSlack:
                 {'id': f'F{answer_ts}', 'mimetype': 'image/png',
                  'url_private': f'https://files.slack/{answer_ts}.png'}]})
         self.replies[(channel, root_ts)] = replies
-        if score is not None:                       # score logged mid-turn, after the answer post
-            conn.execute('INSERT INTO usage_events (timestamp, quality_score) VALUES (?, ?)',
-                         (_iso(float(answer_ts) + 5.0), score))
+        if score is not None or outcome is not None:   # logged mid-turn, after the answer
+            conn.execute(
+                'INSERT INTO usage_events (timestamp, outcome, quality_score) VALUES (?, ?, ?)',
+                (_iso(float(answer_ts) + 5.0), outcome, score))
             conn.commit()
 
     # ---- the async surface scan consumes ------------------------------------
@@ -104,6 +107,10 @@ class _FakeSlack:
         if self.permalink_fail:
             raise RuntimeError('slack hiccup')
         return {'permalink': f'https://slack.example/{channel}/{message_ts}'}
+
+    async def users_info(self, *, user):  # noqa: N802 — mirrors slack_sdk
+        names = {'U_alice': 'alice', 'U_bob': 'bob', 'U_evil': 'evil'}
+        return {'user': {'profile': {'display_name': names.get(user, '')}}}
 
 
 async def test_scan_backfills_scored_public_qa(tmp_path: Path) -> None:
@@ -301,3 +308,44 @@ async def test_scan_downloads_answer_diagrams(tmp_path: Path) -> None:
     assert len(t.images) == 1                                   # the bot's diagram was captured
     assert t.images[0].read_bytes() == b'\x89PNG-diagram-bytes'
     assert fetched and fetched[0][1] == 'xoxb-fake'            # downloaded with the bot token
+
+
+async def test_backfill_usage_per_user(tmp_path: Path) -> None:
+    """``backfill_usage`` replays channel history into the per-user usage store:
+    questions grouped by asker, hit/miss recovered from the ``usage_events``
+    time-join, display names resolved, idempotent via ``source_ts``. Public-only
+    scope by default; counts only (no question text)."""
+    store = testimonials.local_dir(tmp_path)
+    conn = _conn()
+    slack = _FakeSlack([dict(c) for c in _CHANS])
+
+    # Two askers across both public channels; outcomes joined from usage_events.
+    slack.add_qa(conn, 'C_PUB', '1718000100.000000', 'q1', '1718000100.000050',
+                 'a1', user='U_alice', outcome='hit')
+    slack.add_qa(conn, 'C_PUB', '1718000200.000000', 'q2', '1718000200.000050',
+                 'a2', user='U_alice', outcome='miss')
+    slack.add_qa(conn, 'C_PUB2', '1718000300.000000', 'q3', '1718000300.000050',
+                 'a3', user='U_bob', outcome='hit')
+    # A turn with NO usage_events row → still a question, outcome 'answered'.
+    slack.add_qa(conn, 'C_PUB', '1718000400.000000', 'q4', '1718000400.000050',
+                 'a4', user='U_bob')
+    # Private channel: never read, so its asker never appears.
+    slack.add_qa(conn, 'C_PRIV', '1718000500.000000', 'secret', '1718000500.000050',
+                 'priv', user='U_evil')
+    # A usage_events row with an unparseable timestamp must be skipped, not fatal.
+    conn.execute("INSERT INTO usage_events (timestamp, outcome, quality_score) "
+                 "VALUES ('not-a-ts', 'hit', 5)")
+    conn.commit()
+
+    assert await backfill_usage(slack, conn, store_dir=store, bot_user_id=_BOT) == 4
+    rows = {u.actor: u for u in slack_usage.aggregate(store)}
+    assert (rows['U_alice'].name, rows['U_alice'].questions,
+            rows['U_alice'].hits, rows['U_alice'].misses) == ('alice', 2, 1, 1)
+    assert (rows['U_bob'].name, rows['U_bob'].questions,
+            rows['U_bob'].hits, rows['U_bob'].misses) == ('bob', 2, 1, 0)
+    assert 'U_evil' not in rows                       # private channel never read
+    assert 'C_PRIV' not in slack.history_reads
+
+    # Idempotent re-scan: the same history records nothing new (source_ts dedup).
+    assert await backfill_usage(slack, conn, store_dir=store, bot_user_id=_BOT) == 0
+    assert {u.actor for u in slack_usage.aggregate(store)} == {'U_alice', 'U_bob'}

@@ -8,14 +8,16 @@ import re
 import time
 from typing import Any
 
+import slack_usage
 import testimonials
 from schema import _now_iso
 from slack_bridge.diagram import prepare_diagrams
-from slack_bridge.errors import to_user_message
+from slack_bridge.errors import TurnBudgetExceeded, to_user_message
 from slack_bridge.format import to_mrkdwn
 from slack_bridge.images import image_files_in
 from slack_bridge.orchestrator import answer_question
 from slack_bridge.replay import PLACEHOLDER_PREFIX, load_thread
+from slack_bridge.retry import retry_transient
 
 _logger = logging.getLogger(__name__)
 
@@ -146,6 +148,20 @@ def _greet_text(cfg: Any) -> str:
     return '\n'.join(lines)
 
 
+async def _slack_update(slack: Any, *, channel: str, ts: str, text: str) -> None:
+    """Edit a Slack message, retrying transient network blips with backoff.
+
+    A message edit is idempotent (same ts+text twice is a no-op), so a one-off
+    ``TimeoutError``/``ConnectionError`` shouldn't cost the user a computed answer.
+    Rate-limit (429) handling is a Slack-client concern and belongs at the
+    ``slack_sdk`` retry-handler level, not here (this module stays transport-agnostic).
+    """
+    await retry_transient(
+        lambda: slack.chat_update(channel=channel, ts=ts, text=text),
+        on=(TimeoutError, ConnectionError),
+    )
+
+
 async def handle_event(
     *, cfg: Any, pool: Any, slack: Any, bot_user_id: str, ack: Any, event: dict, seed_turns: Any = None, seed_images: Any = None
 ) -> None:
@@ -184,6 +200,7 @@ async def handle_event(
     turn_started = _now_iso()
     turn_t0 = time.monotonic()
     turn_score: int | None = None
+    turn_outcome = 'error'
     task = asyncio.ensure_future(
         answer_question(
             pool=pool,
@@ -209,21 +226,27 @@ async def handle_event(
         if not done:
             # Genuinely still running: tell the user, then give it the rest of the
             # hard budget — the SAME turn, not a restart.
-            await slack.chat_update(channel=channel, ts=placeholder['ts'], text=_slow_notice())
+            await _slack_update(slack, channel=channel, ts=placeholder['ts'], text=_slow_notice())
             done, _ = await asyncio.wait(
                 {task}, timeout=max(0.0, cfg.turn_timeout_seconds - cfg.soft_timeout_seconds),
             )
         if not done:
-            # Hard cap exceeded — genuinely too long. Cancel and surface the timeout
-            # (an expected give-up, not an error worth a traceback).
+            # Hard cap exceeded — WE gave up (the turn was still running). Cancel,
+            # log it, and surface a DISTINCT budget message (naming the limit) so a
+            # too-low cap is visible — not the same text an inner timeout produces.
             task.cancel()
             with contextlib.suppress(BaseException):
                 await task
-            answer = to_user_message(TimeoutError())
+            _logger.warning(
+                'Slack turn hit its %ss budget — cancelled (channel=%s thread=%s)',
+                cfg.turn_timeout_seconds, channel, thread_ts,
+            )
+            answer = to_user_message(TurnBudgetExceeded(cfg.turn_timeout_seconds))
         else:
             reply = await task  # the real result — or re-raises the turn's real error
             answer = (getattr(reply, 'text', '') or '').strip() or '(no answer returned)'
             turn_score = getattr(reply, 'score', None)
+            turn_outcome = getattr(reply, 'outcome', None) or 'answered'
     except Exception as exc:  # noqa: BLE001 -- surface honestly (timeout included); never mask
         _logger.exception('Slack turn failed (channel=%s thread=%s)', channel, thread_ts)
         answer = to_user_message(exc)
@@ -231,8 +254,8 @@ async def handle_event(
     # Render any DOT diagrams to PNGs off the event loop (dot is a subprocess).
     # Missing/invalid dot degrades to a warning + the DOT source inside prepared.text.
     prepared = await asyncio.to_thread(prepare_diagrams, answer)
-    await slack.chat_update(
-        channel=channel, ts=placeholder['ts'], text=to_mrkdwn(prepared.text),
+    await _slack_update(
+        slack, channel=channel, ts=placeholder['ts'], text=to_mrkdwn(prepared.text),
     )
     if prepared.images:
         await asyncio.gather(*(
@@ -266,6 +289,36 @@ async def handle_event(
                 permalink=permalink,
                 images=prepared.images,
             )
+
+    with contextlib.suppress(Exception):
+        name = await _resolve_user_name(slack, user)
+        slack_usage.record(
+            testimonials.local_dir(cfg.ariadne_dir),
+            asked_at=turn_started,
+            actor=user,
+            name=name,
+            outcome=turn_outcome,
+            score=turn_score,
+        )
+
+
+async def _resolve_user_name(slack, user: str) -> str:
+    """Best-effort Slack display name for a user id; the id itself on
+    failure, so a transient Slack hiccup never costs the usage record its
+    actor. No caching: names stay fresh and there is no cross-turn state."""
+    if not user:
+        return ''
+    try:
+        resp = await slack.users_info(user=user)
+        profile = (resp.get('user') or {}).get('profile') or {}
+        return (
+            profile.get('display_name')
+            or profile.get('real_name')
+            or (resp.get('user') or {}).get('name')
+            or user
+        )
+    except Exception:
+        return user
 
 
 def is_dm_message(event: dict) -> bool:

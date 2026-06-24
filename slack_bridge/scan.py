@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
+import slack_usage
 import testimonials
 from slack_bridge.images import ImageRef, download_images, image_files_in
 
@@ -36,6 +37,7 @@ class _QA(NamedTuple):
     answer: str
     ts: str       # the bot answer's Slack message ts — the dedup + permalink key
     image_refs: tuple[ImageRef, ...] = ()   # the bot's diagram uploads in the thread
+    user: str = ''
 
 
 def _epoch(slack_ts: str) -> float:
@@ -129,13 +131,14 @@ async def qa_pairs(slack: Any, channel: str, bot_user_id: str) -> list[_QA]:
             'messages',
         )
         question: str | None = None
+        question_user: str = ''
         last = None      # index in `out` of this thread's answer, for diagram attach
         for msg in replies:
             is_bot = msg.get('user') == bot_user_id
             text = (msg.get('text') or '').strip()
             refs = tuple(image_files_in([msg])) if is_bot else ()   # bot diagram uploads
             if is_bot and question and text:
-                out.append(_QA(question=question, answer=text, ts=msg['ts'], image_refs=refs))
+                out.append(_QA(question=question, answer=text, ts=msg['ts'], image_refs=refs, user=question_user))
                 last = len(out) - 1
                 question = None
             elif is_bot and refs and last is not None:
@@ -143,6 +146,7 @@ async def qa_pairs(slack: Any, channel: str, bot_user_id: str) -> list[_QA]:
                 out[last] = out[last]._replace(image_refs=out[last].image_refs + refs)
             elif not is_bot and text:
                 question = _strip_mentions(text)
+                question_user = msg.get('user', '')
     return out
 
 
@@ -236,4 +240,93 @@ async def scan(
     return recorded
 
 
-__all__ = ['public_channels', 'qa_pairs', 'scan', 'scored_events']
+__all__ = ['backfill_usage', 'outcome_events', 'public_channels', 'qa_pairs',
+           'scan', 'scored_events']
+
+
+def outcome_events(conn: sqlite3.Connection) -> list[tuple[float, str | None, int | None]]:
+    """All usage events as ``(epoch, outcome, score)``, time-sorted.
+
+    A row whose timestamp won't parse is skipped — never fatal.
+    """
+    rows = conn.execute(
+        'SELECT timestamp, outcome, quality_score FROM usage_events').fetchall()
+    out: list[tuple[float, str | None, int | None]] = []
+    for ts, outcome, score in rows:
+        try:
+            out.append((_iso_epoch(ts), outcome, score))
+        except (TypeError, ValueError):
+            continue
+    out.sort(key=lambda r: r[0])
+    return out
+
+
+def _outcome_for_turn(
+    events: list[tuple[float, str | None, int | None]],
+    answer_epoch: float,
+    answer_epochs: list[float],
+    window: float,
+) -> tuple[str | None, int | None]:
+    """The ``(outcome, score)`` logged during this turn, or ``(None, None)``.
+
+    Same turn-boundary join as :func:`_score_for_turn`: from the answer's
+    post-time to the next answer, capped at ``window`` — so an unscored turn
+    can't borrow a neighbour's outcome. The last event in the span wins.
+    """
+    next_epoch = min((e for e in answer_epochs if e > answer_epoch),
+                     default=answer_epoch + window)
+    hi = min(next_epoch, answer_epoch + window)
+    in_span = [(o, s) for (e, o, s) in events if answer_epoch <= e < hi]
+    return in_span[-1] if in_span else (None, None)
+
+
+async def backfill_usage(
+    slack: Any,
+    conn: sqlite3.Connection,
+    *,
+    store_dir: Any,
+    bot_user_id: str,
+    window_seconds: float = _DEFAULT_WINDOW_SECONDS,
+    channels: list[str] | None = None,
+) -> int:
+    """Backfill the per-user usage store from channel history. Returns #recorded.
+
+    Reconstructs each past turn's asker from Slack (the question message's
+    ``user``), attaches the hit/miss the DB logged for that turn (time-joined
+    against ``usage_events``; ``answered`` when none), resolves the display
+    name, and records to :mod:`slack_usage` — idempotent via the answer ts
+    (``source_ts``) so a re-scan only adds new turns. Public-only by default;
+    pass ``channels`` to target specific (incl. private) channels the bot is
+    in. No agent run.
+    """
+    from slack_bridge.handlers import _resolve_user_name
+
+    events = outcome_events(conn)
+    targets = list(channels) if channels is not None else await public_channels(slack)
+    pairs: list[_QA] = []
+    for channel in targets:
+        pairs.extend(await qa_pairs(slack, channel, bot_user_id))
+
+    already = slack_usage.recorded_source_ts(store_dir)
+    answer_epochs = [_epoch(qa.ts) for qa in pairs]
+    names: dict[str, str] = {}
+    recorded = 0
+    for qa in pairs:
+        if qa.ts in already:
+            continue
+        outcome, score = _outcome_for_turn(
+            events, _epoch(qa.ts), answer_epochs, window_seconds)
+        if qa.user not in names:
+            names[qa.user] = await _resolve_user_name(slack, qa.user)
+        slack_usage.record(
+            store_dir,
+            asked_at=datetime.fromtimestamp(_epoch(qa.ts), UTC).isoformat(),
+            actor=qa.user,
+            name=names[qa.user],
+            outcome=outcome or 'answered',
+            score=score,
+            source_ts=qa.ts,
+        )
+        recorded += 1
+    _logger.info('Backfilled %d per-user usage record(s) into %s', recorded, store_dir)
+    return recorded

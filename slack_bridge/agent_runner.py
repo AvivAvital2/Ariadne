@@ -18,6 +18,7 @@ class AgentReply:
     is_error: bool
     session_id: str | None
     score: int | None = None
+    outcome: str | None = None
 
 
 _SCORE_LINE_RE = re.compile(
@@ -108,6 +109,7 @@ class AgentRunner:
         parts: list[str] = []
         result: Any = None
         score: int | None = None
+        outcome: str | None = None
         # Duck-typed extraction (resilient to SDK field changes): assistant text
         # comes from TextBlocks inside a message's ``content``; the terminal
         # ResultMessage is the one carrying both ``is_error`` and ``result``. The
@@ -125,6 +127,7 @@ class AgentRunner:
                     if isinstance(name, str) and name.endswith(
                         ('ariadne_log_hit', 'ariadne_log_miss')
                     ):
+                        outcome = 'hit' if name.endswith('ariadne_log_hit') else 'miss'
                         feedback = (getattr(block, 'input', None) or {}).get('feedback', '')
                         m = re.search(r'score:\s*(\d+)', feedback or '')
                         if m:
@@ -140,8 +143,7 @@ class AgentRunner:
             text=text_out,
             is_error=bool(getattr(result, 'is_error', False)),
             session_id=getattr(result, 'session_id', None),
-            score=score,
-        )
+            score=score, outcome=outcome)
 
     async def aclose(self) -> None:
         try:
