@@ -16,6 +16,8 @@ from rich.console import Console
 from rich.table import Table
 
 from config import get_config
+from contextlib import contextmanager
+from progress_util import _update_persist_task
 
 console = Console()
 
@@ -284,6 +286,40 @@ def _plan_indexing(entries: list, count_fn) -> list[tuple]:
     # Smallest volume first; kind name breaks ties deterministically.
     ordered = sorted(groups, key=lambda k: (totals[k], k or ''))
     return [(k, groups[k], totals[k]) for k in ordered]
+
+
+@contextmanager
+def persist_progress(console, phase_label):
+    """Determinate progress bar with a live ETA for a persist step that reports
+    ``(label, completed, total)``. One task, reconfigured per source ``label``
+    (per-file steps get a fresh bar per source; per-source steps with a constant
+    label get one cumulative bar). Transient, so the step's summary line stays.
+    Yields the reporter to hand to the persist function's ``progress_callback``."""
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        SpinnerColumn,
+        TaskProgressColumn,
+        TextColumn,
+        TimeElapsedColumn,
+        TimeRemainingColumn,
+    )
+
+    columns = (
+        SpinnerColumn(),
+        TextColumn('[bold cyan]{task.description}'),
+        BarColumn(),
+        TaskProgressColumn(),
+        TextColumn('[dim]{task.fields[detail]}'),
+        TextColumn('·'),
+        TimeElapsedColumn(),
+        TextColumn('eta'),
+        TimeRemainingColumn(),
+    )
+    state: dict = {}
+    with Progress(*columns, console=console, transient=True) as progress:
+        yield lambda label, completed, total: _update_persist_task(
+            progress, state, phase_label, label, completed, total)
 
 
 def cmd_index(
@@ -683,6 +719,7 @@ def cmd_index(
             persist_api_endpoints,
             persist_config_reads,
             persist_config_values,
+            persist_data_model,
             persist_express_routes,
             persist_js_http_clients,
             persist_python_http_clients,
@@ -694,18 +731,28 @@ def cmd_index(
 
         source_pairs: list[tuple[str, Path]] = []
         swagger_pairs: list[tuple[str, Path, list[str]]] = []
+        schema_paths_by_source: dict[str, list[str]] = {}
+        dialect_by_source: dict[str, str] = {}
+        max_staleness_by_source: dict[str, int | None] = {}
         for name in cfg.sources:
             other_sc = cfg.get_source_config(name)
             if other_sc is None:
                 continue
             other_root = Path(other_sc.path).expanduser().resolve()
             source_pairs.append((name, other_root))
+            dialect_by_source[name] = other_sc.sql_dialect
+            # honor a source's ignore_staleness for the data-model SCIP load
+            # (effective_scip_staleness_days -> None disables the age gate)
+            max_staleness_by_source[name] = cfg.effective_scip_staleness_days(name)
+            if other_sc.schema_sql:
+                schema_paths_by_source[name] = list(other_sc.schema_sql)
             if other_sc.swagger_paths:
                 swagger_pairs.append((
                     name, other_root, list(other_sc.swagger_paths),
                 ))
+        with persist_progress(console, 'cross-source graph') as report:
 
-        persisted = persist_all_sources(Path(cfg.db_path), source_pairs)
+            persisted = persist_all_sources(Path(cfg.db_path), source_pairs, progress_callback = report)
         if persisted and not getattr(args, 'quiet', False):
             console.print(
                 f'[green]Persisted cross-source graph '
@@ -725,12 +772,13 @@ def cmd_index(
                     f'[green]Ingested {endpoints} API endpoint(s) '
                     f'from Swagger specs → library_scip[/green]',
                 )
+        with persist_progress(console, 'string literals') as report:
 
-        # Layer C prerequisite — populate ``string_literals``. The
-        # route extractors below look up literal path values by SCIP
-        # position; without this, every literal-arg endpoint silently
-        # vanishes from the route walks.
-        literals = persist_string_literals(Path(cfg.db_path), source_pairs)
+            # Layer C prerequisite — populate ``string_literals``. The
+            # route extractors below look up literal path values by SCIP
+            # position; without this, every literal-arg endpoint silently
+            # vanishes from the route walks.
+            literals = persist_string_literals(Path(cfg.db_path), source_pairs, progress_callback = report)
         if literals and not getattr(args, 'quiet', False):
             console.print(
                 f'[green]Indexed {literals} string literal(s) → '
@@ -754,6 +802,18 @@ def cmd_index(
         if config_reads and not getattr(args, 'quiet', False):
             console.print(
                 f'[green]Indexed {config_reads} config read(s) → '
+                f'library_scip[/green]',
+            )
+        with persist_progress(console, 'data model') as report:
+            data_rows = persist_data_model(
+                Path(cfg.db_path), source_pairs,
+                schema_paths_by_source=schema_paths_by_source,
+                dialect_by_source=dialect_by_source,
+                max_staleness_by_source=max_staleness_by_source,
+            progress_callback = report)
+        if data_rows and not getattr(args, 'quiet', False):
+            console.print(
+                f'[green]Indexed {data_rows} data-model row(s) → '
                 f'library_scip[/green]',
             )
 
@@ -869,6 +929,53 @@ def _ensure_gitignore_entry(source_path: Path, line: str) -> None:
         gitignore.write_text(line + '\n', encoding='utf-8')
 
 
+_PRESERVED_ARTIFACT_KEYS = (
+    'scip_path', 'indexed_at', 'indexer_version', 'vue_mapping',
+)
+
+
+def _carry_built_artifacts(manifest_dir: Path, manifest: dict) -> dict:
+    """Preserve a prior ``index`` run's backfilled artifact refs across a
+    ``discover`` rewrite, so re-discovering an already-indexed source does NOT
+    orphan its built ``.scip``.
+
+    ``discover`` knows only topology (kind/cwd/markers); ``index`` is what
+    backfills each entry's ``scip_path`` (the field ``load_source_from_manifest``
+    binds). A plain manifest rewrite would drop it — silently un-indexing the
+    source for every SCIP feature until a full re-index. Here we carry the
+    artifact fields forward, matching prior entries to freshly-discovered ones
+    by ``(kind, cwd, entry_kind)`` and only when the referenced ``.scip`` still
+    exists on disk (never a dangling ref). Removed entries are not carried; new
+    entries stay unbuilt; a missing/unreadable prior manifest preserves nothing.
+    """
+    import json
+
+    manifest_path = manifest_dir / 'manifest.json'
+    if not manifest_path.exists():
+        return manifest
+    try:
+        prior = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (ValueError, OSError):
+        return manifest
+    by_key = {
+        (e.get('kind'), e.get('cwd'), e.get('entry_kind')): e
+        for e in prior.get('indexers', ())
+    }
+    for entry in manifest.get('indexers', ()):
+        old = by_key.get(
+            (entry.get('kind'), entry.get('cwd'), entry.get('entry_kind')),
+        )
+        if old is None:
+            continue
+        scip_rel = old.get('scip_path')
+        if not scip_rel or not (manifest_dir / scip_rel).exists():
+            continue
+        for key in _PRESERVED_ARTIFACT_KEYS:
+            if key in old:
+                entry[key] = old[key]
+    return manifest
+
+
 def run_discover(cfg, source_name: str) -> dict:
     """Non-interactive ``discover`` core, shared by ``cmd_discover`` and the
     ``ariadne_discover`` MCP tool so detection + persistence can't drift.
@@ -930,6 +1037,7 @@ def run_discover(cfg, source_name: str) -> dict:
     manifest_dir.mkdir(exist_ok=True)
     (manifest_dir / 'intermediate').mkdir(exist_ok=True)
     manifest_path = manifest_dir / 'manifest.json'
+    manifest = _carry_built_artifacts(manifest_dir, manifest)
     manifest_path.write_text(
         json.dumps(manifest, indent=2), encoding='utf-8')
     _ensure_gitignore_entry(source_path, '.ariadne/')
@@ -1153,6 +1261,7 @@ def cmd_discover(args: argparse.Namespace) -> int:
         # layout setup in one place.
         (manifest_dir / 'intermediate').mkdir(exist_ok=True)
         manifest_path = manifest_dir / 'manifest.json'
+        manifest = _carry_built_artifacts(manifest_dir, manifest)
         manifest_path.write_text(
             json.dumps(manifest, indent=2),
             encoding='utf-8',

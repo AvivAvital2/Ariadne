@@ -176,6 +176,95 @@ async def ariadne_ask(
     )
 
 
+def ariadne_data(symbol: str | None = None, table: str | None = None,
+                 source: str | None = None,
+                 min_confidence: str | None = None) -> dict:
+    """What data a code symbol touches, or who touches a table — the cheap,
+    graph-free data query view (design §6). Answered by plain SQL over
+    ``schema_symbols`` + ``data_access``; transitive/cross-source impact stays
+    on the SCIP-graph path (``ariadne_impact_radius``).
+
+    Pass exactly one selector:
+      - ``symbol``: a code symbol's canonical_id → the tables/columns it
+        accesses (role-typed: write/filter/project/order) plus the column it
+        defines (``maps_to``).
+      - ``table``: a table name → the consumers that write/read it, split and
+        labelled by column. ``source`` optionally disambiguates a table name
+        shared across sources.
+
+    Only facts at/above ``min_confidence`` are returned — the read boundary
+    (§6a). When unset it follows the configured ``sql_assert_min_confidence``
+    (default ``resolved``); weaker facts are held back as gaps.
+    """
+    import sqlite3
+
+    from config import get_config
+    from docgen.sql_query_views import accesses_to_table, data_touched_by
+
+    if (symbol is None) == (table is None):
+        return {'error': 'provide exactly one of symbol or table'}
+    conn = sqlite3.connect(get_config().db_path)
+    try:
+        if symbol is not None:
+            touches = data_touched_by(conn, symbol, min_confidence=min_confidence)
+            return {
+                'symbol': symbol,
+                'touches': [{'schema_id': s, 'role': r} for s, r in touches],
+            }
+        return accesses_to_table(
+            conn, table, source=source, min_confidence=min_confidence)
+    finally:
+        conn.close()
+
+
+def ariadne_schema(table: str, source: str | None = None,
+                   min_confidence: str | None = None) -> dict:
+    """The schema of a table — its columns and their types/nullability/keys —
+    the graph-free ``ariadne_schema`` query view (design §6). Plain SQL over
+    ``schema_symbols``, filtered to the confidence floor; ``source`` optionally
+    disambiguates a table name shared across sources.
+    """
+    import sqlite3
+
+    from config import get_config
+    from docgen.sql_query_views import schema_of_table
+
+    conn = sqlite3.connect(get_config().db_path)
+    try:
+        return schema_of_table(
+            conn, table, source=source, min_confidence=min_confidence)
+    finally:
+        conn.close()
+
+
+def ariadne_data_health(source: str) -> dict:
+    """Data-model diagnostics for a source (design §3a/§5.0 "surface, don't
+    guess" + §10 Phase 2): the gaps recorded at index time (undecodable query
+    forms, schema drift/typo) and dead columns (declared but unaccessed). Plain
+    SQL over the data-model tables; db_path from config.
+
+    Args:
+        source: the source name to report on.
+    """
+    import sqlite3
+
+    from config import get_config
+    from docgen.sql_query_views import data_model_gaps, dead_columns
+
+    conn = sqlite3.connect(get_config().db_path)
+    try:
+        return {
+            'source': source,
+            'gaps': data_model_gaps(conn, source),
+            'dead_columns': [
+                {'table': table, 'column': column}
+                for table, column in dead_columns(conn, source)
+            ],
+        }
+    finally:
+        conn.close()
+
+
 def register_tools(mcp) -> None:
     """Register knowledge tools with the MCP server."""
     from mcp.types import ToolAnnotations
@@ -221,3 +310,19 @@ def register_tools(mcp) -> None:
         readOnlyHint=True,
         openWorldHint=True,
     ))(ariadne_ask)
+    mcp.tool(annotations=ToolAnnotations(
+        title='Data Access (query view)',
+        readOnlyHint=True,
+        openWorldHint=False,
+    ))(ariadne_data)
+    
+    mcp.tool(annotations=ToolAnnotations(
+        title='Table Schema (query view)',
+        readOnlyHint=True,
+        openWorldHint=False,
+    ))(ariadne_schema)
+    mcp.tool(annotations=ToolAnnotations(
+        title='Data Model Health (gaps + dead columns)',
+        readOnlyHint=True,
+        openWorldHint=False,
+    ))(ariadne_data_health)

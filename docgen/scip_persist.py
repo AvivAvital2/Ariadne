@@ -15,9 +15,10 @@ from docgen.scip_cross_source import (
     CrossSourceGraph,
     load_source_from_manifest,
 )
+from progress_util import iter_with_progress
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
     from pathlib import Path
 
 
@@ -26,6 +27,7 @@ def persist_all_sources(
     sources: 'Iterable[tuple[str, Path]]',
     *,
     index_factory=None,
+    progress_callback: 'Callable[[str, int, int], None] | None' = None,
 ) -> int:
     """Materialize the cross-source SCIP graph for every source with a
     current manifest and write it to ``library_scip`` tables.
@@ -56,7 +58,7 @@ def persist_all_sources(
     graph = CrossSourceGraph()
     loaded_pairs: list[tuple[str, _P]] = []
 
-    for source_name, source_root in sources:
+    for source_name, source_root in iter_with_progress(sources, progress_callback, ''):
         manifest = _P(source_root) / '.ariadne' / 'manifest.json'
         if not manifest.exists():
             continue
@@ -174,6 +176,7 @@ def persist_api_endpoints(
 def persist_string_literals(
     db_path: 'Path',
     sources: 'Iterable[tuple[str, Path]]',
+    progress_callback: 'Callable[[str, int, int], None] | None' = None,
 ) -> int:
     """For each ``(source_name, source_root)``, ingest every string
     literal from ``<source_root>/.ariadne/index.scip`` into the
@@ -204,7 +207,7 @@ def persist_string_literals(
                     source_name=source_name,
                     source_root=source_root,
                     conn=conn,
-                )
+                progress_callback = progress_callback)
                 conn.commit()
                 total += count
     finally:
@@ -535,8 +538,151 @@ def persist_akka_http_endpoints(
     return total
 
 
+def persist_data_model(db_path, sources, *, index_factory=None, strategies=None,
+                       schema_paths_by_source=None, dialect_by_source=None,
+                       max_staleness_by_source=None, progress_callback=None):
+    """Populate ``schema_symbols`` + ``data_access`` for every source — the
+    §10 wiring that makes the SQL data model live on a real ``ariadne index``.
+
+    Per source: load its SCIP indexes, run the ORM binders
+    (``persist_schema_symbols`` Layer 1, ``persist_data_access_orm`` Layer 2),
+    then the raw-SQL binder. Then promote against the schema witnesses — any
+    configured ``CREATE TABLE`` dump (``persist_schema_ddl``), the source's own
+    Django migrations (``persist_schema_from_migrations``, auto-discovered at
+    ``<app>/migrations/*.py``), AND its Alembic migrations
+    (``persist_schema_from_alembic``, auto-discovered at ``versions/*.py`` — the
+    SQLAlchemy promotion path) — the design-faithful per-ORM witnesses. Each
+    binder's surfaced gaps (undecodable forms, drift/typo) are COLLECTED and
+    persisted to ``data_model_gaps`` (§3a/§5.0 "surface, don't guess"), not
+    silently dropped. Idempotent. A source whose manifest/.scip is missing or
+    stale is skipped optimistically (raw-SQL + schema still run).
+
+    ``index_factory`` / ``strategies`` / ``schema_paths_by_source`` are
+    injectable for tests. Returns the total schema + access rows written.
+    """
+    import json
+    from pathlib import Path as _P
+
+    from docgen.orm_bindings import DEFAULT_STRATEGIES, persist_schema_symbols
+    from docgen.orm_bindings.access import persist_data_access_orm
+    from docgen.sql_access import persist_data_access_rawsql
+    from docgen.sql_schema import (
+        persist_schema_ddl,
+        persist_schema_from_alembic,
+        persist_schema_from_migrations,
+    )
+    from library import Library
+
+    if strategies is None:
+        strategies = list(DEFAULT_STRATEGIES)
+
+    total = 0
+    library = Library(db_path)
+    try:
+        for source_name, source_root in iter_with_progress(sources, progress_callback, ''):
+            graph = CrossSourceGraph()
+            try:
+                load_source_from_manifest(
+                    graph, source_name, _P(source_root),
+                    index_factory=index_factory,
+                    max_staleness_days=(max_staleness_by_source or {}).get(source_name, 7),
+                )
+            except Exception:
+                # Optimistic post-index persist (as persist_all_sources): a
+                # missing/stale manifest or .scip skips ORM binding for this
+                # source — raw-SQL + schema below still run off persisted data.
+                graph = None
+            with library._conn_provider.acquire() as conn:
+                gaps = []
+                if graph is not None:
+                    # Surface, don't guess (§3a/§5.0): the load succeeded, so the
+                    # manifest is present and valid. If it declares more indexers
+                    # than were bound here, those .scip artifacts aren't built yet
+                    # (discover ran, index didn't) — record a gap instead of a
+                    # silent 0 rows that looks identical to "no data model".
+                    loaded = len(graph._sources.get(source_name, ()))
+                    declared = len(json.loads(
+                        (_P(source_root) / '.ariadne' / 'manifest.json')
+                        .read_text(encoding='utf-8')).get('indexers', ()))
+                    if declared > loaded:
+                        gaps.append(
+                            f'{source_name}: only {loaded} of {declared} declared '
+                            f'indexer(s) are registered in the manifest with a built '
+                            f'.scip — the data model bound those; run '
+                            f'`ariadne index --source {source_name}` to (re)build '
+                            f'the rest'
+                        )
+                    for entry in graph._sources.get(source_name, ()):
+                        sb = persist_schema_symbols(
+                            conn, source_name, entry.index, strategies=strategies)
+                        ao = persist_data_access_orm(
+                            conn, source_name, entry.index, strategies=strategies)
+                        total += sb.nodes_written + ao.rows_written
+                        gaps.extend(sb.gaps)
+                        gaps.extend(ao.gaps)
+                rs = persist_data_access_rawsql(conn, source_name)
+                total += rs.rows_written
+                gaps.extend(rs.gaps)
+                schema_sqls = [
+                    f.read_text(encoding='utf-8')
+                    for rel in (schema_paths_by_source or {}).get(source_name, ())
+                    if (f := _P(source_root) / rel).exists()
+                ]
+                if schema_sqls:
+                    gaps.extend(
+                        persist_schema_ddl(
+                            conn, source_name, '\n'.join(schema_sqls), dialect=(dialect_by_source or {}).get(source_name, 'postgres')).gaps)
+                # Django migrations (committed output) — the design-faithful
+                # per-ORM promotion witness; auto-discovered, no config needed.
+                migrations = [
+                    (mig.parent.parent.name, mig.read_text(encoding='utf-8'))
+                    for mig in sorted(_P(source_root).glob('**/migrations/*.py'))
+                    if mig.name != '__init__.py'
+                ]
+                if migrations:
+                    gaps.extend(persist_schema_from_migrations(
+                        conn, source_name, migrations).gaps)
+                # Alembic migrations (op.create_table/add_column) — a distinct
+                # migration witness for Python ORMs (SQLAlchemy); auto-discovered
+                # at versions/*.py, no config needed.
+                alembic = [
+                    mig.read_text(encoding='utf-8')
+                    for mig in sorted(_P(source_root).glob('**/versions/*.py'))
+                    if mig.name != '__init__.py'
+                ]
+                if alembic:
+                    gaps.extend(persist_schema_from_alembic(
+                        conn, source_name, alembic).gaps)
+                # Referential integrity (design §9a): every data_access row must reference a
+                # declared schema_symbol. The binders resolve/create their refs, so an orphan
+                # signals a regression, not normal operation -- surfaced as a gap here, never a
+                # silent read-time skip.
+                orphans = [
+                    sid for (sid,) in conn.execute(
+                        'SELECT DISTINCT da.schema_symbol_id FROM data_access da '
+                        'WHERE da.source_name = ? AND NOT EXISTS (SELECT 1 FROM schema_symbols '
+                        'ss WHERE ss.canonical_id = da.schema_symbol_id)', (source_name,))
+                ]
+                gaps.extend(
+                    f'{source_name}: data_access references undeclared schema symbol {sid!r} '
+                    f'-- referential-integrity orphan (no witness declared it)'
+                    for sid in sorted(orphans))
+                # Surface, don't discard (§3a/§5.0): persist this source's gaps
+                # so the diagnostics are reachable, not dropped on the floor.
+                conn.execute(
+                    'DELETE FROM data_model_gaps WHERE source_name = ?',
+                    (source_name,))
+                conn.executemany(
+                    'INSERT INTO data_model_gaps (source_name, detail) VALUES (?, ?)',
+                    [(source_name, g) for g in gaps])
+                conn.commit()
+    finally:
+        library.close()
+    return total
+
+
 __all__ = [
-    'persist_akka_http_endpoints', 'persist_all_sources', 'persist_api_endpoints', 'persist_config_reads', 'persist_config_values', 'persist_express_routes', 'persist_js_http_clients', 'persist_python_http_clients', 'persist_python_routes', 'persist_scala_http_clients', 'persist_string_literals', 'persist_url_resolver'
+    'persist_akka_http_endpoints', 'persist_all_sources', 'persist_api_endpoints', 'persist_config_reads', 'persist_config_values', 'persist_express_routes', 'persist_js_http_clients', 'persist_python_http_clients', 'persist_python_routes', 'persist_scala_http_clients', 'persist_string_literals', 'persist_url_resolver', 'persist_data_model'
 ]
 
 

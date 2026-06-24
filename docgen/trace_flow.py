@@ -21,7 +21,8 @@ Tier-priority cascade per cursor:
    declines (returns ``None``).
 
 Within-language locality is preferred — boundary hops only fire when
-the static within-language graph runs out. This matches the design.
+the static within-language graph runs out. This matches the design
+in ``designs/scip-everywhere-remaining.md:636-754``.
 
 The function is sync. The MCP-tool wrapper (Phase 9 wiring slice)
 awaits it from an async context — sync core is simpler to test and
@@ -86,6 +87,7 @@ class TraceFlowResult:
     hops: list[HopInfo] = field(factory=list)
     truncated: bool = False
     incomplete: bool = False
+    data_touches: dict = field(factory=dict)
 
 
 def _lookup_start_metadata(
@@ -261,7 +263,12 @@ def trace_flow(
         ))
         visited.add(next_sym)
         queue.append((next_sym, remaining - 1))
-
+    from docgen.sql_query_views import data_touched_by
+    data_touches = {}
+    for sym in visited:
+        touched = data_touched_by(conn, sym)
+        if touched:
+            data_touches[sym] = touched
     return TraceFlowResult(
         start_symbol_id=start_symbol,
         start_qualified_name=start_qn,
@@ -269,6 +276,7 @@ def trace_flow(
         hops=hops,
         truncated=truncated,
         incomplete=incomplete,
+        data_touches=data_touches,
     )
 
 

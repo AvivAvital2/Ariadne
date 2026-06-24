@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+from cli.index import cmd_index
+
 
 def _make_args(**kwargs) -> argparse.Namespace:
     defaults = {
@@ -92,21 +94,22 @@ def _activate_yaml(yaml_path: Path) -> None:
 def test_cmd_index_invokes_all_persist_steps_in_dependency_order(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """The 12-step persist chain runs in the order the dependency
+    """The 13-step persist chain runs in the order the dependency
     graph requires:
 
-      1. persist_all_sources       (scip_symbols → enables steps 7–12)
+      1. persist_all_sources       (scip_symbols → enables steps 8–13)
       2. persist_api_endpoints     (Swagger → api_endpoints)
-      3. persist_string_literals   (req'd by route extractors below)
+      3. persist_string_literals   (req'd by route extractors + raw-SQL below)
       4. persist_config_values     (HOCON/YAML/dotenv key→value)
       5. persist_config_reads      (getter call sites; needs 3 + 4)
-      6. persist_akka_http_endpoints
-      7. persist_python_routes
-      8. persist_express_routes
-      9. persist_python_http_clients
-      10. persist_js_http_clients
-      11. persist_scala_http_clients
-      12. persist_url_resolver     (joins clients to endpoints)
+      6. persist_data_model        (schema_symbols/data_access; raw-SQL needs 3)
+      7. persist_akka_http_endpoints
+      8. persist_python_routes
+      9. persist_express_routes
+      10. persist_python_http_clients
+      11. persist_js_http_clients
+      12. persist_scala_http_clients
+      13. persist_url_resolver     (joins clients to endpoints)
 
     Every wrapper records its name when called. The recorded order
     must match the contract.
@@ -145,6 +148,7 @@ def test_cmd_index_invokes_all_persist_steps_in_dependency_order(
         'persist_string_literals',
         'persist_config_values',
         'persist_config_reads',
+        'persist_data_model',
         'persist_akka_http_endpoints',
         'persist_python_routes',
         'persist_express_routes',
@@ -210,6 +214,7 @@ def test_cmd_index_skips_persist_api_endpoints_when_no_swagger_declared(
         'persist_string_literals',
         'persist_config_values',
         'persist_config_reads',
+        'persist_data_model',
         'persist_akka_http_endpoints',
         'persist_python_routes',
         'persist_express_routes',
@@ -273,6 +278,7 @@ def test_cmd_index_dry_run_skips_entire_persist_chain(
         'persist_string_literals',
         'persist_config_values',
         'persist_config_reads',
+        'persist_data_model',
         'persist_akka_http_endpoints',
         'persist_python_routes',
         'persist_express_routes',
@@ -295,3 +301,102 @@ def test_cmd_index_dry_run_skips_entire_persist_chain(
     assert invocation_log == [], (
         f'dry-run must not call any persist_* step; got log={invocation_log}'
     )
+
+
+def test_cmd_index_passes_configured_schema_sql_to_persist_data_model(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A source's config (``schema_sql``, ``sql_dialect``, ``ignore_staleness``)
+    is read by cmd_index and handed to ``persist_data_model`` as
+    ``schema_paths_by_source`` / ``dialect_by_source`` / ``max_staleness_by_source``
+    (None when staleness-exempt, so the data-model SCIP load skips the age gate).
+    Guards the config→persist wiring."""
+    from cli.index import cmd_index
+
+    source_root = _setup_python_source(tmp_path)
+    (source_root / 'schema.sql').write_text('CREATE TABLE t (a TEXT);')
+    yaml_path = tmp_path / 'ariadne.yaml'
+    db_path = tmp_path / 'ariadne.db'
+    yaml_path.write_text(
+        f'db_path: {db_path}\n'
+        f'sources:\n  webapp:\n    path: {source_root}\n'
+        f'    schema_sql: [schema.sql]\n'
+        f'    sql_dialect: mysql\n'
+        f'    ignore_staleness: true\n',
+        encoding='utf-8',
+    )
+    _activate_yaml(yaml_path)
+
+    captured: dict = {}
+
+    def _spy(name: str):
+        def f(*args, **kwargs):
+            if name == 'persist_data_model':
+                captured.update(kwargs)
+            return 0
+        return f
+
+    for name in [
+        'persist_all_sources', 'persist_api_endpoints', 'persist_string_literals',
+        'persist_config_values', 'persist_config_reads', 'persist_data_model',
+        'persist_akka_http_endpoints', 'persist_python_routes',
+        'persist_express_routes', 'persist_python_http_clients',
+        'persist_js_http_clients', 'persist_scala_http_clients',
+        'persist_url_resolver',
+    ]:
+        monkeypatch.setattr(f'docgen.scip_persist.{name}', _spy(name))
+
+    cmd_index(_make_args(source='webapp'),
+              indexer_registry={'python': _FakeAdapter()}, merger=None)
+
+    assert captured.get('schema_paths_by_source') == {'webapp': ['schema.sql']}
+    # the per-source dialect is threaded too; the null 'ghost' source is skipped
+    assert captured.get('dialect_by_source') == {'webapp': 'mysql'}
+    # ignore_staleness: true -> the SCIP age gate is disabled (None) for this
+    # source's data-model load (effective_scip_staleness_days)
+    assert captured.get('max_staleness_by_source') == {'webapp': None}
+
+
+def test_cmd_index_drives_progress_bars_for_heavy_persist_steps(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The 3 long persist steps run inside ``persist_progress`` and each
+    receives a callable ``progress_callback`` (the bar's reporter) — so
+    ``ariadne index`` shows a live bar+ETA instead of a frozen screen. The
+    lighter steps run without one (None)."""
+    source_root = _setup_python_source(tmp_path)
+    yaml_path = tmp_path / 'ariadne.yaml'
+    db_path = tmp_path / 'ariadne.db'
+    yaml_path.write_text(
+        f'db_path: {db_path}\nsources:\n  webapp:\n    path: {source_root}\n',
+        encoding='utf-8',
+    )
+    _activate_yaml(yaml_path)
+
+    captured: dict = {}
+
+    def _spy(name: str):
+        def f(*args, progress_callback=None, **kwargs):
+            captured[name] = progress_callback
+            return 0
+        return f
+
+    for name in [
+        'persist_all_sources', 'persist_api_endpoints', 'persist_string_literals',
+        'persist_config_values', 'persist_config_reads', 'persist_data_model',
+        'persist_akka_http_endpoints', 'persist_python_routes',
+        'persist_express_routes', 'persist_python_http_clients',
+        'persist_js_http_clients', 'persist_scala_http_clients',
+        'persist_url_resolver',
+    ]:
+        monkeypatch.setattr(f'docgen.scip_persist.{name}', _spy(name))
+
+    cmd_index(_make_args(source='webapp'),
+              indexer_registry={'python': _FakeAdapter()}, merger=None)
+
+    # the 3 heavy steps each got a callable reporter from persist_progress
+    assert callable(captured['persist_all_sources'])
+    assert callable(captured['persist_string_literals'])
+    assert callable(captured['persist_data_model'])
+    # a lighter (unconditional) step ran without a progress bar
+    assert captured['persist_config_values'] is None

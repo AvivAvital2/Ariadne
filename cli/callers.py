@@ -141,16 +141,22 @@ def _resolve_or_exit(graph, symbol_query: str) -> str | None:
 
 def _load_graph(db_path: Path | str | None):
     from config import get_config
-    from docgen.scip_cross_source import CrossSourceGraph
+    from docgen.scip_cross_source import (
+        CrossSourceGraph,
+        shared_databases_from_config,
+    )
     from library import Library
 
+    cfg = get_config()
     if db_path is None:
-        db_path = Path(get_config().db_path)
+        db_path = Path(cfg.db_path)
+    shared = shared_databases_from_config(cfg.shared_database)
     library = Library(Path(db_path))
     graph = CrossSourceGraph()
     try:
         with library._conn_provider.acquire() as conn:
             graph.load_from(conn)
+            graph.add_data_layer(conn, shared_database=shared)
     finally:
         library.close()
     return graph

@@ -376,3 +376,176 @@ class TestYamlAutoManagedBlock:
             f"{src_cfg.get('index_kinds')}"
         )
 
+
+# ---------------------------------------------------------------------------
+# Re-discover must not orphan a built index (manifest desync regression)
+# ---------------------------------------------------------------------------
+
+
+def _simulate_index(source_root: Path) -> dict:
+    """Stand in for ``ariadne index``: backfill ``scip_path`` (+ metadata) on
+    every manifest entry and create the referenced ``.scip`` artifacts. Returns
+    the written manifest dict."""
+    manifest_path = source_root / '.ariadne' / 'manifest.json'
+    data = json.loads(manifest_path.read_text(encoding='utf-8'))
+    (source_root / '.ariadne' / 'intermediate').mkdir(parents=True, exist_ok=True)
+    for i, entry in enumerate(data['indexers']):
+        rel = f'intermediate/idx{i}.scip'
+        (source_root / '.ariadne' / rel).write_bytes(b'\x08\x01')
+        entry['scip_path'] = rel
+        entry['indexed_at'] = '2026-06-01T00:00:00+00:00'
+        entry['indexer_version'] = 'scip-x/1.0'
+    manifest_path.write_text(json.dumps(data), encoding='utf-8')
+    return data
+
+
+class TestRediscoverPreservesBuiltArtifacts:
+    """A bare ``discover`` rewrites ``manifest.json`` from topology alone. If it
+    drops the ``scip_path`` that ``index`` backfilled, the built ``.scip`` is
+    orphaned and the source goes invisible to every SCIP feature
+    (callers/callees/impact/trace/data-model) until a full re-index. Discover
+    must carry those refs forward when the artifact still exists."""
+
+    def test_rediscover_preserves_scip_path_when_artifact_exists(
+        self, scalaproject_layout: Path, configured_yaml: Path,
+    ) -> None:
+        from cli.index import cmd_discover
+
+        _activate_yaml(configured_yaml)
+        cmd_discover(_make_args(source='scalaproject'))  # initial plan
+        _simulate_index(scalaproject_layout)             # index backfills refs
+
+        cmd_discover(_make_args(source='scalaproject'))  # RE-discover
+
+        data = json.loads(
+            (scalaproject_layout / '.ariadne' / 'manifest.json')
+            .read_text(encoding='utf-8'))
+        assert data['indexers'], data
+        assert all(e.get('scip_path') for e in data['indexers']), (
+            'discover orphaned a built index by dropping scip_path: '
+            f'{data["indexers"]}'
+        )
+        # carried alongside scip_path, keyed by (kind, cwd, entry_kind)
+        assert all(e.get('indexed_at') for e in data['indexers'])
+        assert all(e.get('indexer_version') for e in data['indexers'])
+
+    def test_rediscover_drops_scip_path_when_artifact_missing(
+        self, scalaproject_layout: Path, configured_yaml: Path,
+    ) -> None:
+        """If a referenced .scip no longer exists, the carry must NOT keep a
+        dangling scip_path — that entry is honestly reported as unbuilt while
+        the entries whose artifacts survive stay preserved."""
+        from cli.index import cmd_discover
+
+        _activate_yaml(configured_yaml)
+        cmd_discover(_make_args(source='scalaproject'))
+        data = _simulate_index(scalaproject_layout)
+        victim = data['indexers'][0]
+        (scalaproject_layout / '.ariadne' / victim['scip_path']).unlink()
+
+        cmd_discover(_make_args(source='scalaproject'))
+
+        after = json.loads(
+            (scalaproject_layout / '.ariadne' / 'manifest.json')
+            .read_text(encoding='utf-8'))
+        by_id = {(e['kind'], e['cwd']): e for e in after['indexers']}
+        # artifact gone -> no dangling scip_path claimed
+        assert 'scip_path' not in by_id[(victim['kind'], victim['cwd'])]
+        # the others (artifacts intact) are still carried
+        survivors = [
+            e for e in after['indexers']
+            if (e['kind'], e['cwd']) != (victim['kind'], victim['cwd'])
+        ]
+        assert survivors and all(e.get('scip_path') for e in survivors)
+
+    def test_rediscover_carries_only_built_entries(
+        self, scalaproject_layout: Path, configured_yaml: Path,
+    ) -> None:
+        """Mixed prior — one built entry, one discovered-but-unbuilt entry, one
+        absent from the prior entirely. Re-discover carries only the built one;
+        no scip_path is fabricated for the unbuilt or the brand-new entry."""
+        from cli.index import cmd_discover
+
+        _activate_yaml(configured_yaml)
+        cmd_discover(_make_args(source='scalaproject'))
+        manifest_path = scalaproject_layout / '.ariadne' / 'manifest.json'
+        fresh = json.loads(manifest_path.read_text(encoding='utf-8'))
+
+        inter = scalaproject_layout / '.ariadne' / 'intermediate'
+        inter.mkdir(parents=True, exist_ok=True)
+        (inter / 'java.scip').write_bytes(b'\x08\x01')
+        prior_entries = []
+        for entry in fresh['indexers']:
+            if entry['kind'] == 'java':            # built (artifact exists)
+                prior_entries.append({**entry, 'scip_path': 'intermediate/java.scip'})
+            elif entry['kind'] == 'typescript':    # discovered but unbuilt
+                prior_entries.append({**entry})
+            # python: omitted from prior entirely (new on re-discover)
+        manifest_path.write_text(
+            json.dumps({**fresh, 'indexers': prior_entries}), encoding='utf-8')
+
+        cmd_discover(_make_args(source='scalaproject'))
+
+        after = {e['kind']: e for e in json.loads(
+            manifest_path.read_text(encoding='utf-8'))['indexers']}
+        assert after['java'].get('scip_path') == 'intermediate/java.scip'
+        assert 'scip_path' not in after['typescript']  # matched but unbuilt
+        assert 'scip_path' not in after['python']       # no prior match
+
+    def test_rediscover_survives_corrupt_prior_manifest(
+        self, scalaproject_layout: Path, configured_yaml: Path,
+    ) -> None:
+        """A corrupt/unreadable prior manifest must not crash discover — it
+        falls back to a clean fresh write (nothing to preserve)."""
+        from cli.index import cmd_discover
+
+        _activate_yaml(configured_yaml)
+        ariadne_dir = scalaproject_layout / '.ariadne'
+        ariadne_dir.mkdir(parents=True, exist_ok=True)
+        (ariadne_dir / 'manifest.json').write_text('{ not: json', encoding='utf-8')
+
+        rc = cmd_discover(_make_args(source='scalaproject'))
+        assert rc == 0
+        data = json.loads((ariadne_dir / 'manifest.json').read_text(encoding='utf-8'))
+        assert sorted(e['kind'] for e in data['indexers']) == [
+            'java', 'python', 'typescript']
+
+    def test_rediscover_empty_source_is_a_noop(self, tmp_path: Path) -> None:
+        """Re-discovering an empty source (prior manifest exists, zero fresh
+        indexers) carries nothing and doesn't crash — the loop is empty."""
+        from cli.index import cmd_discover
+
+        empty = tmp_path / 'empty_src'
+        empty.mkdir()
+        yaml_path = tmp_path / 'ariadne.yaml'
+        yaml_path.write_text(
+            f'sources:\n  empty:\n    path: {empty}\n', encoding='utf-8')
+        _activate_yaml(yaml_path)
+
+        cmd_discover(_make_args(source='empty'))        # writes {indexers: []}
+        rc = cmd_discover(_make_args(source='empty'))   # re-discover over prior
+        assert rc == 0
+        data = json.loads(
+            (empty / '.ariadne' / 'manifest.json').read_text(encoding='utf-8'))
+        assert data['indexers'] == []
+
+    def test_run_discover_also_preserves_built_scip_path(
+        self, scalaproject_layout: Path, configured_yaml: Path,
+    ) -> None:
+        """The MCP/onboard path (``run_discover``) shares the guarantee — it was
+        the writer that orphaned a multi-package source's index, so it must carry scip_path too."""
+        import config as config_module
+        from cli.index import run_discover
+
+        _activate_yaml(configured_yaml)
+        cfg = config_module._global_config
+        run_discover(cfg, 'scalaproject')
+        _simulate_index(scalaproject_layout)
+        run_discover(cfg, 'scalaproject')
+
+        data = json.loads(
+            (scalaproject_layout / '.ariadne' / 'manifest.json')
+            .read_text(encoding='utf-8'))
+        assert data['indexers'] and all(
+            e.get('scip_path') for e in data['indexers']), data
+
