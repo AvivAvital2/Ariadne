@@ -206,7 +206,7 @@ def package_label(marker: Path, *, source_root: Path) -> str:
     the marker's directory relative to the source root, or — when the marker
     sits at the repository root — the repository's own folder name. It is
     NEVER the Ariadne source/config name (which has no relation to the
-    project's real package, e.g. a Scala repo showing up as ``LBS``).
+    project's real package, e.g. a Scala repo showing up as ``src1``).
     """
     name = _read_marker_name(marker)
     if name:

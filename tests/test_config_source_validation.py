@@ -9,9 +9,9 @@ docs + dependency graph live in the database). The old "empty path →
 ``Path('').resolve()`` == cwd → walk thousands of files" footgun is
 closed at RESOLUTION instead (``get_source_path`` / ``resolve_source``
 return None), not by rejecting the config at load. A typo'd key is
-still caught loudly here. Footgun surfaced 2026-05-09 for source
-``zohar`` — a 6-entry repo where catalog-sync attempted ~20k files
-because path was typo'd as ``purh``.
+still caught loudly here. Footgun: a source whose path was typo'd as
+``purh`` — catalog-sync then attempted to walk thousands of files
+instead of failing fast.
 
 Tests follow the project's discipline: each "should fail" case is
 paired with a "should load" baseline so a stub validator that always
@@ -57,14 +57,14 @@ class TestPathOptionalServeOnly:
         build fails closed instead of walking cwd."""
         yaml = yaml_factory(
             'sources:\n'
-            '  zohar:\n'
+            '  src1:\n'
             '    branches: [main]\n',
         )
         cfg = Config(config_path=yaml)
-        sc = cfg.get_source_config('zohar')
+        sc = cfg.get_source_config('src1')
         assert sc is not None and sc.path is None
-        assert cfg.get_source_path('zohar') is None
-        assert cfg.resolve_source('zohar') is None
+        assert cfg.get_source_path('src1') is None
+        assert cfg.resolve_source('src1') is None
 
     def test_dict_source_empty_path_resolves_to_none(
         self, yaml_factory,
@@ -73,12 +73,12 @@ class TestPathOptionalServeOnly:
         ``Path('').resolve()`` == cwd footgun is closed at resolution."""
         yaml = yaml_factory(
             'sources:\n'
-            '  zohar:\n'
+            '  src1:\n'
             '    path: ""\n',
         )
         cfg = Config(config_path=yaml)
-        assert cfg.get_source_path('zohar') is None
-        assert cfg.resolve_source('zohar') is None
+        assert cfg.get_source_path('src1') is None
+        assert cfg.resolve_source('src1') is None
 
     def test_string_form_source_loads_cleanly(
         self, yaml_factory, tmp_path: Path,
@@ -88,10 +88,10 @@ class TestPathOptionalServeOnly:
         validator that chokes on the simple form."""
         yaml = yaml_factory(
             'sources:\n'
-            f'  zohar: {tmp_path}\n',
+            f'  src1: {tmp_path}\n',
         )
         cfg = Config(config_path=yaml)
-        sc = cfg.get_source_config('zohar')
+        sc = cfg.get_source_config('src1')
         assert sc is not None
         assert sc.path == str(tmp_path)
 
@@ -103,11 +103,11 @@ class TestPathOptionalServeOnly:
         actual misconfiguration."""
         yaml = yaml_factory(
             'sources:\n'
-            '  zohar:\n'
+            '  src1:\n'
             f'    path: {tmp_path}\n',
         )
         cfg = Config(config_path=yaml)
-        sc = cfg.get_source_config('zohar')
+        sc = cfg.get_source_config('src1')
         assert sc is not None
         assert sc.path == str(tmp_path)
 
@@ -131,13 +131,13 @@ class TestUnknownKeys:
         proceeded with empty path."""
         yaml = yaml_factory(
             'sources:\n'
-            '  zohar:\n'
+            '  src1:\n'
             f'    purh: {tmp_path}\n',
         )
         with pytest.raises(ConfigError) as exc:
             Config(config_path=yaml)
         msg = str(exc.value)
-        assert 'zohar' in msg
+        assert 'src1' in msg
         assert 'purh' in msg
         assert 'path' in msg
 
@@ -150,7 +150,7 @@ class TestUnknownKeys:
         returns spurious matches for nonsense input."""
         yaml = yaml_factory(
             'sources:\n'
-            '  zohar:\n'
+            '  src1:\n'
             f'    path: {tmp_path}\n'
             '    qzxqzx: 1\n',
         )
@@ -171,7 +171,7 @@ class TestUnknownKeys:
         also added to the validator's allowlist fails this test."""
         yaml = yaml_factory(
             'sources:\n'
-            '  zohar:\n'
+            '  src1:\n'
             f'    path: {tmp_path}\n'
             '    depends_on: []\n'
             '    branches: ["main"]\n'
@@ -183,7 +183,7 @@ class TestUnknownKeys:
             '    swagger_paths: []\n',
         )
         cfg = Config(config_path=yaml)
-        sc = cfg.get_source_config('zohar')
+        sc = cfg.get_source_config('src1')
         assert sc is not None
 
     def test_scip_and_index_kinds_recognized(
@@ -195,7 +195,7 @@ class TestUnknownKeys:
         level. The validator must allow them."""
         yaml = yaml_factory(
             'sources:\n'
-            '  zohar:\n'
+            '  src1:\n'
             f'    path: {tmp_path}\n'
             '    scip:\n'
             '      artifact_path: index.scip\n'
@@ -204,7 +204,7 @@ class TestUnknownKeys:
             '      scala: scip\n',
         )
         cfg = Config(config_path=yaml)
-        sc = cfg.get_source_config('zohar')
+        sc = cfg.get_source_config('src1')
         assert sc is not None
 
 
@@ -228,7 +228,7 @@ class TestCombinedFailure:
         actual mistake."""
         yaml = yaml_factory(
             'sources:\n'
-            '  zohar:\n'
+            '  src1:\n'
             f'    purh: {tmp_path}\n',
         )
         with pytest.raises(ConfigError) as exc:
