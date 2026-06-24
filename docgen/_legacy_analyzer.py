@@ -26,6 +26,7 @@ from docgen._legacy_metadata import (
     ModuleGroup,
     ModuleMetadata,
 )
+from ast_utils import safe_ast_parse
 
 
 def _compute_hash(content: str) -> str:
@@ -110,7 +111,7 @@ class SourceAnalyzer:
         source_hash = _compute_hash(content)
         line_count = len(content.splitlines())
 
-        tree = ast.parse(content, filename=str(path))
+        tree = safe_ast_parse(content, filename=str(path))
 
         module_name = self._path_to_module_name(path)
         docstring = ast.get_docstring(tree)

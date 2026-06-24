@@ -128,3 +128,72 @@ def test_no_candidates_is_silent_noop(tmp_path, monkeypatch):
 
     monkeypatch.setattr(onboard, '_arrow_key_multiselect', boom)
     onboard._select_onboard_dependencies(cfg, 'svc_main')   # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Making detection optional in interactive onboard: a y/n gate offered before
+# the picker. A 'no' persists ``skip_dependency_detection: true`` so the later
+# generate phase's import scan is skipped too; a 'yes' opens the picker.
+# ---------------------------------------------------------------------------
+
+
+def _spy_picker(monkeypatch):
+    """Replace the dependency picker with a spy recording whether it ran."""
+    from cli import onboard
+
+    calls: list = []
+    monkeypatch.setattr(
+        onboard, '_select_onboard_dependencies',
+        lambda *a, **k: calls.append((a, k)),
+    )
+    return calls
+
+
+def test_offer_runs_picker_on_yes(tmp_path, monkeypatch):
+    from cli import onboard
+
+    cfg = _config_with_candidates(tmp_path)
+    _force_tty(monkeypatch)
+    monkeypatch.setattr('builtins.input', lambda *a, **k: 'y')
+    picked = _spy_picker(monkeypatch)
+
+    onboard._offer_dependency_detection(cfg, 'svc_main')
+
+    assert len(picked) == 1, 'a yes must open the dependency picker'
+
+
+def test_offer_persists_skip_and_bypasses_picker_on_no(tmp_path, monkeypatch):
+    from config import Config
+    from cli import onboard
+
+    cfg = _config_with_candidates(tmp_path)
+    _force_tty(monkeypatch)
+    monkeypatch.setattr('builtins.input', lambda *a, **k: 'n')
+    picked = _spy_picker(monkeypatch)
+
+    onboard._offer_dependency_detection(cfg, 'svc_main')
+
+    assert picked == [], 'a no must NOT open the picker'
+    # The opt-out is persisted so generate's import scan is skipped too.
+    reloaded = Config(config_path=tmp_path / 'ariadne.yaml')
+    assert reloaded.source_skip_dependency_detection('svc_main') is True
+
+
+def test_offer_is_noop_when_already_opted_out(tmp_path, monkeypatch):
+    from config import Config
+    from cli import onboard
+
+    cfg = _config_with_candidates(tmp_path)
+    cfg.set_source_config('svc_main', skip_dependency_detection=True)
+    cfg = Config(config_path=tmp_path / 'ariadne.yaml')
+    _force_tty(monkeypatch)
+
+    def no_prompt(*a, **k):
+        raise AssertionError('must not prompt when already opted out')
+
+    monkeypatch.setattr('builtins.input', no_prompt)
+    picked = _spy_picker(monkeypatch)
+
+    onboard._offer_dependency_detection(cfg, 'svc_main')   # must not raise
+
+    assert picked == [], 'opted-out source must not open the picker'

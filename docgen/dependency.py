@@ -12,6 +12,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from attrs import frozen
+from ast_utils import safe_ast_parse
 
 
 @frozen
@@ -64,7 +65,7 @@ def _extract_imports_with_context(
         return []
 
     try:
-        tree = ast.parse(content)
+        tree = safe_ast_parse(content)
     except SyntaxError:
         return []
 

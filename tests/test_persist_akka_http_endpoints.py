@@ -41,7 +41,7 @@ def test_persist_string_literals_invokes_ingest_for_each_source(
     db_path = _make_db(tmp_path)
     calls: list[tuple[str, Path]] = []
 
-    def _spy(*, source_name, source_root, conn, index_factory=None):
+    def _spy(*, source_name, source_root, conn, index_factory=None, progress_callback=None):
         calls.append((source_name, source_root))
         return 0
 
@@ -71,7 +71,7 @@ def test_persist_string_literals_returns_total_count(
     db_path = _make_db(tmp_path)
     counts = iter([3, 7, 11])
 
-    def _spy(*, source_name, source_root, conn, index_factory=None):
+    def _spy(*, source_name, source_root, conn, index_factory=None, progress_callback=None):
         return next(counts)
 
     monkeypatch.setattr(

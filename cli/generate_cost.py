@@ -682,6 +682,8 @@ def _check_and_prompt_dependencies(
         source_path: Path to the source code.
         cfg: Configuration instance.
     """
+    if cfg.source_skip_dependency_detection(source_name):
+        return
     from rich.panel import Panel
 
     from docgen.dependency import detect_dependencies

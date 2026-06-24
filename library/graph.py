@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any
+from ast_utils import safe_ast_parse
 
 _logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ class GraphMixin:
         # 1. Import edges (File→File)
         for f in all_files:
             try:
-                tree = ast.parse(f.read_text(encoding='utf-8'), filename=str(f))
+                tree = safe_ast_parse(f.read_text(encoding='utf-8'), filename=str(f))
             except (SyntaxError, UnicodeDecodeError):
                 continue
             f_str = str(f)
@@ -216,7 +217,7 @@ class GraphMixin:
 
             # Parse new imports
             try:
-                tree = ast.parse(f.read_text(encoding='utf-8'), filename=f_str)
+                tree = safe_ast_parse(f.read_text(encoding='utf-8'), filename=f_str)
             except (SyntaxError, UnicodeDecodeError):
                 continue
 

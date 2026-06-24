@@ -127,7 +127,7 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
     # (TTY only, not --approve). Persists depends_on to ariadne.yaml so the
     # paid generate phase loads those sources' docs as context. ----
     if not getattr(args, 'approve', False):
-        _select_onboard_dependencies(cfg, source_name)
+        _offer_dependency_detection(cfg, source_name)
 
     # ---- Always open the file browser before the preview (TTY, not --approve)
     # The browser owns ariadne.yaml configuration: the user reviews + excludes
@@ -570,6 +570,56 @@ def _select_onboard_dependencies(cfg, source_name: str) -> None:
         )
     else:
         console.print(f'[green]Cleared dependencies for {source_name}.[/green]')
+
+
+def _offer_dependency_detection(cfg, source_name: str) -> None:
+    """Interactive onboard gate that makes cross-source dependency
+    detection optional.
+
+    Detection scans the onboarded repo for imports referencing the
+    project's OTHER configured sources to infer a hidden ``depends_on``.
+    This asks once whether to do that: a 'no' persists
+    ``skip_dependency_detection: true`` (so the later generate phase's
+    import scan is skipped too) and returns; a 'yes' opens the manual
+    picker. Skipped entirely when the source already opted out, has no
+    candidate sources, or in a non-TTY context.
+    """
+    import sys
+
+    if cfg.source_skip_dependency_detection(source_name):
+        return
+    if not _dependency_candidates(cfg, source_name):
+        return
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return
+
+    if _prompt_detect_dependencies(source_name):
+        _select_onboard_dependencies(cfg, source_name)
+        return
+    if cfg.set_source_config(source_name, skip_dependency_detection=True):
+        console.print(
+            f'[green]Skipping dependency detection for {source_name} '
+            f'(saved skip_dependency_detection: true).[/green]'
+        )
+    else:
+        console.print(
+            '[yellow]Could not save skip_dependency_detection to config.[/yellow]'
+        )
+
+
+def _prompt_detect_dependencies(source_name: str) -> bool:
+    """Ask whether to scan for hidden dependencies linking
+    ``source_name`` to the other configured sources. Defaults to yes; a
+    closed stdin (``EOFError``) also returns yes, preserving prior
+    behavior."""
+    try:
+        resp = input(
+            f'Scan for hidden dependencies linking {source_name} to your '
+            f'other sources? [Y/n]: '
+        )
+    except EOFError:
+        return True
+    return resp.strip().lower() in ('', 'y', 'yes')
 
 
 HANDLERS = {

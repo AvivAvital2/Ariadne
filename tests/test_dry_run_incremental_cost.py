@@ -14,11 +14,18 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from rich.console import Console
 
+from cli.core import get_library
+from cli.dry_run import cmd_dry_run
+from cli.generate import DEFAULT_GENERATE_DOC_TYPES
 from cli.generate_cost import _print_cost_estimate
+from config import get_config
 from docgen.staleness import StalenessTracker
+from tests._scoped_config_fixture import install_test_config
 
 
 def _src_tree(tmp_path: Path) -> Path:
@@ -158,3 +165,103 @@ async def test_onboard_preview_prices_only_stale_files(
     assert 'already generated' in out, out
     assert '1 of 2 files' in out, out
     assert 'Full regeneration' in out, out
+
+
+@pytest.mark.asyncio
+async def test_interactive_explorer_reflects_pending_set(
+    tmp_path, capsys, monkeypatch,
+) -> None:
+    """The interactive cost explorer must scope to the SAME pending set the
+    headline prices — not the full from-scratch set.
+
+    Two reported bugs, one root cause (the explorer block fed itself the full
+    discovered ``files`` instead of the incremental ``gen_files``):
+
+    1. On an already-generated repo (nothing stale) onboard/dry-run still
+       opened the explorer showing the full from-scratch price.
+    2. The post-explorer summary line printed the full-regeneration cost as the
+       operative number, contradicting the ``0 files / $0.00`` headline.
+
+    This evolves one scenario: one file stale (explorer opens, priced on that
+    file ONLY) → nothing stale (explorer must not open, no full-regen summary).
+    """
+    install_test_config(monkeypatch, tmp_path, 'ds')
+    monkeypatch.setattr('cli.dry_run.console', Console(width=200))
+
+    src = _src_tree(tmp_path)  # tmp_path/src/{alpha,beta}.py
+
+    # Free phases are mocked — no real discover/index/catalog-sync.
+    monkeypatch.setattr('cli.index.cmd_discover', lambda *_a, **_k: 0)
+    monkeypatch.setattr('cli.index.cmd_index', lambda *_a, **_k: 0)
+
+    async def _no_catalog_sync(*_a, **_k):
+        return 0
+    monkeypatch.setattr('cli.dry_run.cmd_catalog_sync', _no_catalog_sync)
+
+    # Pretend we're on a TTY so the explorer branch is taken (not the static
+    # table), and capture every explorer launch + the state it was handed.
+    monkeypatch.setattr('sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('sys.stdout.isatty', lambda: True)
+    opened: list = []
+
+    async def _fake_explorer(state, **kwargs):
+        opened.append(state)
+        return SimpleNamespace(
+            selected_doc_types=kwargs.get('selected'),
+            staleness_exempt=kwargs.get('staleness_exempt', False),
+        )
+    monkeypatch.setattr('cli.dry_run.run_explorer_tui', _fake_explorer)
+
+    lib = get_library(None)
+    cfg = get_config()
+
+    def _mark_generated(fname: str) -> None:
+        """Give ``fname`` a doc of every default type + a staleness record so
+        the type-aware staleness check treats it as up-to-date."""
+        doc_ids = []
+        for ct in DEFAULT_GENERATE_DOC_TYPES:
+            doc = lib.add_document(
+                content_type=ct, title=f'{ct} {fname}',
+                content='placeholder content for ' + ct,
+                source_files=[fname], source_name='ds',
+                metadata={'source_name': 'ds'},
+            )
+            doc_ids.append(doc.id)
+        with StalenessTracker(cfg.staleness_db_path) as tracker:
+            tracker.record_documentation(
+                src / fname, doc_ids, base_path=tmp_path,
+            )
+
+    def _args() -> argparse.Namespace:
+        return argparse.Namespace(
+            source='ds', model='gpt-5.4', db=None, verbose=False,
+            concurrency=None, force=False, interactive=True,
+        )
+
+    # ---- Phase 1: alpha.py done, beta.py stale → one file pending --------
+    _mark_generated('alpha.py')
+    opened.clear()
+    rc = await cmd_dry_run(_args())
+    assert rc == 0
+    capsys.readouterr()
+    assert len(opened) == 1, 'explorer must open when a file is pending'
+    state = opened[0]
+    # The explorer is priced on the PENDING set: beta.py is costed, the
+    # already-generated alpha.py is not.
+    assert state.cost_of('src/beta.py') is not None
+    assert state.cost_of('src/alpha.py') is None, (
+        'explorer must not price already-generated files'
+    )
+
+    # ---- Phase 2: beta.py done too → nothing pending ---------------------
+    _mark_generated('beta.py')
+    opened.clear()
+    rc = await cmd_dry_run(_args())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert opened == [], 'explorer must not open when nothing is pending'
+    # No full-regeneration figure presented as the operative cost (bug #2).
+    assert 'after explorer' not in out, out
+    assert '0 files' in out, out
+    # The explorer's absence is explained rather than silent.
+    assert 'skipping the cost explorer' in out, out

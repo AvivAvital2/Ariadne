@@ -34,9 +34,12 @@ from cli.status import (
     cmd_usage,
     cmd_vacuum,
 )
+import slack_usage
+import testimonials
 from config import Config
 from gap_analysis import GapRecommendation, GapReport
 from library import Library
+from schema import _now_iso
 
 # --- fixtures ---------------------------------------------------------------
 
@@ -339,6 +342,40 @@ def test_usage_empty_library(tmp_path, capsys):
     assert 'Total calls 0' in out
     assert 'Hit rate 0.0%' in out
     assert 'Recent Feedback' not in out
+
+
+def test_usage_by_user_from_slack_store(tmp_path, capsys):
+    """`ariadne usage` adds a per-user Slack section from the bridge store:
+    questions/hits/misses by resolved name, busiest first. Counts only."""
+    lib = _new_lib(tmp_path)
+    db = lib.path
+    lib.close()
+
+    store = testimonials.local_dir(tmp_path)
+    for outcome in ('hit', 'miss'):
+        slack_usage.record(store, asked_at=_now_iso(), actor='U_a',
+                           name='alice', outcome=outcome, score=5)
+    slack_usage.record(store, asked_at=_now_iso(), actor='U_b',
+                       name='bob', outcome='hit', score=9)
+
+    rc = cmd_usage(_ns(db=db, dir=str(tmp_path)))
+    out = _norm(capsys)
+    assert rc == 0
+    assert 'By User' in out
+    # alice: 2 questions, 1 hit, 1 miss (busiest first); bob: 1 question, 1 hit
+    assert 'alice 2 1 1' in out
+    assert 'bob 1 1 0' in out
+    assert out.index('alice') < out.index('bob')
+
+
+def test_usage_no_slack_section_when_store_empty(tmp_path, capsys):
+    lib = _new_lib(tmp_path)
+    db = lib.path
+    lib.close()
+
+    rc = cmd_usage(_ns(db=db, dir=str(tmp_path)))
+    assert rc == 0
+    assert 'By User' not in _norm(capsys)
 
 
 # --- gaps -------------------------------------------------------------------

@@ -35,6 +35,7 @@ from docgen.catalog_extractor import (
     _py_module_qn,
     extract_elements,
 )
+from ast_utils import safe_ast_parse
 
 if TYPE_CHECKING:
     from docgen.scip_cross_source import CrossSourceGraph
@@ -345,7 +346,7 @@ def enrich_python_elements(
     can attach the enrichment by name.
     """
     try:
-        tree = ast.parse(src, filename=str(file))
+        tree = safe_ast_parse(src, filename=str(file))
     except SyntaxError:
         return {}
     return _walk_python(tree, module_name)
@@ -398,7 +399,7 @@ def enrich_file(
     if language == 'python':
         module_name = _py_module_qn(path, source_root)
         try:
-            tree = ast.parse(src, filename=str(path))
+            tree = safe_ast_parse(src, filename=str(path))
             module_docstring = ast.get_docstring(tree)
             imports = _extract_imports(tree)
             enrichment_map = _walk_python(tree, module_name)

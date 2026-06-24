@@ -39,6 +39,7 @@ from docgen.scip_sink_registry import (
     DEFAULT_SINK_REGISTRY,
     SinkSpec,
 )
+from ast_utils import safe_ast_parse
 
 if TYPE_CHECKING:
     from sqlite3 import Connection
@@ -179,7 +180,7 @@ def _extract_calls_from_doc(
         return []
 
     try:
-        tree = ast.parse(source_text)
+        tree = safe_ast_parse(source_text)
     except SyntaxError:
         return []
 

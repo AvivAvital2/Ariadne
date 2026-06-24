@@ -31,6 +31,7 @@ from typing import Literal
 
 from ast_grep_py import SgRoot
 from attrs import frozen
+from ast_utils import safe_ast_parse
 
 
 _Kind = Literal['literal', 'getter_call', 'other']
@@ -115,7 +116,7 @@ def _python_lines(
     source_text: str, wanted: set[int],
 ) -> dict[int, InspectionResult]:
     try:
-        tree = ast.parse(source_text)
+        tree = safe_ast_parse(source_text)
     except SyntaxError:
         return {}
     out: dict[int, InspectionResult] = {}

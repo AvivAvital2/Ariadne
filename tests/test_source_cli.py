@@ -18,6 +18,8 @@ one was green:
        name and path (flag values are optional fallbacks).
   D7 — branch-aware fields: `--branches` (comma list) and `--ref`
        persist for branch-scoped / ref-pinned sources.
+  D8 — `--skip-dependency-detection` opts the source out of the
+       cross-source import scan; omitting it keeps the default (off).
 
 The test drives the real parser (``cli.create_parser``) and dispatches
 through the registered handler, so command registration is covered too.
@@ -156,3 +158,19 @@ def test_source_group_evolves_through_contract(monkeypatch, tmp_path):
     sd = cfg.get_source_config('delta')
     assert tuple(sd.branches) == ('feature/*', 'main')
     assert sd.ref == 'main'
+
+    # ---- D8: --skip-dependency-detection opts the source out of the
+    # cross-source import scan and persists to ariadne.yaml ----------
+    src_e = tmp_path / 'repo_e'
+    src_e.mkdir()
+    rc = _run([
+        'source', 'add', 'epsilon', '--path', str(src_e),
+        '--skip-dependency-detection',
+    ])
+    assert rc == 0
+    cfg = _fresh_config(cfg_path)
+    se = cfg.get_source_config('epsilon')
+    assert se.skip_dependency_detection is True
+    assert cfg.source_skip_dependency_detection('epsilon') is True
+    # Omitting the flag leaves the default (off), not None-clobbered.
+    assert cfg.get_source_config('delta').skip_dependency_detection is False

@@ -650,14 +650,15 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                     f'${b.total_cost_usd:.2f} batched[/dim]',
                     soft_wrap=True,
                 )
-        # --interactive: explore the per-directory cost and toggle excludes.
-        # Operates on the FULL file set (not just this run's incremental
-        # gen_files) — excludes are persistent config that affect ALL future
-        # generation, so this is useful even when nothing is currently stale
-        # (gen_files empty). On a TTY it opens the explorer; otherwise it
-        # prints the static ranked table. The $ shown is the full-generation
-        # cost (what --force would pay), which is what excludes act on.
-        if getattr(args, 'interactive', False) and files and rates is not None:
+        # --interactive: explore per-directory cost and toggle excludes.
+        # Scoped to the PENDING set (gen_files) — the same files the headline
+        # prices and the real run will actually generate — so it never shows a
+        # from-scratch price for an already-generated repo (the reported bug).
+        # When nothing is pending the explorer is skipped (note below); any
+        # excludes set here still persist to ariadne.yaml and apply to future
+        # runs. On a TTY it opens the explorer; otherwise it prints the static
+        # ranked table.
+        if getattr(args, 'interactive', False) and gen_files and rates is not None:
             import sys as _sys
 
             from docgen.cost_by_dir import (
@@ -670,8 +671,8 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                 'prompt_overhead_for': _gen_overhead,
             }
             cost_nodes = cost_by_directory(
-                files, source_path, requested_doc_types, model, **_hooks)
-            leaves = {p.relative_to(source_path).as_posix() for p, _ in files}
+                gen_files, source_path, requested_doc_types, model, **_hooks)
+            leaves = {p.relative_to(source_path).as_posix() for p, _ in gen_files}
             if _sys.stdout.isatty() and _sys.stdin.isatty():
                 from docgen.explorer_state import ExplorerState, apply_excludes
                 from docgen.scan_tree import scan_tree
@@ -681,10 +682,11 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                     tree, cost_nodes, auto_excluded=sorted(excluded_dirs))
 
                 def _recost(selected_types):
-                    # Re-price the whole tree for a doc-type selection (the
+                    # Re-price the pending tree for a doc-type selection (the
                     # left-panel checkboxes drive this live).
                     return cost_by_directory(
-                        files, source_path, tuple(selected_types), model, **_hooks)
+                        gen_files, source_path, tuple(selected_types), model,
+                        **_hooks)
 
                 # Onboarding (only) asks the file browser to pop the staleness
                 # modal on Apply, so the browser — not a CLI prompt — owns this.
@@ -729,21 +731,23 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                             return False
                         return not any(pair[0].match(g) for g in _globs)
 
-                    # Re-price the full generation for the chosen doc types +
-                    # remaining files — the number future / --force runs pay.
-                    kept = [pr for pr in files if _kept(pr)]
-                    dropped = len(files) - len(kept)
+                    # Re-price THIS run (the pending set) for the chosen doc
+                    # types + remaining files — what onboard is about to pay,
+                    # consistent with the headline. Full-from-scratch stays in
+                    # the "Full regeneration … use --force" note above.
+                    kept = [pr for pr in gen_files if _kept(pr)]
+                    dropped = len(gen_files) - len(kept)
                     before = estimate_cost(
-                        files=files, doc_types=requested_doc_types,
+                        files=gen_files, doc_types=requested_doc_types,
                         model=model, caching_enabled=caching_enabled,
                         **_hooks).total_cost_usd
                     after = estimate_cost(
                         files=kept, doc_types=chosen, model=model,
                         caching_enabled=caching_enabled, **_hooks).total_cost_usd
                     console.print(
-                        f'  [green]full generation (after explorer)[/green]  '
+                        f'  [green]this run (after explorer)[/green]  '
                         f'${after:.2f}  [dim](was ${before:.2f} for the default '
-                        f'set; {dropped} of {len(files)} files dropped)[/dim]',
+                        f'set; {dropped} of {len(gen_files)} files dropped)[/dim]',
                         soft_wrap=True,
                     )
                     # Doc-type choice isn't persisted (unlike excludes), so when
@@ -772,6 +776,20 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                     cost_nodes, leaves=leaves, model=model,
                 ).splitlines():
                     console.print(_line, soft_wrap=True)
+        elif (
+            getattr(args, 'interactive', False) and files
+            and not gen_files and rates is not None
+        ):
+            # Interactive was requested but there's nothing to generate — don't
+            # open the explorer on a from-scratch price. The "Full regeneration
+            # … use --force" note above already shows what a forced rebuild
+            # costs.
+            console.print(
+                '  [dim]Nothing to generate — skipping the cost explorer. '
+                'Re-run with --force to regenerate (see the full-regeneration '
+                'figure above).[/dim]',
+                soft_wrap=True,
+            )
         # themes build: when nothing is clustered yet (first run), the
         # count is 0 — but onboard WILL cluster + summarize, so showing
         # "$0.00" implies it's free. Mark it not-estimated and keep it

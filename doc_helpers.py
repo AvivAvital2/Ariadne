@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Any
+from ast_utils import safe_ast_parse
 
 _EXCLUDED_PATH_PREFIXES = ('test_', 'tests/', 'benchmark/', 'conftest', '.venv/', '__pycache__/')
 
@@ -138,7 +139,7 @@ def _build_package_api_page(pkg: str, files: list[tuple[str, str]]) -> tuple[str
                 continue
             try:
                 source = abs_path.read_text(encoding='utf-8')
-                tree = ast.parse(source)
+                tree = safe_ast_parse(source)
             except Exception:
                 continue
 

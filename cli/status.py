@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.table import Table
 
+import slack_usage
 import testimonials
 from config import get_config
 
@@ -59,6 +60,8 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
                               help='Write a portable analytics report (usage + '
                                    'misses + doc signals) to PATH as JSON, for '
                                    'shipping off-box before replacing the database')
+    usage_parser.add_argument('--dir', default=None,
+        help='Working dir holding .ariadne/local for the Slack by-user store (default: cwd)')
 
     # gaps
     gaps_parser = subparsers.add_parser('gaps', help='Show documentation gap analysis')
@@ -419,6 +422,18 @@ def cmd_usage(args: argparse.Namespace) -> int:
                 console.print(doc_table)
             else:
                 console.print('[dim]No per-document tracking data yet (needs new searches).[/dim]')
+
+        base = Path(args.dir) if getattr(args, 'dir', None) else Path.cwd()
+        slack_rows = slack_usage.aggregate(testimonials.local_dir(base), days=args.days)
+        if slack_rows:
+            user_table = Table(title=f'Slack Bot — By User (last {args.days} days)')
+            user_table.add_column('User', style='bold')
+            user_table.add_column('Questions', style='cyan', justify='right')
+            user_table.add_column('Hits', style='green', justify='right')
+            user_table.add_column('Misses', style='red', justify='right')
+            for r in slack_rows:
+                user_table.add_row(r.name, str(r.questions), str(r.hits), str(r.misses))
+            console.print(user_table)
 
         return 0
 

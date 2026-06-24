@@ -7,6 +7,7 @@ import re
 from datetime import UTC
 from pathlib import Path
 from typing import Any
+from ast_utils import safe_ast_parse
 
 _logger = logging.getLogger(__name__)
 
@@ -163,7 +164,7 @@ class DebugMixin:
                 continue
             try:
                 source = f.read_text(encoding='utf-8')
-                tree = ast.parse(source, filename=str(f))
+                tree = safe_ast_parse(source, filename=str(f))
             except (SyntaxError, UnicodeDecodeError):
                 continue
 
@@ -239,7 +240,7 @@ class DebugMixin:
                 continue
             try:
                 source = f.read_text(encoding='utf-8')
-                tree = ast.parse(source, filename=str(f))
+                tree = safe_ast_parse(source, filename=str(f))
             except (SyntaxError, UnicodeDecodeError):
                 continue
 

@@ -33,6 +33,7 @@ from ast_grep_py import SgRoot
 
 from docgen.scip_extractor import ScipIndex, _ScipDoc, _ScipOccurrence
 from docgen.scip_sink_registry import DEFAULT_SINK_REGISTRY, SinkSpec
+from ast_utils import safe_ast_parse
 
 if TYPE_CHECKING:
     from sqlite3 import Connection
@@ -167,7 +168,7 @@ def _extract_python_invocations(
         return []
 
     try:
-        tree = ast.parse(source_text)
+        tree = safe_ast_parse(source_text)
     except SyntaxError:
         return []
 
