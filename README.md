@@ -160,6 +160,7 @@ Full reference — source fields, dependency detection, the exclusion policy —
 | [directory-scoping.md](docs/directory-scoping.md) | Subdirectory sources & directory-scoped dependencies |
 | [scip-cross-source.md](docs/scip-cross-source.md) | SCIP indexing & cross-source / cross-language intelligence |
 | [workflows.md](docs/workflows.md) | Keeping docs fresh, git-sync, hooks, branch docs, findings |
+| [import-export.md](docs/import-export.md) | Export/import round-trip; author once, consume anywhere (incl. local LLMs) |
 | [architecture.md](docs/architecture.md) | How it works, subsystems, usage tracking |
 | [slack-bridge-deployment.md](docs/slack-bridge-deployment.md) | Read-only Slack → Ariadne bridge |
 
