@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from attrs import frozen
+from ast_utils import safe_ast_parse
 
 if TYPE_CHECKING:
     from sqlite3 import Connection
@@ -125,7 +126,7 @@ def extract_python_literals(
     except OSError:
         return []
     try:
-        tree = ast.parse(text, filename=str(source_file))
+        tree = safe_ast_parse(text, filename=str(source_file))
     except SyntaxError:
         return []
 

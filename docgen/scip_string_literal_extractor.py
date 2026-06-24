@@ -11,7 +11,8 @@ Architecture note: this is the literal index that route extractors
 (Phase 8a) and resolution traversal (Phase 2s) query when they need a
 literal value at a known position. Built once per source via this
 module; queried many times. Replacing per-extractor literal parsing
-with a single index here is the architectural goal.
+with a single index here is the architectural goal called out in
+``designs/scip-everywhere-remaining.md``.
 
 Re-ingest semantics: clears prior rows for ``source_name`` before
 insert. Other sources' rows are preserved.
@@ -25,6 +26,8 @@ from typing import TYPE_CHECKING, Callable
 from ast_grep_py import SgRoot
 
 from docgen.scip_extractor import ScipIndex
+from ast_utils import safe_ast_parse
+from progress_util import iter_with_progress
 
 if TYPE_CHECKING:
     from sqlite3 import Connection
@@ -64,7 +67,7 @@ def _extract_python_literals(text: str) -> list[tuple[int, int, str]]:
     into a single ``ast.Constant`` and emitted as one row.
     """
     try:
-        tree = ast.parse(text)
+        tree = safe_ast_parse(text)
     except SyntaxError:
         return []
     out: list[tuple[int, int, str]] = []
@@ -252,6 +255,7 @@ def ingest_string_literals(
     source_root: Path,
     conn: 'Connection',
     index_factory: Callable[[], ScipIndex] | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> int:
     """Walk the SCIP index for ``source_root``, extract every string
     literal from each indexed file, and persist to ``string_literals``.
@@ -281,7 +285,7 @@ def ingest_string_literals(
     )
 
     rows: list[tuple] = []
-    for doc in index.documents:
+    for doc in iter_with_progress(index.documents, progress_callback, source_name):
         path = source_root / doc.relative_path
         lang = _detect_lang(path)
         if lang is None:
