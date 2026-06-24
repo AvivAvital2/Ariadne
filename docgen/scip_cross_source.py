@@ -29,14 +29,38 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from attrs import field, frozen
+from attrs import evolve, field, frozen
 
 from docgen.scip_descriptors import _qualified_name_from_symbol
+import logging
 
 if TYPE_CHECKING:
     from sqlite3 import Connection
 
     from docgen.scip_extractor import ScipIndex, _ScipDoc, _ScipOccurrence
+_CONFIDENCE_RANK = {'recovered': 0, 'derived': 1, 'resolved': 2, 'exact': 3}
+DEFAULT_ASSERT_MIN_CONFIDENCE = 'resolved'
+def _resolve_assert_floor() -> str:
+    """The configured SQL read-boundary floor (design §3a's
+    ``sql_assert_min_confidence``, default ``resolved``) — the single place the
+    config key is consulted. An active config that doesn't define the key (e.g. a
+    partial test double) resolves to the default, since an unset key means the
+    same; the read boundary never hard-depends on the key being present."""
+    from config import get_config
+
+    return getattr(get_config(), 'sql_assert_min_confidence',
+                   DEFAULT_ASSERT_MIN_CONFIDENCE)
+
+
+def _floor_rank(min_confidence: 'str | None') -> int:
+    """Rank of the effective confidence floor: the explicit ``min_confidence``
+    when given, else the configured default (:func:`_resolve_assert_floor`). The
+    one place the read boundary (query views + graph projection) resolves its
+    floor, so the ``sql_assert_min_confidence`` config key takes effect uniformly."""
+    return _CONFIDENCE_RANK[min_confidence or _resolve_assert_floor()]
+DEFAULT_MAX_DATA_EDGES = 1_000_000
+
+logger = logging.getLogger(__name__)
 
 
 # Schema lives at library level (``library_scip.py``) so the slim
@@ -99,6 +123,51 @@ class SymbolResolution:
     symbol: CrossSourceSymbol | None
     candidates: tuple[CrossSourceSymbol, ...] = ()
     match_tier: str = 'none'  # 'exact' | 'suffix' | 'substring' | 'none'
+@frozen
+class SharedDatabase:
+    """An explicit declaration (config, §6) that the named sources share one
+    physical database, so their identically-located table/column is the SAME
+    node. Cross-source column identity is emitted ONLY through this gate, never
+    a name match. ``database``/``db_schema`` optionally narrow which physical
+    schema is shared."""
+    sources: frozenset
+    database: str | None = None
+    db_schema: str | None = None
+
+
+def shared_databases_from_config(raw) -> 'list[SharedDatabase]':
+    """Parse the ``shared_database`` config block (a list of dicts) into
+    declarations; optional ``database``/``schema`` keys default to None.
+    None or an empty list yields no declarations (the gate stays shut)."""
+    return [
+        SharedDatabase(
+            sources=frozenset(entry['sources']),
+            database=entry.get('database'),
+            db_schema=entry.get('schema'),
+        )
+        for entry in raw or []
+    ]
+
+
+def _shared_node_id(source_name, database, db_schema, table_name, column_name,
+                    declarations):
+    """Cross-source column identity (§6, opt-in): if a ``shared_database``
+    declaration names ``source_name`` and its optional database/schema match
+    this row, return a SOURCE-INDEPENDENT canonical id so the identically-
+    located table/column in every member source collapses to one node. Else
+    None — columns stay per-source (the default; the coupling is never inferred
+    from a name match)."""
+    for decl in declarations:
+        if source_name not in decl.sources:
+            continue
+        if decl.database is not None and decl.database != (database or None):
+            continue
+        if decl.db_schema is not None and decl.db_schema != (db_schema or None):
+            continue
+        key = '+'.join(sorted(decl.sources))
+        col = f'#{column_name}' if column_name else ''
+        return f'data sql @shared:{key} {database or "_"}.{db_schema or "_"}.{table_name}{col}'
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +213,11 @@ class CrossSourceGraph:
         # without re-registering sources.
         self._known_source_names: set[str] = set()
         self._rst_autodoc: dict[str, list[str]] = {}
+        self._edges_by_callee: dict = {}
+        self._edges_by_caller: dict = {}
+        # Dirty by default: a graph built by assigning _edges directly (e.g.
+        # catalog_enrich) must still rebuild the index on the first query.
+        self._edge_index_dirty: bool = True
 
     # -- registration -----------------------------------------------------
 
@@ -205,6 +279,7 @@ class CrossSourceGraph:
             for entry in entries:
                 for doc in entry.index.documents:
                     self._collect_edges(doc, entry)
+        self._edge_index_dirty = True
 
     def _collect_definitions(
         self, doc: '_ScipDoc', entry: _SourceEntry,
@@ -313,16 +388,32 @@ class CrossSourceGraph:
             if e.callee.source_name == source_name
             and e.caller.source_name != source_name
         ]
-
-    def callers_of(self, symbol_id: str) -> list[CrossSourceEdge]:
-        """All edges referencing this symbol. Same-source edges
-        included — caller_of is a graph query, not a cross-source
-        query."""
-        return [e for e in self._edges if e.callee.canonical_id == symbol_id]
-
-    def callees_of(self, symbol_id: str) -> list[CrossSourceEdge]:
+    def callers_of(self, symbol_id: str) -> 'list[CrossSourceEdge]':
+        """All edges referencing this symbol. Same-source edges included —
+    caller_of is a graph query, not a cross-source query."""
+        if self._edge_index_dirty:
+            self._rebuild_edge_index()
+        return self._edges_by_callee.get(symbol_id, [])
+    
+    
+    def callees_of(self, symbol_id: str) -> 'list[CrossSourceEdge]':
         """All edges originating from this symbol."""
-        return [e for e in self._edges if e.caller.canonical_id == symbol_id]
+        if self._edge_index_dirty:
+            self._rebuild_edge_index()
+        return self._edges_by_caller.get(symbol_id, [])
+    
+    
+    def _rebuild_edge_index(self) -> None:
+        """(Re)build the endpoint indexes from ``_edges`` (design §6): O(1) per
+    hop instead of an O(E) scan, important because data edges are plausibly
+    the most numerous class. The flat ``_edges`` list stays for source-scoped
+    queries; this is rebuilt lazily after any edge mutation marks it dirty."""
+        self._edges_by_callee = {}
+        self._edges_by_caller = {}
+        for edge in self._edges:
+            self._edges_by_callee.setdefault(edge.callee.canonical_id, []).append(edge)
+            self._edges_by_caller.setdefault(edge.caller.canonical_id, []).append(edge)
+        self._edge_index_dirty = False
 
     def edges_in_source(self, source_name: str) -> list[CrossSourceEdge]:
         """All edges where BOTH caller and callee are in
@@ -485,6 +576,135 @@ class CrossSourceGraph:
             'FROM rst_autodoc_links',
         ):
             self._rst_autodoc.setdefault(row[0], []).append(row[1])
+        self._edge_index_dirty = True
+    
+    
+    def add_data_layer(self, conn, min_confidence=None,
+                       shared_database=None, max_data_edges=DEFAULT_MAX_DATA_EDGES):
+        """Project the SQL data model into the graph as ordinary nodes and
+    edges (design §6).
+
+    ``schema_symbols`` rows become ``CrossSourceSymbol`` nodes
+    (``kind='Table'|'Column'``, ``language='sql'``); each ``data_access``
+    row becomes a ``CrossSourceEdge`` carrying the access **role** as
+    ``edge_type`` (``'filter'``/``'project'``/``'write'``/…), and each
+    code-first node's ``producer_symbol_id`` becomes a ``'maps_to'`` edge.
+    Edges are registered with the data node as the **callee** (the
+    app/model symbol as caller), so ``callers_of(table|column)`` finds
+    every access AND the maps_to link — which is exactly what reverse
+    ``impact_radius`` walks.
+
+    Only facts at/above ``min_confidence`` on the shared ladder
+    (``exact > resolved > derived > recovered``, default ``resolved``) are
+    asserted; weaker facts are held back as gaps, never projected into the
+    graph (design §3a/§6a — the read-boundary safety valve).
+
+    Must run after ``load_from``: it resolves consumer/producer app
+    symbols against the already-loaded ``scip_symbols``. The SCIP
+    definition pass ingests SCIP occurrences only, so data nodes are
+    registered here, alongside it — not through it.
+
+    Cross-source column identity (§6) is opt-in: when ``shared_database``
+    names the sources that share one physical schema, their identically-
+    located table/column collapses to ONE source-independent node, so an
+    A-writes / B-reads coupling traverses in a single walk; absent a
+    declaration each source's column stays distinct (never name-matched).
+
+    ``max_data_edges`` bounds the data layer held in ``self._edges`` for
+    ``impact_radius`` (design §9a): once that many access edges are
+    projected, projection stops and a warning is logged rather than
+    truncating silently. Returns the count of access edges projected.
+    """
+        _kind = {
+            'table': 'Table', 'column': 'Column',
+            'view': 'View', 'index': 'Index',
+        }
+        floor = _floor_rank(min_confidence)
+        declarations = shared_database or []
+
+        def _asserts(confidence):
+            return _CONFIDENCE_RANK.get(confidence, -1) >= floor
+
+        # Per-source canonical_id -> fused node id, for the opt-in gate below.
+        remap: dict = {}
+
+        # Pass 1: nodes (+ the maps_to edge from a code-first producer).
+        for row in conn.execute(
+            'SELECT canonical_id, source_name, node_type, database, '
+            '       db_schema, table_name, column_name, producer_symbol_id, '
+            '       confidence '
+            'FROM schema_symbols',
+        ):
+            (cid, source_name, node_type, database, db_schema,
+             table_name, column_name, producer_id, confidence) = row
+            if not _asserts(confidence):
+                continue
+            db = database or '_'
+            schema = db_schema or '_'
+            table_qn = f'{db}.{schema}.{table_name}'
+            qualified_name = table_qn + (f'#{column_name}' if column_name else '')
+            # Opt-in cross-source identity: a declared shared database collapses
+            # the column to one source-independent node; else it stays per-source.
+            shared = _shared_node_id(
+                source_name, database, db_schema, table_name, column_name,
+                declarations)
+            node_cid = shared or cid
+            if shared is not None:
+                remap[cid] = shared
+            # A code-first node anchors at its producer symbol's range;
+            # SQL-first nodes have no source line yet (sentinel 0).
+            producer = self._symbols.get(producer_id) if producer_id else None
+            node = CrossSourceSymbol(
+                canonical_id=node_cid,
+                source_name=source_name,
+                language='sql',
+                file=producer.file if producer else '',
+                line_start=producer.line_start if producer else 0,
+                line_end=producer.line_start if producer else 0,
+                kind=_kind.get(node_type, node_type),
+                display_name=column_name or table_name,
+                qualified_name=qualified_name,
+                parent_qualified_name=table_qn if column_name else None,
+            )
+            self._symbols[node_cid] = node
+            self._known_source_names.add(source_name)
+            if producer is not None:
+                self._edges.append(CrossSourceEdge(
+                    caller=producer, callee=node, edge_type='maps_to',
+                    file=producer.file, line=producer.line_start,
+                    confidence=confidence,
+                ))
+
+        # Pass 2: access edges (nodes from pass 1 are now resolvable).
+        projected = 0
+        for row in conn.execute(
+            'SELECT consumer_symbol_id, schema_symbol_id, role, '
+            '       call_site_file, call_site_line, confidence '
+            'FROM data_access',
+        ):
+            consumer_id, schema_id, role, cs_file, cs_line, confidence = row
+            if not _asserts(confidence):
+                continue
+            consumer = self._symbols.get(consumer_id)
+            node = self._symbols.get(remap.get(schema_id, schema_id))
+            if consumer is None or node is None:
+                # Orphan: app symbol or data node absent. Skip, as
+                # load_from does for orphan SCIP edges.
+                continue
+            if projected >= max_data_edges:
+                logger.warning(
+                    'data-edge budget reached (%d): stopping data-layer projection; '
+                    'impact_radius may be incomplete. Raise max_data_edges (or scope '
+                    'the query) to project the rest.', max_data_edges)
+                break
+            self._edges.append(CrossSourceEdge(
+                caller=consumer, callee=node, edge_type=role,
+                file=cs_file or '', line=cs_line or 0,
+                confidence=confidence,
+            ))
+            projected += 1
+        self._edge_index_dirty = True
+        return projected
 
     # -- symbol resolution (decision #3) ----------------------------------
 
@@ -709,6 +929,11 @@ def load_source_from_manifest(
                 )
                 index = apply_vue_mapping(index, vue_mapping)
 
+        # The .scip's document paths are relative to the indexer's cwd (the
+        # package root), not the .scip file's own directory — so set source_root
+        # to <repo>/<cwd> for source-file reads (ORM strategies etc.) to resolve
+        # on multi-package repos (§5.0.1; the loader default is the .scip's dir).
+        index = evolve(index, source_root=source_root / entry.get('cwd', '.'))
         graph.add_source(source_name, index=index, language=language)
 
 

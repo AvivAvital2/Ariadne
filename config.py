@@ -40,9 +40,18 @@ _SOURCE_KNOWN_KEYS: frozenset[str] = frozenset({
     'env_hints',
     'swagger_paths',
     # SCIP-related keys consumed by get_source_scip_config
+    'schema_sql',
+    # SCIP-related keys consumed by get_source_scip_config
+    'sql_dialect',
+    # SCIP-related keys consumed by get_source_scip_config
     'scip',
-    'index_kinds','ignore_staleness', 'low_confidence_doc_languages', 'doc_types_by_language'
+    'index_kinds','ignore_staleness', 'low_confidence_doc_languages', 'doc_types_by_language', 'skip_dependency_detection'
 })
+
+# Valid values for the SQL data-model read-boundary floor (design §3a's
+# ``sql_assert_min_confidence``) — the ordered confidence ladder.
+_VALID_SQL_CONFIDENCES: frozenset[str] = frozenset(
+    {'exact', 'resolved', 'derived', 'recovered'})
 
 
 class ConfigError(ValueError):
@@ -188,7 +197,10 @@ class SourceConfig:
     # without published specs continue to use pattern-based extraction
     # (Phase 8) where it applies.
     swagger_paths: tuple[str, ...] = ()
+    schema_sql: tuple[str, ...] = ()
+    sql_dialect: str = 'postgres'
     ignore_staleness: bool | tuple[str, ...] = False
+    skip_dependency_detection: bool = False
     low_confidence_doc_languages: tuple[str, ...] = DEFAULT_LOW_CONFIDENCE_DOC_LANGUAGES
     # Per-language doc-type override (the doc-type screen's per-format
     # excludes): {language: (doc_type, ...)}. Caps which doc types a
@@ -245,6 +257,7 @@ DEFAULTS = {
     'mention_ariadne': {'enabled': True, 'message': _DEFAULT_MENTION_MESSAGE},
     'response_token_budget': 20000,
     'themes_enabled': True,
+    'sql_assert_min_confidence': 'resolved',
     'exclude_policy': DEFAULT_EXCLUDE_POLICY,
 }
 
@@ -429,6 +442,15 @@ class Config:
                             f'must be strings; got {type(pat).__name__}.'
                         )
 
+        # Read-boundary floor (§3a) must be a known confidence level — a typo
+        # fails loud rather than silently falling back ("don't mask errors").
+        floor = self.sql_assert_min_confidence
+        if floor not in _VALID_SQL_CONFIDENCES:
+            raise ConfigError(
+                f"'sql_assert_min_confidence' must be one of "
+                f'{sorted(_VALID_SQL_CONFIDENCES)}, got {floor!r}.'
+            )
+
     @property
     def config_path(self) -> Path | None:
         """Return the path to the loaded config file, if any."""
@@ -498,6 +520,23 @@ class Config:
     def default_source(self) -> str | None:
         """Return the default source name."""
         return self._config.get('default_source')
+    
+    @property
+    def shared_database(self):
+        """Cross-source column-identity declarations (design §6): a list of
+    ``{sources: [...], database?, schema?}`` naming the sources that share one
+    physical database. Default None — the opt-in gate stays shut (a coupling is
+    never inferred from a name match)."""
+        return self._config.get('shared_database')
+
+    @property
+    def sql_assert_min_confidence(self) -> str:
+        """The SQL data-model read boundary (design §3a): the minimum
+    confidence — on the ladder ``exact > resolved > derived > recovered`` — at
+    which a schema/access fact is asserted in the query views and the graph
+    projection; weaker facts surface as gaps, never asserted. Set top-level or
+    under ``defaults:``; defaults to ``'resolved'`` (hard evidence only)."""
+        return self._from_defaults('sql_assert_min_confidence', 'resolved')
 
     @property
     def sources(self) -> dict[str, str | dict]:
@@ -531,8 +570,10 @@ class Config:
                 exempt_dirs=tuple(raw.get('exempt_dirs', [])),
                 env_hints=dict(raw.get('env_hints') or {}),
                 swagger_paths=tuple(raw.get('swagger_paths', []) or ()),
+            schema_sql=tuple(raw.get('schema_sql', []) or ()),
+            sql_dialect=raw.get('sql_dialect', 'postgres'),
             ignore_staleness=_coerce_ignore_staleness(raw.get('ignore_staleness', False)),
-                low_confidence_doc_languages=tuple(raw.get('low_confidence_doc_languages', DEFAULT_LOW_CONFIDENCE_DOC_LANGUAGES)), doc_types_by_language=_coerce_doc_types_by_language(raw.get('doc_types_by_language')))
+                low_confidence_doc_languages=tuple(raw.get('low_confidence_doc_languages', DEFAULT_LOW_CONFIDENCE_DOC_LANGUAGES)), doc_types_by_language=_coerce_doc_types_by_language(raw.get('doc_types_by_language')), skip_dependency_detection=bool(raw.get('skip_dependency_detection', False)))
         return None
 
     def hydrate_relations(self, all_relations: dict) -> None:
@@ -791,7 +832,7 @@ class Config:
         exclude: list[str] | None = None,
         exclude_dirs: list[str] | None = None,
         exempt_dirs: list[str] | None = None,
-    ignore_staleness: bool | None = None, doc_types_by_language: dict | None = None) -> bool:
+    ignore_staleness: bool | None = None, skip_dependency_detection: bool | None = None, doc_types_by_language: dict | None = None) -> bool:
         """Persist full source configuration to ariadne.yaml.
 
         Creates the ``sources.<name>`` entry if it does not exist, else
@@ -835,6 +876,8 @@ class Config:
                 current['exempt_dirs'] = exempt_dirs
             if ignore_staleness is not None:
                 current['ignore_staleness'] = ignore_staleness
+            if skip_dependency_detection is not None:
+                current['skip_dependency_detection'] = skip_dependency_detection
             if doc_types_by_language is not None:
                 current['doc_types_by_language'] = {
                     lang: list(types) for lang, types in doc_types_by_language.items()
@@ -1209,6 +1252,13 @@ class Config:
     (empty for an unknown or unset source — no override)."""
         sc = self.get_source_config(source_name) if source_name else None
         return sc.doc_types_by_language if sc is not None else {}
+    def source_skip_dependency_detection(self, source_name) -> bool:
+        """True iff ``source_name`` opted out of cross-source dependency
+    detection (``skip_dependency_detection: true``) -- consulted by the
+    generate import scan and the interactive onboard offer. ``False``
+    for an unknown or unset source."""
+        sc = self.get_source_config(source_name) if source_name else None
+        return bool(sc.skip_dependency_detection) if sc is not None else False
 
 
 # Global config instance - loaded lazily

@@ -270,6 +270,77 @@ CREATE INDEX IF NOT EXISTS idx_rst_autodoc_links_symbol ON rst_autodoc_links(sym
 '''
 
 
+# ---------------------------------------------------------------------------
+# SQL data model — schema symbols + data-access edges (design §4/§5)
+# ---------------------------------------------------------------------------
+
+# The schema *as data*: one row per table/column/view/index node, mirroring
+# api_endpoints (nullable producer, provenance, per-source idempotence).
+# ``producer_symbol_id`` links a code-first table/column back to the ORM
+# model/attr SCIP symbol that defines it (the Layer-1 maps_to binding).
+# ``confidence`` is the ordered enum 'exact' > 'resolved' > 'derived' >
+# 'recovered'; the read boundary asserts only at/above the configured floor.
+_SCHEMA_SYMBOLS_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS schema_symbols (
+    canonical_id       TEXT PRIMARY KEY,
+    source_name        TEXT NOT NULL,
+    node_type          TEXT NOT NULL,
+    database           TEXT,
+    db_schema          TEXT,
+    table_name         TEXT NOT NULL,
+    column_name        TEXT,
+    column_type        TEXT,
+    is_nullable        INTEGER,
+    is_primary_key     INTEGER,
+    references_id      TEXT,
+    producer_symbol_id TEXT,
+    last_changed_by    TEXT,
+    resolution_source  TEXT NOT NULL,
+    confidence         TEXT NOT NULL
+)
+'''
+
+# The access edges: one row per code symbol -> table/column interaction,
+# role-typed (SENT: 'filter'|'write'|'order'  RECV: 'project'  also 'ddl').
+# Mirrors api_calls / config_reads. The composite UNIQUE tolerates re-runs
+# (persist clears the source's rows first anyway).
+_DATA_ACCESS_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS data_access (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_name        TEXT NOT NULL,
+    consumer_symbol_id TEXT NOT NULL,
+    schema_symbol_id   TEXT NOT NULL,
+    role               TEXT NOT NULL,
+    value_source       TEXT,
+    binds_to           TEXT,
+    call_site_file     TEXT,
+    call_site_line     INTEGER,
+    witness            TEXT NOT NULL,
+    confidence         TEXT NOT NULL,
+    UNIQUE(source_name, consumer_symbol_id, schema_symbol_id,
+           call_site_file, call_site_line, role)
+)
+'''
+
+_DATA_MODEL_INDEXES = '''
+CREATE INDEX IF NOT EXISTS idx_schema_symbols_source        ON schema_symbols(source_name);
+CREATE INDEX IF NOT EXISTS idx_schema_symbols_producer      ON schema_symbols(producer_symbol_id);
+CREATE INDEX IF NOT EXISTS idx_schema_symbols_table         ON schema_symbols(source_name, table_name);
+CREATE INDEX IF NOT EXISTS idx_data_access_source           ON data_access(source_name);
+CREATE INDEX IF NOT EXISTS idx_data_access_consumer         ON data_access(consumer_symbol_id);
+CREATE INDEX IF NOT EXISTS idx_data_access_schema_symbol    ON data_access(schema_symbol_id);
+'''
+
+
+_DATA_MODEL_GAPS_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS data_model_gaps (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_name TEXT NOT NULL,
+    detail      TEXT NOT NULL
+)
+'''
+
+
 def init_scip_schema(conn: 'Connection') -> None:
     """Create the SCIP tables (cross-source graph + API surface +
     config-value index + config-read index + string-literal index +
@@ -305,6 +376,11 @@ def init_scip_schema(conn: 'Connection') -> None:
     conn.executescript(_HTTP_CLIENT_CALLS_INDEXES)
     conn.execute(_RST_AUTODOC_LINKS_SCHEMA)
     conn.executescript(_RST_AUTODOC_LINKS_INDEXES)
+    # SQL data model — schema symbols + data-access edges (design §4/§5)
+    conn.execute(_SCHEMA_SYMBOLS_SCHEMA)
+    conn.execute(_DATA_ACCESS_SCHEMA)
+    conn.executescript(_DATA_MODEL_INDEXES)
+    conn.execute(_DATA_MODEL_GAPS_SCHEMA)
 
 
 def persist_rst_autodoc_links(conn, source_name, links):
