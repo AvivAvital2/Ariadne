@@ -35,6 +35,14 @@ if TYPE_CHECKING:
 # during local_reassign.
 _REASSIGN_EDGE_TYPES = ('imports', 'documents', 'topic_member', 'semantic_neighbor')
 
+# Default fan-out for live theme summarization. Each summarize_theme call is an
+# LLM completion + embedding write — async network I/O, NOT CPU-bound — so this
+# caps concurrent in-flight requests to the provider, bounded by its rate
+# limits (hence a small fixed number, NOT multiprocessing.cpu_count()). Theme
+# summaries are independent per cluster, so we always parallelize at this width;
+# ``concurrency=None`` (the signal onboard threads through) resolves to it.
+DEFAULT_SUMMARIZE_CONCURRENCY = 4
+
 
 # ---------------------------------------------------------------------------
 # Summary hash (per plan §4.5)
@@ -247,7 +255,7 @@ async def generate_themes(
     writer: "LibraryWriter",
     *,
     model: str | None = None,
-    concurrency: int = 4,
+    concurrency: int | None = DEFAULT_SUMMARIZE_CONCURRENCY,
     max_calls: int | None = None,
     on_progress=None,
 ) -> dict:
@@ -274,7 +282,12 @@ async def generate_themes(
         dirty = dirty[:max_calls]
 
     total_to_process = len(dirty)
-    sem = asyncio.Semaphore(concurrency)
+    # ``concurrency=None`` is the intended "use the default parallelism" signal:
+    # onboard forwards its own ``--concurrency`` (default None) straight through
+    # cmd_themes_build. ``asyncio.Semaphore`` rejects None ("'<' not supported
+    # between 'NoneType' and 'int'"), so fall back to the default fan-out here.
+    sem = asyncio.Semaphore(DEFAULT_SUMMARIZE_CONCURRENCY
+                            if concurrency is None else concurrency)
     summarized = 0
     incoherent = 0
     failed = 0

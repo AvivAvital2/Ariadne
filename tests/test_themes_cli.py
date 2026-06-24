@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from cli.main import create_parser
-from cli.themes_cmd import cmd_themes
+from cli.themes_cmd import cmd_themes, cmd_themes_build
 from library import Library
 
 
@@ -310,6 +310,40 @@ class TestThemesConcurrency:
         )
         assert cmd_themes(args) == 0
         assert captured['summarize_kwargs']['concurrency'] == 7
+
+    @pytest.mark.asyncio
+    async def test_build_with_none_concurrency_parallelizes_not_crashes(
+        self, patched_get_library: Library, monkeypatch,
+    ) -> None:
+        """`concurrency=None` is the intended "use the default parallelism"
+        signal — `onboard` forwards its own ``--concurrency`` (default None)
+        into the themes phase via ``_ns(**vars(args))``. `generate_themes` must
+        honor None as the default, NOT pass it to ``asyncio.Semaphore(None)``,
+        which raises ``'<' not supported between 'NoneType' and 'int'``.
+
+        Regression for the onboard 'Building themes' crash. Two catalog
+        elements let `refresh_themes` reach `generate_themes` (where the
+        Semaphore is built); a 2-member cluster is below `min_cluster_size`, so
+        nothing is dirty and no summarization runs.
+        """
+        lib = patched_get_library
+        _add_doc(lib, 'el1', content_type='catalog', title='el1')
+        _add_doc(lib, 'el2', content_type='catalog', title='el2')
+
+        # Belt-and-suspenders: never make a real LLM call even if a theme
+        # were dirty (the crash is upstream of this, at the Semaphore).
+        async def _noop_summarize(library, writer, cluster_id, *, model=None):
+            return True
+        monkeypatch.setattr('docgen.themes.summarize_theme', _noop_summarize)
+
+        args = argparse.Namespace(
+            themes_action='build', db=None, cluster_id=None,
+            coherent_only=True, source=None, limit=50, concurrency=None,
+        )
+        rc = await cmd_themes_build(args)
+        assert rc == 0, (
+            'concurrency=None must parallelize at the default, not crash'
+        )
 
 
 # ---------------------------------------------------------------------------

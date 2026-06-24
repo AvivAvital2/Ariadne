@@ -168,7 +168,13 @@ async def cmd_themes_build(args: argparse.Namespace) -> int:
         try:
             summary = await _build()
         except Exception as e:
+            # Surface the full traceback, not just the message — a bare
+            # ``{e}`` (e.g. "'<' not supported between 'NoneType' and 'int'")
+            # hides which call raised it, leaving the failure undiagnosable.
+            import traceback
             console.print(f'[red]Themes build failed: {e}[/red]')
+            console.print('[red]Traceback:[/red]')
+            console.print(traceback.format_exc(), soft_wrap=True)
             return 1
 
         path = summary.get('path', '?')

@@ -7,9 +7,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import igraph as ig
+import leidenalg as la
 import numpy as np
 import pytest
 
+from docgen.cluster import _run_leiden
 from library import Library
 
 
@@ -507,3 +510,40 @@ class TestClusterMappingsWritten:
             assert prev == cid  # inherited the prior id
             assert overlap is not None
             assert overlap >= 0.5
+
+
+class TestRunLeidenBoundedIterations:
+    """Leiden must cap refinement passes rather than run to convergence."""
+
+    def test_run_leiden_uses_bounded_iterations(self, monkeypatch) -> None:
+        """`_run_leiden` must pass a bounded ``n_iterations`` (10) to leidenalg,
+        not ``-1`` (run-to-convergence).
+
+        On the live ~95k-vertex graph, modularity is converged by ~10-20 passes:
+        ``@10`` captures ~90% of the (already <0.2%) total gain over ``@2``,
+        while ``-1`` spends ~2x the time chasing noise-level refinements (and on
+        small graphs ``@10`` converges in <=2 passes anyway, matching ``-1``).
+        This guards against re-introducing the unbounded setting. See
+        ``benchmark_clustering.py``.
+        """
+        captured: dict = {}
+
+        class _FakePartition:
+            membership = [0, 1]
+
+        def _fake_find_partition(graph, partition_type, **kwargs):
+            captured.update(kwargs)
+            return _FakePartition()
+
+        monkeypatch.setattr(la, 'find_partition', _fake_find_partition)
+
+        # Needs >=1 edge, else _run_leiden short-circuits before find_partition.
+        g = ig.Graph(n=2, edges=[(0, 1)])
+        g.es['weight'] = [1.0]
+        membership = _run_leiden(g, resolution=1.0, seed=42)
+
+        assert captured.get('n_iterations') == 10, (
+            'Leiden must run a bounded number of iterations (10), not '
+            'run-to-convergence (-1); -1 ~2x slower for noise-level gain'
+        )
+        assert membership == [0, 1]  # still returns the partition membership

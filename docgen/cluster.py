@@ -11,7 +11,8 @@ document's content with the LLM-generated theme markdown.
 **Operates below the closure chokepoint.** Community detection runs
 over the whole library's catalog elements; per-source clustering would
 miss cross-source clusters by construction. Raw ``library.X(...)`` here
-is intentional — "Library-internal modules — legitimately unscoped".
+is intentional — see ``designs/directional-closure-scoping.md`` §
+"Library-internal modules — legitimately unscoped".
 """
 from __future__ import annotations
 
@@ -92,13 +93,20 @@ def _run_leiden(g: "ig.Graph", *, resolution: float, seed: int) -> list[int]:
 
     import leidenalg as la
 
+    # n_iterations=10, NOT -1 (run-to-convergence). On the live ~95k-vertex
+    # graph Leiden's modularity is converged by ~10-20 passes: @10 captures
+    # ~90% of the (already <0.2%) total gain over @2, while -1 spends ~2x the
+    # time chasing noise-level refinements the min_cluster_size filter discards.
+    # On small graphs @10 converges in <=2 passes anyway, so it matches -1 there
+    # — one fixed value, no size branch. seed pins determinism. See
+    # benchmark_clustering.py / benchmark_leiden_scale.py for the measurements.
     partition = la.find_partition(
         g,
         la.RBConfigurationVertexPartition,
         weights='weight',
         resolution_parameter=resolution,
         seed=seed,
-        n_iterations=-1,
+        n_iterations=10,
     )
     return list(partition.membership)
 
