@@ -22,13 +22,17 @@ def test_coverage_mode_parses_args_and_builds_commands():
     assert pytest_args == ['tests/test_x.py', '-k', 'docker']
     assert '--source=docgen.catalog_extractor' not in pytest_args
 
-    run_cmd = check_tests.build_coverage_run_cmd(source, pytest_args)
+    # The run command must NOT carry --source: on py3.14 that double-loads
+    # numpy's C extension and aborts collection. --source instead scopes the
+    # REPORT, derived to a coverage --include glob (legacy interface preserved).
+    run_cmd = check_tests.build_coverage_run_cmd(pytest_args)
     assert run_cmd == [
         sys.executable, '-m', 'coverage', 'run',
-        '--source=docgen.catalog_extractor',
         '-m', 'pytest', '--import-mode=prepend',
         'tests/test_x.py', '-k', 'docker',
     ]
+    assert '--source=docgen.catalog_extractor' not in run_cmd
+    assert check_tests._include_from_source(source) == '*/docgen/catalog_extractor.py'
 
     # report command omits --include unless one was given...
     assert check_tests.build_coverage_report_cmd(None) == [

@@ -123,13 +123,27 @@ def parse_coverage_args(args):
             pytest_args.append(a)
         i += 1
     return source, include, pytest_args
+def _include_from_source(source):
+    """Map comma-separated dotted modules to coverage --include globs, so
+    the legacy ``--source=pkg.mod`` interface still scopes the report."""
+    globs = []
+    for mod in source.split(","):
+        mod = mod.strip()
+        if mod:
+            globs.append("*/" + mod.replace(".", "/") + ".py")
+    return ",".join(globs)
 
 
-def build_coverage_run_cmd(source, pytest_args):
-    """The numpy/py3.14-safe coverage run: pytest UNDER coverage."""
+def build_coverage_run_cmd(pytest_args):
+    """The numpy/py3.14-safe coverage run: pytest UNDER coverage.
+
+    No ``--source``: on Python 3.14 ``coverage run --source=<pkg>`` imports
+    the package at startup, which double-loads numpy's C extension ("cannot
+    load module more than once per process") and aborts collection. Coverage
+    measures everything imported; the report scopes via --include.
+    """
     return [
         sys.executable, "-m", "coverage", "run",
-        f"--source={source}",
         "-m", "pytest", "--import-mode=prepend",
         *pytest_args,
     ]
@@ -143,17 +157,16 @@ def build_coverage_report_cmd(include):
 
 
 def run_coverage(args):
-    """``check_tests.py coverage --source MODS [--include PAT] <pytest args>``.
+    """``check_tests.py coverage [--source MODS] [--include PAT] <pytest args>``.
 
-    Runs the suite exactly once under coverage, then prints the report.
-    Returns pytest's exit code (0 = green). The single sanctioned way to
-    measure coverage without invoking a bare ``pytest``.
+    Runs the suite once under coverage, then prints the report scoped to
+    ``--include`` (or derived from ``--source``). The single sanctioned way
+    to measure coverage without invoking a bare ``pytest``.
     """
     source, include, pytest_args = parse_coverage_args(args)
-    if not source:
-        print(f"{RED}coverage mode requires --source <modules>{RESET}", file=sys.stderr)
-        return 2
-    run = subprocess.run(build_coverage_run_cmd(source, pytest_args))
+    if not include and source:
+        include = _include_from_source(source)
+    run = subprocess.run(build_coverage_run_cmd(pytest_args))
     # Always show the report, even when some tests failed.
     subprocess.run(build_coverage_report_cmd(include))
     if run.returncode != 0:
