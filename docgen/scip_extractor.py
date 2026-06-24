@@ -43,11 +43,14 @@ class _ScipOccurrence:
 
     ``range`` is ``(start_line, start_col, end_col)`` (3-tuple, same line)
     or ``(start_line, start_col, end_line, end_col)`` (4-tuple).
-    Lines/cols are 0-indexed in the wire format.
+    ``enclosing_range`` is the definition's *body* span (SCIP's separate field,
+    same tuple shapes; ``()`` when absent — references, locals, and indexers
+    that do not emit it). Lines/cols are 0-indexed in the wire format.
     """
     symbol: str
     range: tuple[int, ...]
     is_definition: bool
+    enclosing_range: tuple[int, ...] = ()
 
 
 @frozen
@@ -161,8 +164,11 @@ class ScipIndex:
 
 def _offset_range(range_tuple, offset: int):
     """Add ``offset`` to the line components of a SCIP range tuple.
-    Handles both 3-tuple (same-line) and 4-tuple (multi-line) shapes."""
+    Handles 3-tuple (same-line) and 4-tuple (multi-line) shapes, and an empty
+    tuple (an absent ``enclosing_range``), which stays empty."""
     r = list(range_tuple)
+    if not r:
+        return ()
     if len(r) == 3:
         # (line, start_col, end_col)
         return (r[0] + offset, r[1], r[2])
@@ -193,6 +199,7 @@ def apply_vue_mapping(index: "ScipIndex", mapping: dict) -> "ScipIndex":
                 symbol=o.symbol,
                 range=_offset_range(o.range, offset),
                 is_definition=o.is_definition,
+                enclosing_range=_offset_range(o.enclosing_range, offset),
             )
             for o in doc.occurrences
         )
@@ -224,6 +231,7 @@ def _proto_to_doc(pb_doc) -> _ScipDoc:
             symbol=o.symbol,
             range=tuple(o.range),
             is_definition=is_def,
+            enclosing_range=tuple(getattr(o, 'enclosing_range', ())),
         ))
 
     symbols: list[_ScipSymbol] = []
