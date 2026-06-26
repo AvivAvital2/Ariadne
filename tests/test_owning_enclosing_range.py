@@ -3,7 +3,9 @@
 A query inside a function *body* must bind to that function. A SCIP definition
 occurrence's plain ``range`` is only the **name token** — one line for
 scip-python (measured: 100% single-line on real indexes). The body span lives
-in SCIP's separate ``enclosing_range``. So ``_owning_lookup`` must:
+in SCIP's separate ``enclosing_range``. So the owning resolver
+(``docgen.scip_owning.build_owning_resolver``, unit-tested in
+``tests/test_scip_owning.py``) must:
 
   - use ``enclosing_range`` (the body span) for containment when present, and
     fall back to the name-token ``range`` only when it is absent; and
@@ -13,7 +15,8 @@ in SCIP's separate ``enclosing_range``. So ``_owning_lookup`` must:
     same-line def at all, is dropped as "no owning symbol" so its columns look
     falsely dead.
 
-Covered end-to-end over the real binding path (SQLAlchemy strategy ->
+This module now covers the resolver end-to-end over the real binding path
+(SQLAlchemy strategy ->
 ``persist_data_access_orm``) plus the supporting plumbing that carries the body
 span off the wire (``_proto_to_doc``) and through the ``.vue`` remap
 (``apply_vue_mapping``). SCIP is synthesized exactly as scip-python emits it:
@@ -26,7 +29,7 @@ import sqlite3
 import pytest
 
 from docgen.orm_bindings import SQLAlchemyStrategy
-from docgen.orm_bindings.access import _owning_lookup, persist_data_access_orm
+from docgen.orm_bindings.access import persist_data_access_orm
 from docgen.scip_extractor import (
     ScipIndex,
     _proto_to_doc,
@@ -109,47 +112,6 @@ def test_body_query_binds_to_enclosing_function_not_local(tmp_path):
         assert any('has no owning symbol' in g for g in result2.gaps)
     finally:
         conn.close()
-
-
-def test_owning_lookup_uses_body_span_skips_locals_falls_back_to_range():
-    """``_owning_lookup`` contract: body-span containment, ``local`` excluded,
-    fall back to ``range`` when no span, tightest *named* def wins, and a
-    non-definition occurrence is not an owner."""
-    doc = _ScipDoc(
-        relative_path='m.py',
-        occurrences=(
-            # named def: single-line name-token range + multi-line body span
-            _ScipOccurrence(symbol='pkg/f().', range=(5, 4, 15),
-                            is_definition=True, enclosing_range=(5, 0, 20, 0)),
-            # same-line local inside f's body — must be skipped, not chosen
-            _ScipOccurrence(symbol='local 7', range=(10, 4, 8), is_definition=True),
-            # named def with NO body span: falls back to its (4-tuple) range
-            _ScipOccurrence(symbol='pkg/g().', range=(25, 0, 30, 0),
-                            is_definition=True),
-            # single-line named def, 3-tuple range — exercises the else span[0]
-            _ScipOccurrence(symbol='pkg/C.', range=(2, 0, 6), is_definition=True),
-            # nested: outer class body + inner method body — tightest wins
-            _ScipOccurrence(symbol='pkg/Outer#', range=(40, 6, 11),
-                            is_definition=True, enclosing_range=(40, 0, 60, 0)),
-            _ScipOccurrence(symbol='pkg/Outer#m().', range=(45, 8, 9),
-                            is_definition=True, enclosing_range=(45, 0, 50, 0)),
-            # a non-definition occurrence — excluded from the owning map
-            _ScipOccurrence(symbol='pkg/ref().', range=(11, 0, 4),
-                            is_definition=False),
-        ),
-        symbols=(),
-    )
-    owning = _owning_lookup(ScipIndex(documents=(doc,)))
-    # inside f's body, on the local's own line: binds to f, never local 7
-    assert owning('m.py', 10) == 'pkg/f().'
-    # inside g's body via the name-token-range fallback (no body span)
-    assert owning('m.py', 27) == 'pkg/g().'
-    # on a single-line def's own line (3-tuple range, else-branch)
-    assert owning('m.py', 2) == 'pkg/C.'
-    # nested: the tighter inner method wins over the enclosing class
-    assert owning('m.py', 47) == 'pkg/Outer#m().'
-    # outside every def → no owner
-    assert owning('m.py', 100) is None
 
 
 def test_proto_to_doc_parses_enclosing_range():

@@ -109,6 +109,16 @@ def _make_index(
     )
 
 
+def _def_occ(symbol, line_start, line_end):
+    """A definition occurrence for an enclosing function/method/class spanning
+    1-indexed line_start..line_end: a name-token ``range`` on the def line plus
+    the body ``enclosing_range`` — the shape scip-python emits and the owning
+    resolver reads (replaces the retired scip_symbols owning fixture)."""
+    return _ScipOccurrence(
+        symbol=symbol, range=(line_start - 1, 4, 40), is_definition=True,
+        enclosing_range=(line_start - 1, 0, line_end - 1, 0))
+
+
 def _add_scip_symbol(
     conn: sqlite3.Connection,
     *,
@@ -290,23 +300,8 @@ class TestConsumerSymbolResolution:
         src = tmp_path / 'UserService.scala'
         src.write_text(text)
         method_id = 'scip:UserService#fetch().'
-        # Class symbol (kind=Class — must be filtered by kind filter)
-        _add_scip_symbol(
-            conn, canonical_id='scip:UserService#',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=5,
-            kind='Class', qualified_name='UserService',
-        )
-        # Method symbol (kind=Method — qualifies)
-        _add_scip_symbol(
-            conn, canonical_id=method_id,
-            source_name='myapi', file=str(src.resolve()),
-            line_start=2, line_end=4,
-            kind='Method', qualified_name='UserService.fetch',
-            parent_qualified_name='UserService',
-        )
         index = _make_index(src, tmp_path, [
-            _occ_at(text, 'url', _PLAY_WS_URL_SYM),
+            _occ_at(text, 'url', _PLAY_WS_URL_SYM),_def_occ('scip:UserService#', 1, 5), _def_occ(method_id, 2, 4)
         ])
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,
@@ -358,19 +353,6 @@ class TestPhase2sVariableResolution:
         src = tmp_path / 'Service.scala'
         src.write_text(text)
         method_id = 'scip:Service#fetch().'
-        _add_scip_symbol(
-            conn, canonical_id='scip:Service#',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=6, kind='Class',
-            qualified_name='Service', language='scala',
-        )
-        _add_scip_symbol(
-            conn, canonical_id=method_id,
-            source_name='myapi', file=str(src.resolve()),
-            line_start=3, line_end=5, kind='Method',
-            qualified_name='Service.fetch',
-            parent_qualified_name='Service', language='scala',
-        )
         # The val whose initializer carries the literal — Phase 2s
         # finds it via qualified_name match
         _add_scip_symbol(
@@ -381,7 +363,7 @@ class TestPhase2sVariableResolution:
             parent_qualified_name='Service', language='scala',
         )
         index = _make_index(src, tmp_path, [
-            _occ_at(text, 'url', _PLAY_WS_URL_SYM),
+            _occ_at(text, 'url', _PLAY_WS_URL_SYM),_def_occ('scip:Service#', 1, 6), _def_occ(method_id, 3, 5)
         ])
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,
@@ -409,16 +391,10 @@ class TestPhase2sVariableResolution:
         src = tmp_path / 'Service.scala'
         src.write_text(text)
         method_id = 'scip:Service#fetch().'
-        _add_scip_symbol(
-            conn, canonical_id=method_id,
-            source_name='myapi', file=str(src.resolve()),
-            line_start=2, line_end=5, kind='Method',
-            qualified_name='Service.fetch', language='scala',
-        )
         # No scip_symbol for UNDEFINED
         index = _make_index(src, tmp_path, [
             _occ_at(text, 'url', _PLAY_WS_URL_SYM, nth=0),
-            _occ_at(text, 'url', _PLAY_WS_URL_SYM, nth=1),
+            _occ_at(text, 'url', _PLAY_WS_URL_SYM, nth=1),_def_occ(method_id, 2, 5)
         ])
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,

@@ -46,6 +46,7 @@ oauth_config:
       - mpim:history        # read group-DM thread history (message.mpim thread follow-ups)
       - mpim:read           # conversations.info on group DMs (shared check)
       - im:read             # conversations.info on DMs (detect Slack Connect DMs)
+      - users:read          # users.info — resolve a user's profile (identity / display name)
 settings:
   event_subscriptions:
     bot_events:

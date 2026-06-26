@@ -142,6 +142,16 @@ def _make_index(
     return ScipIndex(documents=docs, source_root=source_root)
 
 
+def _def_occ(symbol, line_start, line_end):
+    """A definition occurrence for an enclosing function/method/class spanning
+    1-indexed line_start..line_end: a name-token ``range`` on the def line plus
+    the body ``enclosing_range`` — the shape scip-python emits and the owning
+    resolver reads (replaces the retired scip_symbols owning fixture)."""
+    return _ScipOccurrence(
+        symbol=symbol, range=(line_start - 1, 4, 40), is_definition=True,
+        enclosing_range=(line_start - 1, 0, line_end - 1, 0))
+
+
 def _add_scip_symbol(
     conn: sqlite3.Connection,
     *,
@@ -226,12 +236,6 @@ class TestPythonSubprocess:
         src = tmp_path / 'app.py'
         src.write_text(text)
         fn_id = 'scip-python . . . app.py/run_proc().'
-        _add_scip_symbol(
-            conn, canonical_id=fn_id,
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=4,
-            kind='Function', qualified_name='run_proc',
-        )
         index = _make_index([
             (src, [
                 _occ_at(
@@ -239,7 +243,7 @@ class TestPythonSubprocess:
                 ),
                 _occ_at(
                     text, 'Popen', _PY_SUBPROCESS_POPEN_SYM, nth=1,
-                ),
+                ),_def_occ(fn_id, 1, 4)
             ]),
         ], tmp_path)
         _run_pipeline(
@@ -268,16 +272,10 @@ class TestPythonSubprocess:
         src = tmp_path / 'app.py'
         src.write_text(text)
         fn_id = 'scip-python . . . app.py/trigger().'
-        _add_scip_symbol(
-            conn, canonical_id=fn_id,
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=4,
-            kind='Function', qualified_name='trigger',
-        )
         index = _make_index([
             (src, [
                 _occ_at(text, 'system', _PY_OS_SYSTEM_SYM, nth=0),
-                _occ_at(text, 'system', _PY_OS_SYSTEM_SYM, nth=1),
+                _occ_at(text, 'system', _PY_OS_SYSTEM_SYM, nth=1),_def_occ(fn_id, 1, 4)
             ]),
         ], tmp_path)
         _run_pipeline(
@@ -303,16 +301,10 @@ class TestPythonSubprocess:
         )
         src = tmp_path / 'app.py'
         src.write_text(text)
-        _add_scip_symbol(
-            conn, canonical_id='deploy',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=3, kind='Function',
-            qualified_name='deploy',
-        )
         index = _make_index([
             (src, [
                 _occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=0),
-                _occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=1),
+                _occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=1),_def_occ('scip-python . . . app/deploy().', 1, 3)
             ]),
         ], tmp_path)
         _run_pipeline(
@@ -340,16 +332,10 @@ class TestPythonSubprocess:
         )
         src = tmp_path / 'app.py'
         src.write_text(text)
-        _add_scip_symbol(
-            conn, canonical_id='deploy',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=4, kind='Function',
-            qualified_name='deploy',
-        )
         index = _make_index([
             (src, [
                 _occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=0),
-                _occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=1),
+                _occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=1),_def_occ('scip-python . . . app/deploy().', 1, 4)
             ]),
         ], tmp_path)
         _run_pipeline(
@@ -383,16 +369,10 @@ class TestPythonSubprocess:
         )
         src = tmp_path / 'app.py'
         src.write_text(text)
-        _add_scip_symbol(
-            conn, canonical_id='deploy',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=2, line_end=3, kind='Function',
-            qualified_name='deploy',
-        )
         index = _make_index([
             (src, [
                 _occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=0),
-                _occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=1),
+                _occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=1),_def_occ('scip-python . . . app/deploy().', 2, 3)
             ]),
         ], tmp_path)
         _run_pipeline(
@@ -442,14 +422,8 @@ class TestForcesPhase2pIntegration:
         )
         src = tmp_path / 'app.py'
         src.write_text(text)
-        _add_scip_symbol(
-            conn, canonical_id='deploy',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=2, kind='Function',
-            qualified_name='deploy',
-        )
         index = _make_index([
-            (src, [_occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM)]),
+            (src, [_occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM), _def_occ('scip-python . . . app/deploy().', 1, 2)]),
         ], tmp_path)
 
         # Phase 1: WITHOUT ingest_string_literals — must yield 0 rows
@@ -496,16 +470,10 @@ class TestForcesPhase2pIntegration:
         )
         src = tmp_path / 'app.py'
         src.write_text(text)
-        _add_scip_symbol(
-            conn, canonical_id='deploy',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=3, kind='Function',
-            qualified_name='deploy',
-        )
         index = _make_index([
             (src, [
                 _occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=0),
-                _occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=1),
+                _occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=1),_def_occ('scip-python . . . app/deploy().', 1, 3)
             ]),
         ], tmp_path)
         _run_pipeline(
@@ -534,14 +502,8 @@ class TestForcesPhase2pIntegration:
         )
         src = tmp_path / 'app.py'
         src.write_text(text)
-        _add_scip_symbol(
-            conn, canonical_id='deploy',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=2, kind='Function',
-            qualified_name='deploy',
-        )
         index = _make_index([
-            (src, [_occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM)]),
+            (src, [_occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM), _def_occ('scip-python . . . app/deploy().', 1, 2)]),
         ], tmp_path)
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,
@@ -581,17 +543,10 @@ class TestJsChildProcess:
         src = tmp_path / 'app.js'
         src.write_text(text)
         fn_id = 'scip-typescript . . . app.js/trigger().'
-        _add_scip_symbol(
-            conn, canonical_id=fn_id,
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=5,
-            kind='Function', qualified_name='trigger',
-            language='typescript',
-        )
         index = _make_index([
             (src, [
                 _occ_at(text, 'exec', _JS_EXEC_SYM, nth=0),
-                _occ_at(text, 'exec', _JS_EXEC_SYM, nth=1),
+                _occ_at(text, 'exec', _JS_EXEC_SYM, nth=1),_def_occ(fn_id, 1, 5)
             ]),
         ], tmp_path)
         _run_pipeline(
@@ -621,17 +576,10 @@ class TestJsChildProcess:
         src = tmp_path / 'app.js'
         src.write_text(text)
         fn_id = 'scip-typescript . . . app.js/deploy().'
-        _add_scip_symbol(
-            conn, canonical_id=fn_id,
-            source_name='myapi', file=str(src.resolve()),
-            line_start=2, line_end=4,
-            kind='Function', qualified_name='deploy',
-            language='typescript',
-        )
         index = _make_index([
             (src, [
                 _occ_at(text, 'spawn', _JS_SPAWN_SYM, nth=0),
-                _occ_at(text, 'spawn', _JS_SPAWN_SYM, nth=1),
+                _occ_at(text, 'spawn', _JS_SPAWN_SYM, nth=1),_def_occ(fn_id, 2, 4)
             ]),
         ], tmp_path)
         _run_pipeline(
@@ -673,19 +621,6 @@ class TestScalaProcess:
         src = tmp_path / 'Runner.scala'
         src.write_text(text)
         method_id = 'scip:Runner#runIt().'
-        _add_scip_symbol(
-            conn, canonical_id='scip:Runner#',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=7, kind='Class',
-            qualified_name='Runner', language='scala',
-        )
-        _add_scip_symbol(
-            conn, canonical_id=method_id,
-            source_name='myapi', file=str(src.resolve()),
-            line_start=2, line_end=6, kind='Method',
-            qualified_name='Runner.runIt',
-            parent_qualified_name='Runner', language='scala',
-        )
         index = _make_index([
             (src, [
                 _occ_at(
@@ -695,7 +630,7 @@ class TestScalaProcess:
                 _occ_at(
                     text, 'Process', _SCALA_PROCESS_APPLY_SYM,
                     nth=1,
-                ),
+                ),_def_occ('scip:Runner#', 1, 7), _def_occ(method_id, 2, 6)
             ]),
         ], tmp_path)
         _run_pipeline(
@@ -745,13 +680,6 @@ class TestPhase2sVariableResolution:
         )
         src = tmp_path / 'app.py'
         src.write_text(text)
-        # Caller — deploy() function on lines 2-3
-        _add_scip_symbol(
-            conn, canonical_id='scip:app.deploy',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=2, line_end=3,
-            kind='Function', qualified_name='app.deploy',
-        )
         # The variable being referenced — SCRIPT defined on line 1
         _add_scip_symbol(
             conn, canonical_id='scip:app.SCRIPT',
@@ -762,7 +690,7 @@ class TestPhase2sVariableResolution:
         index = _make_index([
             (src, [_occ_at(
                 text, 'run', _PY_SUBPROCESS_RUN_SYM,
-            )]),
+            ), _def_occ('scip:app.deploy', 2, 3)]),
         ], tmp_path)
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,
@@ -789,18 +717,12 @@ class TestPhase2sVariableResolution:
         )
         src = tmp_path / 'app.py'
         src.write_text(text)
-        _add_scip_symbol(
-            conn, canonical_id='scip:app.deploy',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=3,
-            kind='Function', qualified_name='app.deploy',
-        )
         # NO scip_symbol for UNDEFINED_VAR — Phase 2s returns
         # unresolved → extractor skips
         index = _make_index([
             (src, [
                 _occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=0),
-                _occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=1),
+                _occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=1),_def_occ('scip:app.deploy', 1, 3)
             ]),
         ], tmp_path)
         _run_pipeline(
@@ -845,12 +767,6 @@ class TestPerSinkRegressionCoverage:
         )
         src = tmp_path / 'app.py'
         src.write_text(text)
-        _add_scip_symbol(
-            conn, canonical_id='deploy',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=8, kind='Function',
-            qualified_name='deploy',
-        )
         sym_call = (
             'scip-python python pypi-stdlib 0 '
             'subprocess/__init__.py/call.'
@@ -876,7 +792,7 @@ class TestPerSinkRegressionCoverage:
                 _occ_at(
                     text, 'check_output',
                     sym_check_output, nth=1,
-                ),
+                ),_def_occ('scip-python . . . app/deploy().', 1, 8)
             ]),
         ], tmp_path)
         _run_pipeline(
@@ -913,13 +829,6 @@ class TestPerSinkRegressionCoverage:
         )
         src = tmp_path / 'app.js'
         src.write_text(text)
-        _add_scip_symbol(
-            conn, canonical_id='deploy',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=11,
-            kind='Function', qualified_name='deploy',
-            language='typescript',
-        )
         sym_execfile = (
             'scip-typescript . . . child_process.d.ts/execFile.'
         )
@@ -941,7 +850,7 @@ class TestPerSinkRegressionCoverage:
                 _occ_at(text, 'execFile', sym_execfile, nth=1),
                 _occ_at(text, 'spawnSync', sym_spawnsync, nth=1),
                 _occ_at(text, 'execSync', sym_execsync, nth=1),
-                _occ_at(text, 'fork', sym_fork, nth=1),
+                _occ_at(text, 'fork', sym_fork, nth=1),_def_occ('scip-python . . . app/deploy().', 1, 11)
             ]),
         ], tmp_path)
         _run_pipeline(
@@ -978,12 +887,6 @@ class TestAdversarial:
         )
         src = tmp_path / 'app.py'
         src.write_text(text)
-        _add_scip_symbol(
-            conn, canonical_id='deploy',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=3, kind='Function',
-            qualified_name='deploy',
-        )
         index = _make_index([
             (src, [
                 _occ_at(
@@ -993,7 +896,7 @@ class TestAdversarial:
                     text, 'run',
                     'scip-python . . . myproj/Job#run.',
                     nth=1,
-                ),
+                ),_def_occ('scip-python . . . app/deploy().', 1, 3)
             ]),
         ], tmp_path)
         _run_pipeline(
@@ -1021,16 +924,10 @@ class TestAdversarial:
         )
         src = tmp_path / 'app.py'
         src.write_text(text)
-        _add_scip_symbol(
-            conn, canonical_id='deploy',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=3, kind='Function',
-            qualified_name='deploy',
-        )
         index = _make_index([
             (src, [_occ_at(
                 text, 'run', _PY_SUBPROCESS_RUN_SYM, nth=0,
-            )]),  # only first
+            ), _def_occ('scip-python . . . app/deploy().', 1, 3)]),  # only first
         ], tmp_path)
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,
@@ -1055,12 +952,6 @@ class TestAdversarial:
             '    subprocess.run("python ok.py")\n'
         )
         good.write_text(good_text)
-        _add_scip_symbol(
-            conn, canonical_id='deploy',
-            source_name='myapi', file=str(good.resolve()),
-            line_start=1, line_end=2, kind='Function',
-            qualified_name='deploy',
-        )
         index = ScipIndex(
             documents=(
                 _ScipDoc(
@@ -1074,6 +965,7 @@ class TestAdversarial:
                         _occ_at(
                             good_text, 'run', _PY_SUBPROCESS_RUN_SYM,
                         ),
+                        _def_occ('scip-python . . . app/deploy().', 1, 2),
                     ),
                     symbols=(),
                 ),
@@ -1112,14 +1004,8 @@ class TestAdversarial:
         )
         src = tmp_path / 'app.py'
         src.write_text(text)
-        _add_scip_symbol(
-            conn, canonical_id='deploy',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=2, kind='Function',
-            qualified_name='deploy',
-        )
         index = _make_index([
-            (src, [_occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM)]),
+            (src, [_occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM), _def_occ('scip-python . . . app/deploy().', 1, 2)]),
         ], tmp_path)
         ingest_string_literals(
             source_name='myapi', source_root=tmp_path,
@@ -1150,14 +1036,8 @@ class TestReIngest:
         )
         src = tmp_path / 'app.py'
         src.write_text(text1)
-        _add_scip_symbol(
-            conn, canonical_id='deploy',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=2, kind='Function',
-            qualified_name='deploy',
-        )
         index1 = _make_index([
-            (src, [_occ_at(text1, 'run', _PY_SUBPROCESS_RUN_SYM)]),
+            (src, [_occ_at(text1, 'run', _PY_SUBPROCESS_RUN_SYM), _def_occ('scip-python . . . app/deploy().', 1, 2)]),
         ], tmp_path)
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,
@@ -1170,7 +1050,7 @@ class TestReIngest:
         )
         src.write_text(text2)
         index2 = _make_index([
-            (src, [_occ_at(text2, 'run', _PY_SUBPROCESS_RUN_SYM)]),
+            (src, [_occ_at(text2, 'run', _PY_SUBPROCESS_RUN_SYM), _def_occ('scip-python . . . app/deploy().', 1, 2)]),
         ], tmp_path)
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,
@@ -1202,14 +1082,8 @@ class TestReIngest:
         )
         src = tmp_path / 'app.py'
         src.write_text(text)
-        _add_scip_symbol(
-            conn, canonical_id='deploy',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=2, kind='Function',
-            qualified_name='deploy',
-        )
         index = _make_index([
-            (src, [_occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM)]),
+            (src, [_occ_at(text, 'run', _PY_SUBPROCESS_RUN_SYM), _def_occ('scip-python . . . app/deploy().', 1, 2)]),
         ], tmp_path)
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,

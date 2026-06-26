@@ -27,6 +27,8 @@ _METHOD_SCOPES: dict[str, set[str]] = {
     'conversations_list': {'channels:read'},
     'conversations_info': {'channels:read', 'groups:read', 'im:read', 'mpim:read'},
     'files_upload_v2': {'files:write'},
+    'users_info': {'users:read'},
+
 }
 
 # Required by things that aren't a Web API client call:

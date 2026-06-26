@@ -12,11 +12,16 @@ against, rows are ``derived`` (§5.7). Synthetic fixtures only.
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 
 import pytest
 
-from docgen.sql_access import persist_data_access_rawsql
+from docgen.sql_access import (
+    _access_for_literal,
+    _parse_sql,
+    persist_data_access_rawsql,
+)
 from library.scip import init_scip_schema
 
 READER = 'scip-python python src1 . src1/get_user().'
@@ -49,6 +54,43 @@ def conn():
     c.close()
 
 
+def test_binder_does_not_leak_sqlglot_command_fallback_warnings(conn):
+    """The binder uses sqlglot as a SQL classifier: a literal that isn't a
+    parseable statement is consumed here as 'not SQL' or recorded as a gap.
+    sqlglot's per-string ``Command``-fallback WARNING is redundant with that
+    handling (it announces the verdict we already act on), so it must not leak to
+    the logs during detection — dynamic SQL and prose alike."""
+    captured: list[str] = []
+
+    class _Cap(logging.Handler):
+        def emit(self, record):
+            captured.append(record.getMessage())
+
+    handler = _Cap()
+    sqlglot_log = logging.getLogger('sqlglot')
+    sqlglot_log.addHandler(handler)
+    try:
+        _literal(conn, 'CREATE __x__ TABLE __y__ (__z__)', READER)  # dynamic SQL -> Command
+        _literal(conn, 'Replace the dataset on mismatch', READER)   # prose -> Command
+        persist_data_access_rawsql(conn, 'src1')
+    finally:
+        sqlglot_log.removeHandler(handler)
+
+    assert not any('Command' in m or 'unsupported syntax' in m for m in captured), captured
+
+
+def test_access_for_literal_parses_then_extracts_or_empties():
+    """``_access_for_literal`` (the audit's per-literal entry point) parses then
+    extracts: a SQL statement yields its (table, column, role) triples; a bare
+    expression or non-SQL string yields nothing."""
+    assert set(_access_for_literal('SELECT email FROM users WHERE id = 1', 'duckdb')) == {
+        ('users', 'email', 'project'),
+        ('users', 'id', 'filter'),
+    }
+    assert _access_for_literal('config.json', 'duckdb') == []   # bare expression, not SQL
+    assert _access_for_literal('just prose here', 'duckdb') == []
+
+
 def test_rawsql_emits_role_typed_access_and_is_idempotent(conn):
     # --- given: a read query, a write query, and three that must be
     #            skipped (unparseable / un-bindable / no call site) ------
@@ -75,6 +117,30 @@ def test_rawsql_emits_role_typed_access_and_is_idempotent(conn):
     #          it does not duplicate them ------------------------------
     persist_data_access_rawsql(conn, 'src1')
     assert _rawsql_rows(conn) == expected
+
+
+def test_bare_expression_strings_are_not_mistaken_for_sql(conn):
+    """SQL detection requires a parsed *statement*, not merely a successful
+    parse. A dotted string — a filename like ``config.json`` or ``a.b`` — parses
+    as a bare column reference (``table.column``), NOT a statement, so it must
+    not be read as data access. Only real statements create schema nodes."""
+    _literal(conn, 'SELECT email FROM users WHERE id = ?', READER)  # statement -> binds
+    _literal(conn, 'config.json', READER)            # bare expr config.json -> NOT SQL
+    _literal(conn, 'a.b', READER)                    # bare expr -> NOT SQL
+    _literal(conn, 'Create a leaf node.', READER)    # not a statement -> NOT SQL
+
+    persist_data_access_rawsql(conn, 'src1')
+
+    nodes = {
+        r[0] for r in conn.execute(
+            "SELECT canonical_id FROM schema_symbols WHERE source_name = 'src1'")
+    }
+    # only the real query produced nodes — no phantom config/json/a/b tables
+    assert nodes == {
+        'data sql src1 _._.users',
+        'data sql src1 _._.users#email',
+        'data sql src1 _._.users#id',
+    }
 
 
 def test_placeholder_normalization_recovers_interpolated_sql(conn):
@@ -104,20 +170,20 @@ def test_placeholder_normalization_recovers_interpolated_sql(conn):
 
 
 def test_unrecovered_sql_is_recorded_as_a_gap_not_silently_dropped(conn):
-    # --- given: a recoverable query, a SQL-shaped literal that won't parse
-    #            (the dynamically-built SQL §5.8 defers), and a non-SQL
-    #            string (a log line) -----------------------------------
+    # --- given: a recoverable query, a SQL STATEMENT we recognize but can't
+    #            turn into a column-level fact (a table-only DELETE), and a
+    #            non-SQL string (a log line) -----------------------------
     _literal(conn, 'SELECT email FROM users WHERE id = ?', READER)
-    _literal(conn, 'SELECT FROM WHERE', WRITER)               # SQL-shaped, unparseable
-    _literal(conn, 'just a log message, not a query', READER)  # not SQL
+    _literal(conn, 'DELETE FROM cache', WRITER)               # statement, no column access
+    _literal(conn, 'just a log message, not a query', READER)  # not a SQL statement
 
     result = persist_data_access_rawsql(conn, 'src1')
 
     # the recoverable query still produces its rows
     assert result.rows_written == 2
-    # the SQL-shaped literal we could NOT recover is recorded (§5.8: "never
-    # silently dropped"); the non-SQL string is not counted as a SQL gap
-    assert set(result.gaps) == {'SELECT FROM WHERE'}
+    # the SQL statement we recognized but couldn't bind is recorded (§5.8:
+    # "never silently dropped"); the non-SQL string is not counted as a gap
+    assert set(result.gaps) == {'DELETE FROM cache'}
 
 
 def test_select_star_expands_to_per_column_reads():
@@ -205,3 +271,35 @@ def test_rawsql_completes_clause_role_set_and_resolves_aliases(conn):
         (CREATOR, T + 'audit#id', 'ddl', 'derived'),
         (CREATOR, T + 'audit#ts', 'ddl', 'derived'),
     }
+
+
+def test_parse_sql_skips_command_fallbacks_and_returns_none_when_unparsed():
+    """_parse_sql treats sqlglot's opaque Command fallback as 'not parsed' and
+    keeps trying dialects; when every dialect yields only a Command it returns
+    None (a gap), never a Command masquerading as a real statement."""
+    assert _parse_sql('CREATE magic thing') is None
+
+
+def test_rawsql_falls_back_across_dialects_per_query(conn):
+    """With NO configured dialect, the binder reads dialect-specific SQL by
+    trying supported dialects per query: DuckDB integer-division (``//``) and
+    MySQL backtick identifiers both bind, in one source, no config."""
+    _literal(conn, 'SELECT a // b FROM t WHERE c = 1', READER)        # // : duckdb only
+    _literal(conn, 'SELECT `x` FROM `tbl` WHERE `y` = 1', WRITER)     # backticks: mysql only
+    persist_data_access_rawsql(conn, 'src1')                          # no dialect= passed
+    rows = _rawsql_rows(conn)
+    assert (READER, 'data sql src1 _._.t#c', 'filter', 'derived') in rows
+    assert (WRITER, 'data sql src1 _._.tbl#y', 'filter', 'derived') in rows
+
+
+def test_ddl_placeholder_names_are_not_emitted_as_schema(conn):
+    """A CREATE/ALTER whose table or column was an f-string interpolation is
+    captured with the placeholder token; the DDL path must drop placeholders
+    like every other path, never emitting a phantom schema node (accuracy)."""
+    _literal(conn, 'CREATE TABLE __ariadne_ph__ (age INTEGER)', WRITER, line=3)
+    _literal(conn, 'CREATE TABLE orders (status TEXT)', WRITER, line=4)
+    persist_data_access_rawsql(conn, 'src1', dialect='duckdb')
+    nodes = {r[0] for r in conn.execute(
+        "SELECT canonical_id FROM schema_symbols WHERE source_name = 'src1'")}
+    assert not any('__ariadne_ph__' in n for n in nodes)   # placeholder dropped
+    assert 'data sql src1 _._.orders#status' in nodes      # a real DDL still binds

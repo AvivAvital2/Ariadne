@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Callable
 from ast_grep_py import SgRoot
 
 from docgen.scip_extractor import ScipIndex, _ScipDoc, _ScipOccurrence
+from docgen.scip_owning import build_owning_resolver
 from docgen.scip_sink_registry import DEFAULT_SINK_REGISTRY, SinkSpec
 from ast_utils import safe_ast_parse
 
@@ -62,30 +63,6 @@ def _detect_language(path: Path) -> str | None:
 
 def _occ_position(occ: _ScipOccurrence) -> tuple[int, int]:
     return (occ.range[0], occ.range[1])
-
-
-def _find_caller_symbol(
-    conn: 'Connection',
-    *,
-    source_name: str,
-    file: str,
-    line: int,
-) -> str | None:
-    """Smallest-range Method/Function symbol covering ``line``.
-    ``None`` for module-level call sites — those get skipped because
-    ``process_invocations.caller_symbol_id`` is NOT NULL by schema.
-    Same kind-filter semantics as Phase 2p ownership lookup."""
-    cursor = conn.execute(
-        '''SELECT canonical_id FROM scip_symbols
-           WHERE source_name = ? AND file = ?
-             AND line_start <= ? AND line_end >= ?
-             AND kind IN ('Method', 'Function')
-           ORDER BY (line_end - line_start) ASC
-           LIMIT 1''',
-        (source_name, file, line, line),
-    )
-    row = cursor.fetchone()
-    return row[0] if row else None
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +131,7 @@ def _extract_python_invocations(
     conn: 'Connection',
     source_name: str,
     file: str,
-) -> list[tuple]:
+owning) -> list[tuple]:
     from docgen.scip_resolution import resolve_arg_value
 
     classified: list[tuple[_ScipOccurrence, SinkSpec]] = []
@@ -201,12 +178,7 @@ def _extract_python_invocations(
         if target is None:
             continue
         call_line = pos[0] + 1
-        caller = _find_caller_symbol(
-            conn,
-            source_name=source_name,
-            file=file,
-            line=call_line,
-        )
+        caller = owning(doc.relative_path, call_line - 1)
         if caller is None:
             # Schema NOT NULL — skip module-level calls.
             continue
@@ -302,7 +274,7 @@ def _extract_js_invocations(
     conn: 'Connection',
     source_name: str,
     file: str,
-) -> list[tuple]:
+owning) -> list[tuple]:
     from docgen.scip_resolution import resolve_arg_value
 
     classified: list[tuple[_ScipOccurrence, SinkSpec]] = []
@@ -353,12 +325,7 @@ def _extract_js_invocations(
         if target is None:
             continue
         call_line = pos[0] + 1
-        caller = _find_caller_symbol(
-            conn,
-            source_name=source_name,
-            file=file,
-            line=call_line,
-        )
+        caller = owning(doc.relative_path, call_line - 1)
         if caller is None:
             continue
         rows.append((
@@ -460,7 +427,7 @@ def _extract_scala_invocations(
     conn: 'Connection',
     source_name: str,
     file: str,
-) -> list[tuple]:
+owning) -> list[tuple]:
     from docgen.scip_resolution import resolve_arg_value
 
     classified: list[tuple[_ScipOccurrence, SinkSpec]] = []
@@ -511,12 +478,7 @@ def _extract_scala_invocations(
         if target is None:
             continue
         call_line = pos[0] + 1
-        caller = _find_caller_symbol(
-            conn,
-            source_name=source_name,
-            file=file,
-            line=call_line,
-        )
+        caller = owning(doc.relative_path, call_line - 1)
         if caller is None:
             continue
         rows.append((
@@ -573,6 +535,7 @@ def ingest_process_invocations(
     )
 
     rows: list[tuple] = []
+    owning = build_owning_resolver(index)
     for doc in index.documents:
         path = source_root / doc.relative_path
         lang = _detect_language(path)
@@ -587,22 +550,13 @@ def ingest_process_invocations(
         try:
             if lang == 'python':
                 file_rows = _extract_python_invocations(
-                    doc, text, conn=conn,
-                    source_name=source_name,
-                    file=str(path.resolve()),
-                )
+                    doc, text, conn=conn, source_name=source_name, file=str(path.resolve()), owning = owning)
             elif lang == 'typescript':
                 file_rows = _extract_js_invocations(
-                    doc, text, conn=conn,
-                    source_name=source_name,
-                    file=str(path.resolve()),
-                )
+                    doc, text, conn=conn, source_name=source_name, file=str(path.resolve()), owning = owning)
             elif lang == 'jvm':
                 file_rows = _extract_scala_invocations(
-                    doc, text, conn=conn,
-                    source_name=source_name,
-                    file=str(path.resolve()),
-                )
+                    doc, text, conn=conn, source_name=source_name, file=str(path.resolve()), owning = owning)
             else:
                 continue
         except Exception:

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 from attrs import frozen
 from docgen.orm_bindings.engine import _parse, _symbol_at
+from docgen.scip_owning import build_owning_resolver
 
 if TYPE_CHECKING:
     from sqlite3 import Connection
@@ -33,37 +34,6 @@ class AccessResult:
     silently dropped (§5.0, §5.8)."""
     rows_written: int
     gaps: tuple
-
-
-def _owning_lookup(scip_index: 'ScipIndex'):
-    """Build ``(file, line) -> enclosing named-definition symbol`` — the call
-    site's owning symbol (§5.0). Containment uses SCIP's ``enclosing_range`` (the
-    definition's *body* span) when present, falling back to the plain ``range``
-    only when it is absent: a definition occurrence's ``range`` is just the name
-    token (one line for scip-python), which would not contain a body call site. A
-    ``local N`` symbol is never an owning symbol — a query assigned to a local
-    binds to the enclosing function, not the variable — so locals are skipped."""
-    by_file: dict = {}
-    for doc in scip_index.documents:
-        for occ in doc.occurrences:
-            if not (occ.is_definition and occ.range):
-                continue
-            if occ.symbol.startswith('local '):
-                continue
-            span = occ.enclosing_range or occ.range
-            start = span[0]
-            end = span[2] if len(span) >= 4 else span[0]
-            by_file.setdefault(doc.relative_path, []).append(
-                (start, end, occ.symbol))
-
-    def owning(file, line):
-        best = None
-        for start, end, sym in by_file.get(file, ()):
-            if start <= line <= end and (best is None or end - start < best[0]):
-                best = (end - start, sym)
-        return best[1] if best else None
-
-    return owning
 
 
 def _import_aliases(scip_index: 'ScipIndex', root) -> dict:
@@ -106,7 +76,7 @@ def persist_data_access_orm(conn, source_name, scip_index, *, strategies):
     ``AccessResult`` carrying the rows written and the undecodable/unresolved
     query forms as surfaced gaps (§5.0, §5.8). Recognized columns are declared
     in the schema, so rows bind at ``resolved`` (§3a)."""
-    owning = _owning_lookup(scip_index)
+    owning = build_owning_resolver(scip_index)
     root = scip_index.source_root
     aliases = _import_aliases(scip_index, root)
     written = 0

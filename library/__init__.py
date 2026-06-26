@@ -282,6 +282,11 @@ class Library(
             conn.executescript(_CLUSTER_HISTORY_SCHEMA)
             conn.executescript(_THEME_SYNCED_HASHES_SCHEMA)
             init_scip_schema(conn)
+            
+            # Migration: add string_literals.kind (plain|fstring) if missing
+            lit_cols = {row[1] for row in conn.execute('PRAGMA table_info(string_literals)')}
+            if 'kind' not in lit_cols:
+                conn.execute("ALTER TABLE string_literals ADD COLUMN kind TEXT NOT NULL DEFAULT 'plain'")
             # Migration: add returned_document_ids column if missing
             cols = {row[1] for row in conn.execute('PRAGMA table_info(usage_events)')}
             if 'returned_document_ids' not in cols:

@@ -157,7 +157,8 @@ CREATE TABLE IF NOT EXISTS string_literals (
     line_start       INTEGER NOT NULL,
     col_start        INTEGER NOT NULL,
     value            TEXT NOT NULL,
-    owning_symbol_id TEXT
+    owning_symbol_id TEXT,
+    kind             TEXT NOT NULL DEFAULT 'plain'
 )
 '''
 

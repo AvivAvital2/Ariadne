@@ -508,3 +508,37 @@ def test_persist_data_model_surfaces_gap_when_manifest_declares_unbuilt_indexes(
         conn.close()
     # the unbuilt-index gap, naming the shortfall (0 of 2) and the fix command
     assert any('0 of 2' in g and 'ariadne index' in g for g in gaps), gaps
+
+
+def test_persist_data_model_parses_rawsql_in_the_configured_dialect(tmp_path):
+    """The per-source ``sql_dialect`` must reach the RAW-SQL binder, not only the
+    schema-DDL parser. DuckDB integer division (``//``) parses ONLY under the
+    duckdb dialect; under the default it fails to parse, so the literal yields no
+    access rows (it becomes a recorded gap). So persist_data_model must thread
+    ``dialect_by_source`` into ``persist_data_access_rawsql`` — the DuckDB
+    coverage fix (design §5.7/§7). Sibling to the schema-DDL dialect test above,
+    for the raw-SQL path."""
+    db = tmp_path / 'ariadne.db'
+    duck_sql = 'SELECT t.x // t.y FROM t WHERE t.z = 1'  # // valid only in duckdb
+    owner = 'scip-python python svc . svc/q().'
+    lib = Library(db)
+    with lib._conn_provider.acquire() as conn:
+        conn.execute(
+            'INSERT INTO string_literals (source_name, file, line_start, '
+            'col_start, value, owning_symbol_id) VALUES (?,?,?,?,?,?)',
+            ('svc', 'q.py', 1, 0, duck_sql, owner))
+        conn.commit()
+    lib.close()
+
+    src = tmp_path / 'src'
+    src.mkdir()  # no manifest -> ORM skipped, raw-SQL still runs (index-independent)
+    persist_data_model(db, [('svc', src)], index_factory=lambda *a, **k: None,
+                       dialect_by_source={'svc': 'duckdb'})
+
+    conn = sqlite3.connect(db)
+    access = {tuple(r) for r in conn.execute(
+        "SELECT schema_symbol_id, role FROM data_access WHERE witness = 'rawsql'")}
+    conn.close()
+    # parsed under duckdb -> the WHERE column bound as a filter access; under the
+    # default dialect the `//` query would not parse and this row would be absent.
+    assert ('data sql svc _._.t#z', 'filter') in access

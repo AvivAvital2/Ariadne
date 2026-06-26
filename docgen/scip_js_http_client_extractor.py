@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Callable
 from ast_grep_py import SgRoot
 
 from docgen.scip_extractor import ScipIndex, _ScipDoc, _ScipOccurrence
+from docgen.scip_owning import build_owning_resolver
 from docgen.scip_sink_registry import DEFAULT_SINK_REGISTRY, SinkSpec
 
 if TYPE_CHECKING:
@@ -135,29 +136,6 @@ def _url_arg_info(call_node) -> tuple[int, int, str | None] | None:
     return None
 
 
-def _find_consumer_symbol(
-    conn: 'Connection',
-    *,
-    source_name: str,
-    file: str,
-    line: int,
-) -> str | None:
-    """Smallest-range Method/Function symbol whose range covers
-    ``line``; ``None`` for module-level calls. Same kind-filter
-    semantics as Phase 2p ownership lookup."""
-    cursor = conn.execute(
-        '''SELECT canonical_id FROM scip_symbols
-           WHERE source_name = ? AND file = ?
-             AND line_start <= ? AND line_end >= ?
-             AND kind IN ('Method', 'Function')
-           ORDER BY (line_end - line_start) ASC
-           LIMIT 1''',
-        (source_name, file, line, line),
-    )
-    row = cursor.fetchone()
-    return row[0] if row else None
-
-
 def _extract_calls_from_doc(
     doc: _ScipDoc,
     source_text: str,
@@ -165,7 +143,7 @@ def _extract_calls_from_doc(
     conn: 'Connection',
     source_name: str,
     file: str,
-) -> list[tuple]:
+owning) -> list[tuple]:
     """For one JS/TS file, return tuples ready to insert into
     ``http_client_calls``."""
     from docgen.scip_resolution import resolve_arg_value
@@ -210,12 +188,7 @@ def _extract_calls_from_doc(
         if url_value is None:
             continue
         call_line = pos[0] + 1
-        consumer = _find_consumer_symbol(
-            conn,
-            source_name=source_name,
-            file=file,
-            line=call_line,
-        )
+        consumer = owning(doc.relative_path, call_line - 1)
         rows.append((
             source_name,
             consumer,
@@ -265,6 +238,7 @@ def ingest_js_http_clients(
     )
 
     rows: list[tuple] = []
+    owning = build_owning_resolver(index)
     for doc in index.documents:
         js_path = source_root / doc.relative_path
         if js_path.suffix.lower() not in _JS_EXTS:
@@ -277,11 +251,7 @@ def ingest_js_http_clients(
             continue
         try:
             file_rows = _extract_calls_from_doc(
-                doc, text,
-                conn=conn,
-                source_name=source_name,
-                file=str(js_path.resolve()),
-            )
+                doc, text, conn=conn, source_name=source_name, file=str(js_path.resolve()), owning = owning)
         except Exception:
             continue
         rows.extend(file_rows)

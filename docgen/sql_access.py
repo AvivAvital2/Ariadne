@@ -9,7 +9,9 @@ pathological, or un-bindable literals are skipped — a recorded gap, never
 a crash.
 """
 from __future__ import annotations
+import logging
 import re
+from contextlib import contextmanager
 
 from typing import TYPE_CHECKING
 
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
     from sqlite3 import Connection
 
 _RAWSQL_WITNESS = 'rawsql'
+FSTRING_PLACEHOLDER = '__ariadne_ph__'
 _INTERP_RE = re.compile(r"\{[^{}]*\}|%\(\w+\)[a-zA-Z]|%[a-zA-Z]")
 
 
@@ -53,26 +56,93 @@ def _role_for(col: 'exp.Column', stmt: 'exp.Expression') -> str:
     return 'project'
 
 
-def _access_for_literal(sql, dialect):
-    """``(table, column, role)`` triples for one SQL literal (§5.7).
+def _drop_placeholders(triples):
+    """Drop triples whose table or column is the f-string interpolation
+    placeholder — a placeholdered interpolation is never a real schema node
+    (design: f-string SQL capture). Applied to every emission path, DDL included."""
+    return [t for t in triples if FSTRING_PLACEHOLDER not in (t[0], t[1])]
 
-    Value interpolations are normalized to placeholders first (§5.8). DDL
-    (CREATE/ALTER) yields a ``ddl`` role on each defined column; an INSERT's
+
+_FALLBACK_DIALECTS = ('duckdb', 'postgres', 'mysql', 'sqlite', None)
+
+# A literal is SQL when sqlglot parses it to one of these top-level STATEMENT
+# types. Requiring a statement — not merely "it parsed" — is what separates real
+# SQL from filenames/prose that tokenize: a dotted name like ``config.json``
+# parses as a bare ``Column`` (table.column), never a statement.
+_STATEMENTS = (
+    exp.Select, exp.Union, exp.Insert, exp.Update, exp.Delete,
+    exp.Merge, exp.Create, exp.Alter, exp.Drop,
+)
+
+
+@contextmanager
+def _quiet_sqlglot():
+    """Suppress sqlglot's per-string ``Command``-fallback WARNING *for the
+    duration of our detection parse only*. We use sqlglot as a SQL classifier: a
+    string that doesn't parse to a statement is consumed here as 'not SQL' (or
+    recorded as a gap by the binder), so sqlglot logging that same verdict once
+    per string is redundant noise — not a hidden error (real unrecovered SQL is
+    surfaced via ``RawSqlResult.gaps``). Scoped: it restores the prior level, so
+    sqlglot's logging is untouched outside our classification."""
+    logger = logging.getLogger('sqlglot')
+    prev = logger.level
+    logger.setLevel(logging.ERROR)
+    try:
+        yield
+    finally:
+        logger.setLevel(prev)
+
+
+def _parse_sql(sql, dialect=None):
+    """Parse SQL to a structured *statement*, trying ``dialect`` first (when set)
+    then a fallback of common dialects so dialect-specific syntax reads without
+    per-source configuration. Returns the statement, or ``None`` when the literal
+    is not SQL — it parses only to a bare expression, sqlglot's ``Command``
+    fallback, or nothing.
+
+    The dialect fallback retries only on a parse *error* (dialect-specific
+    syntax one dialect rejects and another accepts). A clean parse that isn't a
+    statement is a verdict, not a recall miss, so it returns immediately —
+    avoiding both wasted re-parses and repeated ``Command`` warnings."""
+    with _quiet_sqlglot():
+        tried = set()
+        for d in (dialect, *_FALLBACK_DIALECTS):
+            if d in tried:
+                continue
+            tried.add(d)
+            try:
+                stmt = sqlglot.parse_one(sql, read=d)
+            except (SqlglotError, RecursionError):
+                continue
+            return stmt if isinstance(stmt, _STATEMENTS) else None
+        return None
+
+
+def is_sql(value) -> bool:
+    """The SQL detector: True when ``value`` parses to a SQL *statement*.
+    Replaces the old first-word ``looks_like_sql`` heuristic — sqlglot is the
+    authority on whether a string is SQL, and requiring a statement (not a bare
+    expression) is what excludes filenames/prose that merely tokenize."""
+    return _parse_sql(_normalize_placeholders(value)) is not None
+
+
+def _triples_from_stmt(stmt):
+    """``(table, column, role)`` triples for a parsed SQL *statement* (§5.7).
+
+    DDL (CREATE/ALTER) yields a ``ddl`` role on each defined column; an INSERT's
     column list yields ``write``; other column refs are role-typed by their
     governing clause (``_role_for``). Table aliases (``users AS u``) are resolved
-    so ``u.col`` binds to ``users``, not ``u``. Empty when the literal does not
-    parse, or when a column cannot be bound to a single table. A top-level
-    ``SELECT *`` emits a ``(table, '*', 'project')`` whole-row marker that persist
-    expands to a read per known column (§10 Phase 2)."""
-    try:
-        stmt = sqlglot.parse_one(_normalize_placeholders(sql), read=dialect)
-    except (SqlglotError, RecursionError):
-        return []  # unparseable / pathological -> a gap, not a crash (§7)
+    so ``u.col`` binds to ``users``, not ``u``. Empty when a column cannot be
+    bound to a single table. A top-level ``SELECT *`` emits a
+    ``(table, '*', 'project')`` whole-row marker that persist expands to a read
+    per known column (§10 Phase 2). Interpolation placeholders are dropped from
+    every path (``_drop_placeholders``)."""
     # DDL: CREATE/ALTER define columns -> a ddl-role access on the target table.
     if isinstance(stmt, (exp.Create, exp.Alter)):
         target = stmt.find(exp.Table)
-        return [(target.name, cd.name, 'ddl')
-                for cd in stmt.find_all(exp.ColumnDef)] if target else []
+        return _drop_placeholders(
+            [(target.name, cd.name, 'ddl')
+             for cd in stmt.find_all(exp.ColumnDef)]) if target else []
     tables = _tables_in(stmt)
     aliases = {t.alias: t.name for t in stmt.find_all(exp.Table) if t.alias}
     default_table = tables[0] if len(tables) == 1 else None
@@ -91,7 +161,16 @@ def _access_for_literal(sql, dialect):
         # whole-row read; bindable only when the FROM names a single table.
         if len(tables) == 1:
             out.append((tables[0], '*', 'project'))
-    return out
+    return _drop_placeholders(out)
+
+
+def _access_for_literal(sql, dialect):
+    """``(table, column, role)`` triples for one SQL literal — parse (normalizing
+    interpolations to placeholders, §5.8) then extract from the statement. Empty
+    when the literal is not a SQL statement. Retained for the audit script and
+    tests; the binder parses once and calls ``_triples_from_stmt`` directly."""
+    stmt = _parse_sql(_normalize_placeholders(sql), dialect)
+    return _triples_from_stmt(stmt) if stmt is not None else []
 
 
 @frozen
@@ -103,18 +182,6 @@ class RawSqlResult:
     gaps: tuple
 
 
-_SQL_PREFIX_RE = re.compile(
-    r"^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|WITH)\b", re.IGNORECASE
-)
-
-
-def _looks_like_sql(value):
-    """True if a literal begins with a SQL DML/DDL keyword. An unrecovered
-    SQL-shaped literal is a gap (§5.8); ordinary prose (log lines, messages)
-    is not, so the gap counter is not drowned in non-SQL noise."""
-    return bool(_SQL_PREFIX_RE.match(value))
-
-
 def persist_data_access_rawsql(conn, source_name, *, dialect=None):
     """(Re)write this source's raw-SQL ``schema_symbols`` + ``data_access``
     rows from its ``string_literals``. Idempotent: clears the source's prior
@@ -124,9 +191,10 @@ def persist_data_access_rawsql(conn, source_name, *, dialect=None):
     accesses are recorded at confidence ``'derived'`` (§3a/§5.7). A ``SELECT *``
     is expanded to a read per KNOWN column of the table (from schema_symbols
     the ORM/DDL pass already persisted — §10 Phase 2); if no columns are known
-    it is a recorded gap. A SQL-shaped literal that yields no access is recorded
-    as a gap rather than silently dropped (§5.8); ordinary non-SQL strings are
-    not counted. Returns a ``RawSqlResult``.
+    it is a recorded gap. A literal that parses to a SQL *statement* but yields
+    no bindable access is recorded as a gap rather than silently dropped (§5.8);
+    strings that aren't SQL statements (sqlglot is the detector) are not counted.
+    Returns a ``RawSqlResult``.
     """
     conn.execute(
         'DELETE FROM data_access WHERE source_name = ? AND witness = ?',
@@ -144,12 +212,15 @@ def persist_data_access_rawsql(conn, source_name, *, dialect=None):
         'FROM string_literals WHERE source_name = ?',
         (source_name,),
     ):
+        stmt = _parse_sql(_normalize_placeholders(value), dialect)
+        if stmt is None:
+            continue  # not a SQL statement -> not SQL (sqlglot is the detector); skip
         if owning is None:
-            continue  # no call site to attribute the access to
-        triples = _access_for_literal(value, dialect)
+            gaps.append(value)  # SQL with no owning symbol -> gap, not dropped (§5.8)
+            continue
+        triples = _triples_from_stmt(stmt)
         if not triples:
-            if _looks_like_sql(value):
-                gaps.append(value)  # SQL-shaped but unrecovered -> gap (§5.8)
+            gaps.append(value)  # a SQL statement we couldn't bind -> gap (§5.8)
             continue
         for table, column, role in triples:
             table_id = f'data sql {source_name} _._.{table}'

@@ -51,6 +51,7 @@ from docgen.scip_extractor import (
     _ScipDoc,
     _ScipOccurrence,
 )
+from docgen.scip_string_literal_extractor import ingest_string_literals
 
 
 @pytest.fixture
@@ -64,42 +65,17 @@ def conn():
     c.close()
 
 
-def _add_scip_symbol(
-    conn: sqlite3.Connection,
-    *,
-    canonical_id: str,
-    source_name: str,
-    file: str,
-    line_start: int,
-    line_end: int,
-    kind: str = 'Function',
-    qualified_name: str = '',
-    parent_qualified_name: str | None = None,
-    language: str = 'python',
-) -> None:
-    """Insert a synthetic scip_symbols row for ownership-lookup tests."""
-    conn.execute(
-        '''INSERT INTO scip_symbols
-           (canonical_id, source_name, language, file,
-            line_start, line_end, kind, display_name,
-            qualified_name, parent_qualified_name)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-        (canonical_id, source_name, language, file,
-         line_start, line_end, kind,
-         qualified_name.rsplit('.', 1)[-1] or canonical_id,
-         qualified_name, parent_qualified_name),
-    )
-    conn.commit()
-
-
 def _make_index(
     src_files: list[tuple[Path, Path]],
     source_root: Path,
 ) -> ScipIndex:
-    """Build a synthetic ScipIndex for a set of files. The extractor
-    walks ``index.documents`` to know which files to scan; occurrences
-    aren't needed for literal extraction (ownership lookup goes through
-    ``scip_symbols`` instead)."""
+    """Build a synthetic ScipIndex for a set of files (empty occurrences).
+    The extractor walks ``index.documents`` to know which files to scan; these
+    extraction tests don't assert ownership, so no definition occurrences are
+    needed. Ownership is resolved from the index's ``enclosing_range`` and is
+    unit-tested in ``tests/test_scip_owning.py``; the one ingest-level wiring
+    check (``test_string_inside_function_resolves_owner``) builds its index
+    inline with a definition occurrence."""
     docs = tuple(
         _ScipDoc(
             relative_path=str(f.relative_to(source_root)),
@@ -157,9 +133,42 @@ class TestPythonLiterals:
         assert line == 1
         assert owner is None
 
+    def test_docstrings_are_excluded_as_non_data(
+        self, tmp_path: Path, conn: sqlite3.Connection,
+    ) -> None:
+        """A docstring — the bare string that is the first statement of a
+        module/class/function body — is documentation, never a data value, so it
+        is not indexed (and never fed to the SQL parser). Assigned strings
+        (module/class constants) are NOT docstrings and ARE indexed."""
+        text = (
+            '"""module docstring."""\n'
+            'GREETING = "hello"\n'
+            'def f():\n'
+            '    "function docstring."\n'
+            '    return "result"\n'
+            'class C:\n'
+            '    "class docstring."\n'
+            '    attr = "value"\n'
+        )
+        src = tmp_path / 'mod.py'
+        src.write_text(text)
+        index = _make_index([(src, tmp_path)], tmp_path)
+        ingest_string_literals(
+            source_name='myproj', source_root=tmp_path, conn=conn,
+            index_factory=lambda: index)
+        values = {r[3] for r in _query_literals(conn, 'myproj')}
+        assert {'hello', 'result', 'value'} <= values         # data values indexed
+        assert not ({'module docstring.', 'function docstring.',
+                     'class docstring.'} & values)            # docstrings excluded
+
     def test_string_inside_function_resolves_owner(
         self, tmp_path: Path, conn: sqlite3.Connection,
     ) -> None:
+        """ingest wires the owning resolver: a literal inside a function body is
+        stored with that function's canonical_id, resolved from the index's
+        ``enclosing_range`` (no ``scip_symbols`` row). The resolver's own
+        behaviours — method-vs-class, nested, term, parameter-exclusion — are
+        unit-tested in ``tests/test_scip_owning.py``."""
         from docgen.scip_string_literal_extractor import (
             ingest_string_literals,
         )
@@ -170,18 +179,16 @@ class TestPythonLiterals:
         )
         src = tmp_path / 'mod.py'
         src.write_text(text)
-        # Synthetic scip_symbols entry covering the function body
-        fn_id = 'scip-python . . . mod.py/greet().'
-        _add_scip_symbol(
-            conn,
-            canonical_id=fn_id,
-            source_name='myproj',
-            file=str(src.resolve()),
-            line_start=1, line_end=2,
-            kind='Function',
-            qualified_name='mod.greet',
-        )
-        index = _make_index([(src, tmp_path)], tmp_path)
+        fn_id = 'scip-python python myproj . mod/greet().'
+        # greet's def occurrence: name-token range on line 0, body span 0..1.
+        doc = _ScipDoc(
+            relative_path='mod.py',
+            occurrences=(
+                _ScipOccurrence(symbol=fn_id, range=(0, 4, 9), is_definition=True,
+                                enclosing_range=(0, 0, 1, 0)),
+            ),
+            symbols=())
+        index = ScipIndex(documents=(doc,), source_root=tmp_path)
         ingest_string_literals(
             source_name='myproj',
             source_root=tmp_path,
@@ -193,97 +200,6 @@ class TestPythonLiterals:
         _, _, _, value, owner = rows[0]
         assert value == 'hi'
         assert owner == fn_id
-
-    def test_string_inside_method_picks_method_not_class(
-        self, tmp_path: Path, conn: sqlite3.Connection,
-    ) -> None:
-        from docgen.scip_string_literal_extractor import (
-            ingest_string_literals,
-        )
-
-        text = (
-            'class Greeter:\n'
-            '    def greet(self):\n'
-            "        return 'hi'\n"
-        )
-        src = tmp_path / 'mod.py'
-        src.write_text(text)
-        # Both the Class and the Method have line ranges that include
-        # the literal. The matcher must pick the Method (smallest range)
-        # AND must filter to callable kinds (Class shouldn't qualify
-        # even if it had the smallest range).
-        _add_scip_symbol(
-            conn,
-            canonical_id='scip:Greeter#',
-            source_name='myproj',
-            file=str(src.resolve()),
-            line_start=1, line_end=3,
-            kind='Class',
-            qualified_name='mod.Greeter',
-        )
-        method_id = 'scip:Greeter#greet().'
-        _add_scip_symbol(
-            conn,
-            canonical_id=method_id,
-            source_name='myproj',
-            file=str(src.resolve()),
-            line_start=2, line_end=3,
-            kind='Method',
-            qualified_name='mod.Greeter.greet',
-            parent_qualified_name='mod.Greeter',
-        )
-        index = _make_index([(src, tmp_path)], tmp_path)
-        ingest_string_literals(
-            source_name='myproj',
-            source_root=tmp_path,
-            conn=conn,
-            index_factory=lambda: index,
-        )
-        rows = _query_literals(conn, 'myproj')
-        assert len(rows) == 1
-        assert rows[0][3] == 'hi'
-        assert rows[0][4] == method_id
-
-    def test_nested_function_picks_innermost(
-        self, tmp_path: Path, conn: sqlite3.Connection,
-    ) -> None:
-        from docgen.scip_string_literal_extractor import (
-            ingest_string_literals,
-        )
-
-        text = (
-            'def outer():\n'
-            '    def inner():\n'
-            "        return 'deep'\n"
-        )
-        src = tmp_path / 'mod.py'
-        src.write_text(text)
-        outer_id = 'scip:mod.outer().'
-        inner_id = 'scip:mod.outer.inner().'
-        _add_scip_symbol(
-            conn, canonical_id=outer_id,
-            source_name='myproj', file=str(src.resolve()),
-            line_start=1, line_end=3,
-            kind='Function', qualified_name='mod.outer',
-        )
-        _add_scip_symbol(
-            conn, canonical_id=inner_id,
-            source_name='myproj', file=str(src.resolve()),
-            line_start=2, line_end=3,
-            kind='Function', qualified_name='mod.outer.inner',
-            parent_qualified_name='mod.outer',
-        )
-        index = _make_index([(src, tmp_path)], tmp_path)
-        ingest_string_literals(
-            source_name='myproj',
-            source_root=tmp_path,
-            conn=conn,
-            index_factory=lambda: index,
-        )
-        rows = _query_literals(conn, 'myproj')
-        assert len(rows) == 1
-        assert rows[0][3] == 'deep'
-        assert rows[0][4] == inner_id
 
     def test_fstring_with_interpolation_skipped(
         self, tmp_path: Path, conn: sqlite3.Connection,
@@ -834,43 +750,3 @@ class TestForcesStructuralParser:
         assert 'hello world' in values
         # ...and NOT two separate rows for 'hello ' / 'world'
         assert 'hello ' not in values
-
-    def test_class_only_symbol_does_not_own_literal(
-        self, tmp_path: Path, conn: sqlite3.Connection,
-    ) -> None:
-        """A literal inside a class body but not inside any method must
-        have ``owning_symbol_id = NULL``. The kind filter rejects
-        ``Class``, ``Object``, ``Trait`` even when their line range
-        contains the literal — only callable kinds qualify."""
-        from docgen.scip_string_literal_extractor import (
-            ingest_string_literals,
-        )
-
-        text = (
-            'class Greeter:\n'
-            "    DEFAULT = 'value'\n"
-        )
-        src = tmp_path / 'mod.py'
-        src.write_text(text)
-        # The Class spans the literal's line, but no Method covers it.
-        # Owner must stay NULL.
-        _add_scip_symbol(
-            conn,
-            canonical_id='scip:Greeter#',
-            source_name='myproj',
-            file=str(src.resolve()),
-            line_start=1, line_end=2,
-            kind='Class',
-            qualified_name='mod.Greeter',
-        )
-        index = _make_index([(src, tmp_path)], tmp_path)
-        ingest_string_literals(
-            source_name='myproj',
-            source_root=tmp_path,
-            conn=conn,
-            index_factory=lambda: index,
-        )
-        rows = _query_literals(conn, 'myproj')
-        assert len(rows) == 1
-        assert rows[0][3] == 'value'
-        assert rows[0][4] is None

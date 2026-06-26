@@ -147,6 +147,16 @@ def _make_index(
     )
 
 
+def _def_occ(symbol, line_start, line_end):
+    """A definition occurrence for an enclosing function/method/class spanning
+    1-indexed line_start..line_end: a name-token ``range`` on the def line plus
+    the body ``enclosing_range`` — the shape scip-python emits and the owning
+    resolver reads (replaces the retired scip_symbols owning fixture)."""
+    return _ScipOccurrence(
+        symbol=symbol, range=(line_start - 1, 4, 40), is_definition=True,
+        enclosing_range=(line_start - 1, 0, line_end - 1, 0))
+
+
 def _add_scip_symbol(
     conn: sqlite3.Connection,
     *,
@@ -447,14 +457,8 @@ class TestConsumerSymbolResolution:
         src = tmp_path / 'app.py'
         src.write_text(text)
         fn_id = 'scip-python . . . app.py/fetch_users().'
-        _add_scip_symbol(
-            conn, canonical_id=fn_id,
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=2,
-            kind='Function', qualified_name='app.fetch_users',
-        )
         index = _make_index(src, tmp_path, [
-            _occ_at(text, 'get', _REQUESTS_GET_SYM),
+            _occ_at(text, 'get', _REQUESTS_GET_SYM),_def_occ(fn_id, 1, 2)
         ])
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,
@@ -494,23 +498,9 @@ class TestConsumerSymbolResolution:
         )
         src = tmp_path / 'app.py'
         src.write_text(text)
-        # Both Class and Method line ranges contain the call
-        _add_scip_symbol(
-            conn, canonical_id='scip:UserClient#',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=3,
-            kind='Class', qualified_name='app.UserClient',
-        )
         method_id = 'scip:UserClient#fetch().'
-        _add_scip_symbol(
-            conn, canonical_id=method_id,
-            source_name='myapi', file=str(src.resolve()),
-            line_start=2, line_end=3,
-            kind='Method', qualified_name='app.UserClient.fetch',
-            parent_qualified_name='app.UserClient',
-        )
         index = _make_index(src, tmp_path, [
-            _occ_at(text, 'get', _REQUESTS_GET_SYM),
+            _occ_at(text, 'get', _REQUESTS_GET_SYM),_def_occ('scip:UserClient#', 1, 3), _def_occ(method_id, 2, 3)
         ])
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,
@@ -796,12 +786,6 @@ class TestPhase2sVariableResolution:
         src = tmp_path / 'app.py'
         src.write_text(text)
         fn_id = 'scip-python . . . app.py/fetch_users().'
-        _add_scip_symbol(
-            conn, canonical_id=fn_id,
-            source_name='myapi', file=str(src.resolve()),
-            line_start=2, line_end=3,
-            kind='Function', qualified_name='app.fetch_users',
-        )
         # The variable's def — Phase 2s looks for this
         _add_scip_symbol(
             conn, canonical_id='scip:app.BASE_URL',
@@ -810,7 +794,7 @@ class TestPhase2sVariableResolution:
             kind='Variable', qualified_name='app.BASE_URL',
         )
         index = _make_index(src, tmp_path, [
-            _occ_at(text, 'get', _REQUESTS_GET_SYM),
+            _occ_at(text, 'get', _REQUESTS_GET_SYM),_def_occ(fn_id, 2, 3)
         ])
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,
@@ -837,16 +821,10 @@ class TestPhase2sVariableResolution:
         )
         src = tmp_path / 'app.py'
         src.write_text(text)
-        _add_scip_symbol(
-            conn, canonical_id='scip:app.fetch',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=3,
-            kind='Function', qualified_name='app.fetch',
-        )
         # NO scip_symbol for UNDEFINED_URL
         index = _make_index(src, tmp_path, [
             _occ_at(text, 'get', _REQUESTS_GET_SYM, nth=0),
-            _occ_at(text, 'get', _REQUESTS_GET_SYM, nth=1),
+            _occ_at(text, 'get', _REQUESTS_GET_SYM, nth=1),_def_occ('scip:app.fetch', 1, 3)
         ])
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,

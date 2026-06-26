@@ -128,6 +128,16 @@ def _make_index(
     )
 
 
+def _def_occ(symbol, line_start, line_end):
+    """A definition occurrence for an enclosing function/method/class spanning
+    1-indexed line_start..line_end: a name-token ``range`` on the def line plus
+    the body ``enclosing_range`` — the shape scip-python emits and the owning
+    resolver reads (replaces the retired scip_symbols owning fixture)."""
+    return _ScipOccurrence(
+        symbol=symbol, range=(line_start - 1, 4, 40), is_definition=True,
+        enclosing_range=(line_start - 1, 0, line_end - 1, 0))
+
+
 def _add_scip_symbol(
     conn: sqlite3.Connection,
     *,
@@ -457,14 +467,8 @@ class TestConsumerSymbolResolution:
         src = tmp_path / 'app.js'
         src.write_text(text)
         fn_id = 'scip-typescript . . . app.js/loadUsers().'
-        _add_scip_symbol(
-            conn, canonical_id=fn_id,
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=3,
-            kind='Function', qualified_name='loadUsers',
-        )
         index = _make_index(src, tmp_path, [
-            _occ_at(text, 'fetch', _FETCH_SYM),
+            _occ_at(text, 'fetch', _FETCH_SYM),_def_occ(fn_id, 1, 3)
         ])
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,
@@ -503,24 +507,9 @@ class TestConsumerSymbolResolution:
         )
         src = tmp_path / 'app.js'
         src.write_text(text)
-        # Class spans 1-5, Method spans 2-4 — the Method must be the
-        # consumer (kind filter rejects Class regardless of range).
-        _add_scip_symbol(
-            conn, canonical_id='scip:UserService#',
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=5,
-            kind='Class', qualified_name='UserService',
-        )
         method_id = 'scip:UserService#fetchUsers().'
-        _add_scip_symbol(
-            conn, canonical_id=method_id,
-            source_name='myapi', file=str(src.resolve()),
-            line_start=2, line_end=4,
-            kind='Method', qualified_name='UserService.fetchUsers',
-            parent_qualified_name='UserService',
-        )
         index = _make_index(src, tmp_path, [
-            _occ_at(text, 'fetch', _FETCH_SYM),
+            _occ_at(text, 'fetch', _FETCH_SYM),_def_occ('scip:UserService#', 1, 5), _def_occ(method_id, 2, 4)
         ])
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,
@@ -746,13 +735,6 @@ class TestPhase2sVariableResolution:
         src = tmp_path / 'app.js'
         src.write_text(text)
         fn_id = 'scip-typescript . . . app.js/fetchUsers().'
-        _add_scip_symbol(
-            conn, canonical_id=fn_id,
-            source_name='myapi', file=str(src.resolve()),
-            line_start=2, line_end=4,
-            kind='Function', qualified_name='fetchUsers',
-            language='typescript',
-        )
         # The variable's def — Phase 2s looks for this
         _add_scip_symbol(
             conn, canonical_id='scip:app.API_URL',
@@ -762,7 +744,7 @@ class TestPhase2sVariableResolution:
             language='typescript',
         )
         index = _make_index(src, tmp_path, [
-            _occ_at(text, 'fetch', _FETCH_SYM),
+            _occ_at(text, 'fetch', _FETCH_SYM),_def_occ(fn_id, 2, 4)
         ])
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,
@@ -788,17 +770,10 @@ class TestPhase2sVariableResolution:
         src = tmp_path / 'app.js'
         src.write_text(text)
         fn_id = 'scip-typescript . . . app.js/fetchTwo().'
-        _add_scip_symbol(
-            conn, canonical_id=fn_id,
-            source_name='myapi', file=str(src.resolve()),
-            line_start=1, line_end=4,
-            kind='Function', qualified_name='fetchTwo',
-            language='typescript',
-        )
         # No scip_symbol for UNDEFINED_URL
         index = _make_index(src, tmp_path, [
             _occ_at(text, 'fetch', _FETCH_SYM, nth=0),
-            _occ_at(text, 'fetch', _FETCH_SYM, nth=1),
+            _occ_at(text, 'fetch', _FETCH_SYM, nth=1),_def_occ(fn_id, 1, 4)
         ])
         _run_pipeline(
             source_name='myapi', source_root=tmp_path,

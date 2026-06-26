@@ -400,3 +400,71 @@ def test_cmd_index_drives_progress_bars_for_heavy_persist_steps(
     assert callable(captured['persist_data_model'])
     # a lighter (unconditional) step ran without a progress bar
     assert captured['persist_config_values'] is None
+
+
+def _setup_named_source(tmp_path: Path, name: str) -> Path:
+    """A second minimal python source (like ``_setup_python_source``) under *name*."""
+    root = tmp_path / name
+    root.mkdir()
+    (root / 'pkg').mkdir()
+    (root / 'pkg' / '__init__.py').write_text('def f(): ...')
+    md = root / '.ariadne'
+    md.mkdir()
+    (md / 'manifest.json').write_text(
+        json.dumps({'ariadne_version': '1', 'source_name': name,
+                    'indexers': [{'kind': 'python', 'cwd': '.'}]}),
+        encoding='utf-8')
+    return root
+
+
+def test_cmd_index_source_scopes_per_source_steps_but_keeps_graph_global(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """``index --source X`` scopes the PER-SOURCE persist steps to X, but
+    ``persist_all_sources`` (the cross-source graph) still receives ALL sources
+    — it must, since cross-source edges only resolve in one materialized graph
+    and a scoped persist would wipe the other sources' graph rows."""
+    a = _setup_named_source(tmp_path, 'alpha')
+    b = _setup_named_source(tmp_path, 'beta')
+    yaml_path = tmp_path / 'ariadne.yaml'
+    db_path = tmp_path / 'ariadne.db'
+    yaml_path.write_text(
+        f'db_path: {db_path}\nsources:\n'
+        f'  alpha:\n    path: {a}\n    swagger_paths: [api/openapi.json]\n'
+        f'  beta:\n    path: {b}\n    swagger_paths: [api/openapi.json]\n',
+        encoding='utf-8')
+    _activate_yaml(yaml_path)
+
+    captured: dict[str, list[str]] = {}
+
+    def _spy(name: str):
+        def f(_db_path, sources, *a, **k):
+            captured[name] = sorted(n for n, *_ in sources)
+            return 0
+        return f
+
+    for name in [
+        'persist_all_sources', 'persist_api_endpoints', 'persist_string_literals',
+        'persist_config_values', 'persist_config_reads', 'persist_data_model',
+        'persist_akka_http_endpoints', 'persist_python_routes',
+        'persist_express_routes', 'persist_python_http_clients',
+        'persist_js_http_clients', 'persist_scala_http_clients',
+        'persist_url_resolver',
+    ]:
+        monkeypatch.setattr(f'docgen.scip_persist.{name}', _spy(name))
+
+    cmd_index(_make_args(source='alpha'),
+              indexer_registry={'python': _FakeAdapter()}, merger=None)
+
+    # the cross-source graph must still see ALL sources
+    assert captured['persist_all_sources'] == ['alpha', 'beta']
+    # every per-source step is scoped to the --source target — including
+    # persist_api_endpoints, which gets only the target's swagger.
+    for step in [
+        'persist_api_endpoints',
+        'persist_string_literals', 'persist_config_values', 'persist_config_reads',
+        'persist_data_model', 'persist_akka_http_endpoints', 'persist_python_routes',
+        'persist_express_routes', 'persist_python_http_clients',
+        'persist_js_http_clients', 'persist_scala_http_clients', 'persist_url_resolver',
+    ]:
+        assert captured[step] == ['alpha'], f'{step} got {captured.get(step)}'

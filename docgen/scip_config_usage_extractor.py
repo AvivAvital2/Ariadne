@@ -58,7 +58,7 @@ def extract_config_reads(
     values_by_key = _config_values_map(source_name, conn)
     cur = conn.execute(
         'SELECT file, line_start, col_start, value FROM string_literals '
-        'WHERE source_name = ? ORDER BY file, line_start, col_start',
+        "WHERE source_name = ? AND kind = 'plain' ORDER BY file, line_start, col_start",
         (source_name,),
     )
     by_file: dict[str, list[tuple[int, int, str]]] = {}

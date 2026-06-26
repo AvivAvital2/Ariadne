@@ -620,7 +620,7 @@ def persist_data_model(db_path, sources, *, index_factory=None, strategies=None,
                         total += sb.nodes_written + ao.rows_written
                         gaps.extend(sb.gaps)
                         gaps.extend(ao.gaps)
-                rs = persist_data_access_rawsql(conn, source_name)
+                rs = persist_data_access_rawsql(conn, source_name, dialect=(dialect_by_source or {}).get(source_name))
                 total += rs.rows_written
                 gaps.extend(rs.gaps)
                 schema_sqls = [

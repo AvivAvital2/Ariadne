@@ -750,6 +750,9 @@ def cmd_index(
                 swagger_pairs.append((
                     name, other_root, list(other_sc.swagger_paths),
                 ))
+        scoped = set(sources_to_process)
+        scoped_pairs = [p for p in source_pairs if p[0] in scoped]
+        scoped_swagger = [s for s in swagger_pairs if s[0] in scoped]
         with persist_progress(console, 'cross-source graph') as report:
 
             persisted = persist_all_sources(Path(cfg.db_path), source_pairs, progress_callback = report)
@@ -763,9 +766,9 @@ def cmd_index(
         # ``api_endpoints`` so ``ariadne_trace_flow``'s HTTP-tier
         # join (api_calls → api_endpoints) actually returns rows
         # once the client side is wired in a follow-up commit.
-        if swagger_pairs:
+        if scoped_swagger:
             endpoints = persist_api_endpoints(
-                Path(cfg.db_path), swagger_pairs,
+                Path(cfg.db_path), scoped_swagger,
             )
             if endpoints and not getattr(args, 'quiet', False):
                 console.print(
@@ -778,7 +781,7 @@ def cmd_index(
             # route extractors below look up literal path values by SCIP
             # position; without this, every literal-arg endpoint silently
             # vanishes from the route walks.
-            literals = persist_string_literals(Path(cfg.db_path), source_pairs, progress_callback = report)
+            literals = persist_string_literals(Path(cfg.db_path), scoped_pairs, progress_callback = report)
         if literals and not getattr(args, 'quiet', False):
             console.print(
                 f'[green]Indexed {literals} string literal(s) → '
@@ -789,7 +792,7 @@ def cmd_index(
         # key->value) so Layer C can resolve config-getter arguments to
         # their configured values. Previously never wired, so the table
         # stayed empty.
-        config_vals = persist_config_values(Path(cfg.db_path), source_pairs)
+        config_vals = persist_config_values(Path(cfg.db_path), scoped_pairs)
         if config_vals and not getattr(args, 'quiet', False):
             console.print(
                 f'[green]Indexed {config_vals} config value(s) → '
@@ -798,7 +801,7 @@ def cmd_index(
         # Config↔code bridge (Tier 2) — enumerate config-getter call
         # sites into ``config_reads``. Needs ``string_literals`` and
         # ``config_values`` (both persisted just above).
-        config_reads = persist_config_reads(Path(cfg.db_path), source_pairs)
+        config_reads = persist_config_reads(Path(cfg.db_path), scoped_pairs)
         if config_reads and not getattr(args, 'quiet', False):
             console.print(
                 f'[green]Indexed {config_reads} config read(s) → '
@@ -806,7 +809,7 @@ def cmd_index(
             )
         with persist_progress(console, 'data model') as report:
             data_rows = persist_data_model(
-                Path(cfg.db_path), source_pairs,
+                Path(cfg.db_path), scoped_pairs,
                 schema_paths_by_source=schema_paths_by_source,
                 dialect_by_source=dialect_by_source,
                 max_staleness_by_source=max_staleness_by_source,
@@ -824,7 +827,7 @@ def cmd_index(
         # (preserves Swagger rows).
         quiet = getattr(args, 'quiet', False)
         akka_routes = persist_akka_http_endpoints(
-            Path(cfg.db_path), source_pairs,
+            Path(cfg.db_path), scoped_pairs,
         )
         if akka_routes and not quiet:
             console.print(
@@ -837,7 +840,7 @@ def cmd_index(
         # ``@router.<verb>`` decorators and persists matched routes
         # to ``api_endpoints``. Same coexistence semantics as Akka.
         python_routes = persist_python_routes(
-            Path(cfg.db_path), source_pairs,
+            Path(cfg.db_path), scoped_pairs,
         )
         if python_routes and not quiet:
             console.print(
@@ -850,7 +853,7 @@ def cmd_index(
         # ``router.<verb>(...)`` call sites and persists matched
         # routes to ``api_endpoints``.
         express_routes = persist_express_routes(
-            Path(cfg.db_path), source_pairs,
+            Path(cfg.db_path), scoped_pairs,
         )
         if express_routes and not quiet:
             console.print(
@@ -864,7 +867,7 @@ def cmd_index(
         # to ``http_client_calls``. URL→endpoint joining (Phase 8c)
         # waits until all three client extractors are wired.
         py_http = persist_python_http_clients(
-            Path(cfg.db_path), source_pairs,
+            Path(cfg.db_path), scoped_pairs,
         )
         if py_http and not quiet:
             console.print(
@@ -876,7 +879,7 @@ def cmd_index(
         # Walks ``fetch(...)`` / ``axios.{verb}`` /
         # ``this.$http.{verb}`` (Vue 2 / Angular) call sites.
         js_http = persist_js_http_clients(
-            Path(cfg.db_path), source_pairs,
+            Path(cfg.db_path), scoped_pairs,
         )
         if js_http and not quiet:
             console.print(
@@ -888,7 +891,7 @@ def cmd_index(
         # Walks Akka-HTTP ``Http().singleRequest`` / sttp
         # ``basicRequest.<verb>`` call sites.
         scala_http = persist_scala_http_clients(
-            Path(cfg.db_path), source_pairs,
+            Path(cfg.db_path), scoped_pairs,
         )
         if scala_http and not quiet:
             console.print(
@@ -902,7 +905,7 @@ def cmd_index(
         # to ``api_calls``. Once this lands, ariadne_trace_flow's
         # HTTP-tier hops finally return cross-language chains.
         resolved = persist_url_resolver(
-            Path(cfg.db_path), source_pairs,
+            Path(cfg.db_path), scoped_pairs,
         )
         if resolved and not quiet:
             console.print(
