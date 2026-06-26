@@ -13,6 +13,7 @@ duplicate rows next to the legacy ones.
 """
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import sqlite3
@@ -23,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from attrs import field, frozen
 
-from schema import doc_id_for
+from schema import CATALOG_KIND_ELEMENT, doc_id_for
 
 if TYPE_CHECKING:
     from sqlite3 import Connection
@@ -181,6 +182,23 @@ def _update_staleness_doc_ids(
     return updated
 
 
+@frozen
+class RepairLocationsResult:
+    """Outcome of one ``repair_stringified_locations`` call.
+
+    - ``inspected``: catalog ``element`` docs examined.
+    - ``repaired``: ``location`` strings parsed back to dicts and rewritten.
+    - ``already_dict``: locations already stored as dicts; left untouched.
+    - ``unparseable``: ``location`` strings that did not parse to a dict; left
+      untouched and surfaced (in ``unparseable_sample``) rather than dropped.
+    """
+    inspected: int
+    repaired: int
+    already_dict: int
+    unparseable: int
+    unparseable_sample: tuple[tuple[str, str], ...] = field(factory=tuple)
+
+
 class MigrationsMixin:
     """One-off migration helpers attached to ``Library``.
 
@@ -333,8 +351,71 @@ class MigrationsMixin:
             skipped_source_names=skipped_source_names,
         )
 
+    def repair_stringified_locations(self, *, dry_run: bool = False) -> RepairLocationsResult:
+        """Repair catalog-element ``location`` metadata that a prior export→import
+        round trip turned from a dict into a Python-repr string (see the
+        ``import_from_markdown`` parser in export.py).
+
+        Parses each string ``location`` back to a dict via ``ast.literal_eval`` —
+        lossless, no regeneration. Only the ``location`` key on catalog ``element``
+        docs is touched; a clean dict location is left as-is. A string that does
+        not parse to a dict is left untouched and reported (never silently dropped).
+        """
+        inspected = 0
+        repaired = 0
+        already_dict = 0
+        unparseable: list[tuple[str, str]] = []
+        updates: list[tuple[str, str]] = []
+
+        with self._conn_provider.acquire() as conn:
+            rows = conn.execute(
+                "SELECT id, metadata FROM documents "
+                "WHERE content_type = 'catalog' AND metadata IS NOT NULL"
+            ).fetchall()
+
+        for doc_id, meta_json in rows:
+            metadata = json.loads(meta_json)
+            if metadata.get('kind') != CATALOG_KIND_ELEMENT:
+                continue
+            inspected += 1
+            loc = metadata.get('location')
+            if isinstance(loc, dict):
+                already_dict += 1
+                continue
+            if not isinstance(loc, str):
+                continue
+            try:
+                parsed = ast.literal_eval(loc)
+            except (ValueError, SyntaxError):
+                parsed = None
+            if isinstance(parsed, dict):
+                metadata['location'] = parsed
+                updates.append((doc_id, json.dumps(metadata)))
+                repaired += 1
+            else:
+                unparseable.append((doc_id, loc))
+
+        if not dry_run:
+            with self._conn_provider.acquire() as conn:
+                conn.commit()
+                for doc_id, new_meta in updates:
+                    conn.execute(
+                        'UPDATE documents SET metadata = ? WHERE id = ?',
+                        (new_meta, doc_id),
+                    )
+                conn.commit()
+
+        return RepairLocationsResult(
+            inspected=inspected,
+            repaired=repaired,
+            already_dict=already_dict,
+            unparseable=len(unparseable),
+            unparseable_sample=tuple(unparseable[:20]),
+        )
+
 
 __all__ = [
     'MigrateDocIdsResult',
     'MigrationsMixin',
+    'RepairLocationsResult',
 ]

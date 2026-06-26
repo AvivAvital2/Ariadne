@@ -88,6 +88,8 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
                                      'Run before --doc-ids to recover legacy '
                                      'docs that predate source_name plumbing.'
                                  ))
+    migrate_parser.add_argument('--fix-locations', action='store_true',
+                                 help='Repair catalog element `location` metadata corrupted to a string by a prior export/import round trip (parses it back to a dict; lossless, no regeneration).')
     migrate_parser.add_argument('--dry-run', action='store_true',
                                  help='Show planned changes without writing')
     migrate_parser.add_argument('--verbose', '-v', action='store_true',
@@ -403,6 +405,22 @@ def cmd_migrate(args: argparse.Namespace) -> int:
                 f'[green]Updated language on {updated} file_index doc(s);[/green] '
                 f'{unchanged} already correct.'
             )
+            return 0
+
+        if args.fix_locations:
+            result = library.repair_stringified_locations(dry_run=args.dry_run)
+            verb = 'Would repair' if args.dry_run else 'Repaired'
+            console.print(
+                f'[green]{verb} {result.repaired} catalog location(s);[/green] '
+                f'{result.already_dict} already valid, {result.inspected} inspected.'
+            )
+            if result.unparseable:
+                console.print(
+                    f'[yellow]{result.unparseable} location string(s) did not parse to '
+                    f'a dict and were left unchanged:[/yellow]'
+                )
+                for doc_id, loc in result.unparseable_sample:
+                    console.print(f'  [dim]{doc_id}: {loc!r}[/dim]')
             return 0
 
         if args.infer_source_name:

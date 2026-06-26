@@ -678,7 +678,7 @@ def import_from_markdown(
                             k = k.strip()
                             v = v.strip().strip('"')
                             # Try to parse as list if it looks like one
-                            if v.startswith('[') and v.endswith(']'):
+                            if (v.startswith('[') and v.endswith(']')) or (v.startswith('{') and v.endswith('}')):
                                 try:
                                     import ast
                                     v = ast.literal_eval(v)
