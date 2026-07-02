@@ -1,9 +1,13 @@
 """ScalaTest (FunSuite/AsyncFunSuite) test-structure extraction.
 
-A `test("name") {…}` call resolves (via SCIP) to ScalaTest's `test` symbol;
-its name is a string-literal argument SCIP does not carry, so it's recovered
-from the source AST (ast-grep). The result is a `scala_test_case` catalog
-element parented to its enclosing suite. See the ScalaTest plan in
+A `test("name") {…}` / `ignore("name") {…}` call resolves (via SCIP) to
+ScalaTest's `test`/`ignore` symbol — that's all SCIP is used for (detection,
+precise even through custom base traits). Everything structural comes from the
+source AST (ast-grep): the name (a string-literal argument SCIP does not carry),
+the *enclosing suite* (the innermost class/object whose node range covers the
+call — scip-java emits no `enclosing_range`, so this can't come from SCIP), and
+the disabled-status markers. The suite's qualified name is recovered from the
+SCIP class *definition* at the class-name position. See the ScalaTest design in
 designs/. Synthetic fixtures only.
 """
 from __future__ import annotations
@@ -18,8 +22,8 @@ from docgen.scip_extractor import (
     extract,
 )
 
-# Real ScalaTest `test` method symbols (FunSuite / AsyncFunSuite) that scip-java
-# resolves a `test(...)` call to — the recognizer must match these.
+# Real ScalaTest method symbols (FunSuite / AsyncFunSuite) that scip-java
+# resolves a `test(...)` / `ignore(...)` call to — the recognizer must match.
 _FUNSUITE_TEST_SYM = (
     'scip-java semanticdb maven org.scalatest scalatest_2.13 3.2.17 '
     'org/scalatest/funsuite/AnyFunSuiteLike#test().'
@@ -27,6 +31,11 @@ _FUNSUITE_TEST_SYM = (
 _ASYNC_TEST_SYM = (
     'scip-java semanticdb maven org.scalatest scalatest_2.13 3.2.17 '
     'org/scalatest/funsuite/AsyncFunSuiteLike#test().'
+)
+# `ignore("name")` — a disabled test; same trait, `ignore` method.
+_FUNSUITE_IGNORE_SYM = (
+    'scip-java semanticdb maven org.scalatest scalatest_2.13 3.2.17 '
+    'org/scalatest/funsuite/AnyFunSuiteLike#ignore().'
 )
 # A non-test reference under the same package (the base-class mention) — the
 # recognizer must NOT treat this as a test.
@@ -36,8 +45,7 @@ _BASECLASS_SYM = (
 )
 _SUITE_SYM = 'scip-java semanticdb maven . . . com/example/WidgetSuite#'
 _ASYNC_SUITE_SYM = 'scip-java semanticdb maven . . . com/example/AsyncWidgetSuite#'
-# A non-test class in the same file — its element must stay scala_class and
-# never be relabeled to a test suite (slice-2 selectivity).
+# A non-test class in the same file — stays scala_class, never a test suite.
 _HELPER_SYM = 'scip-java semanticdb maven . . . com/example/Helpers#'
 
 
@@ -55,16 +63,9 @@ def _make_index(src_file: Path, source_root: Path,
     )
 
 
-def _def_occ(symbol: str, line_start: int, line_end: int) -> _ScipOccurrence:
-    """Definition occurrence with an enclosing body range (1-indexed lines) —
-    the shape the owning resolver reads to find a test's enclosing suite."""
-    return _ScipOccurrence(
-        symbol=symbol, range=(line_start - 1, 6, 40), is_definition=True,
-        enclosing_range=(line_start - 1, 0, line_end - 1, 0))
-
-
-def _occ_at(text: str, marker: str, symbol: str, *, nth: int = 0) -> _ScipOccurrence:
-    """A reference occurrence on the nth whole-word ``marker`` in ``text``."""
+def _occ_at(text: str, marker: str, symbol: str, *, nth: int = 0,
+            is_definition: bool = False) -> _ScipOccurrence:
+    """An occurrence on the nth whole-word ``marker`` in ``text``."""
     found = 0
     pos = -1
     n = len(text)
@@ -88,41 +89,53 @@ def _occ_at(text: str, marker: str, symbol: str, *, nth: int = 0) -> _ScipOccurr
     col = pos - (text.rfind('\n', 0, pos) + 1)
     return _ScipOccurrence(
         symbol=symbol, range=(line, col, line, col + len(marker)),
-        is_definition=False)
+        is_definition=is_definition)
+
+
+def _def_occ_at(text: str, marker: str, symbol: str) -> _ScipOccurrence:
+    """A class *definition* occurrence at the class-name token — the shape
+    scip-java actually emits: a name-position range and **no enclosing_range**
+    (its absence is exactly what broke the original suite-parenting)."""
+    return _occ_at(text, marker, symbol, is_definition=True)
 
 
 def test_funsuite_and_asyncfunsuite_test_blocks_extracted(tmp_path):
-    """`test("...")` calls in FunSuite and AsyncFunSuite become located
-    scala_test_case elements parented to their suite, and each enclosing suite
-    class is relabeled from scala_class to scala_test_suite. A dynamically-named
-    `test(x)`, a non-test base-class reference, and a plain helper class are
-    none of those."""
+    """`test`/`ignore` calls in FunSuite and AsyncFunSuite become located
+    scala_test_case elements, parented to their enclosing suite via the AST
+    (not SCIP enclosing_range), and each suite class is relabeled to
+    scala_test_suite. `ignore` → skipped, a `pending` body → pending, a plain
+    test → no markers; a dynamic `test(x)`, a base-class reference, and a
+    non-test helper class are none of those."""
     src = (
         'class WidgetSuite extends AnyFunSuite {\n'        # 1
-        '  test("renders") {}\n'                            # 2: case
+        '  test("renders") {}\n'                            # 2: active case
         '  test(dynamicName) {}\n'                          # 3: dynamic -> skip
-        '}\n'                                               # 4
-        'class AsyncWidgetSuite extends AsyncFunSuite {\n'  # 5
-        '  test("updates") {}\n'                            # 6: case (async parity)
-        '}\n'                                               # 7
-        'class Helpers {\n'                                 # 8: non-test class
-        '  def make(): Int = 0\n'                           # 9
-        '}\n'                                               # 10
+        '  ignore("flaky") {}\n'                            # 4: skipped marker
+        '}\n'                                               # 5
+        'class AsyncWidgetSuite extends AsyncFunSuite {\n'  # 6
+        '  test("updates") { pending }\n'                   # 7: pending marker
+        '}\n'                                               # 8
+        'class Helpers {\n'                                 # 9: non-test class
+        '  def make(): Int = 0\n'                           # 10
+        '}\n'                                               # 11
     )
     f = tmp_path / 'WidgetSuite.scala'
     f.write_text(src, encoding='utf-8')
 
     occs = [
-        _def_occ(_SUITE_SYM, 1, 4),
-        _def_occ(_ASYNC_SUITE_SYM, 5, 7),
-        _def_occ(_HELPER_SYM, 8, 10),
-        _occ_at(src, 'test', _FUNSUITE_TEST_SYM, nth=0),   # renders
-        _occ_at(src, 'test', _FUNSUITE_TEST_SYM, nth=1),   # dynamicName
-        _occ_at(src, 'test', _ASYNC_TEST_SYM, nth=2),      # updates
+        # Class definitions at the name token — NO enclosing_range.
+        _def_occ_at(src, 'WidgetSuite', _SUITE_SYM),
+        _def_occ_at(src, 'AsyncWidgetSuite', _ASYNC_SUITE_SYM),
+        _def_occ_at(src, 'Helpers', _HELPER_SYM),
+        # test/ignore call references at the callee.
+        _occ_at(src, 'test', _FUNSUITE_TEST_SYM, nth=0),     # renders
+        _occ_at(src, 'test', _FUNSUITE_TEST_SYM, nth=1),     # dynamicName
+        _occ_at(src, 'ignore', _FUNSUITE_IGNORE_SYM, nth=0),  # flaky (skipped)
+        _occ_at(src, 'test', _ASYNC_TEST_SYM, nth=2),        # updates (pending)
         _occ_at(src, 'AnyFunSuite', _BASECLASS_SYM, nth=0),  # non-test ref
     ]
-    # Class symbols so the definition loop emits a scala_class per class —
-    # the two suite ones are what slice 2 relabels.
+    # Class symbols so the definition loop emits a scala_class per class — the
+    # two suite ones are what relabel_suites promotes.
     syms = (
         _ScipSymbol(symbol=_SUITE_SYM, kind='Class'),
         _ScipSymbol(symbol=_ASYNC_SUITE_SYM, kind='Class'),
@@ -133,69 +146,74 @@ def test_funsuite_and_asyncfunsuite_test_blocks_extracted(tmp_path):
 
     cases = {e.qualified_name: e for e in elements if e.subtype == 'scala_test_case'}
     leaf_names = {qn.split(' > ')[-1] for qn in cases}
-    assert leaf_names == {'renders', 'updates'}  # dynamic + base-class ref excluded
+    # dynamic + base-class ref excluded; ignore IS a (skipped) case.
+    assert leaf_names == {'renders', 'updates', 'flaky'}
 
     renders = next(c for qn, c in cases.items() if qn.endswith('renders'))
     assert renders.language == 'scala'
     assert renders.line_start == 2
     assert 'WidgetSuite' in (renders.parent_qualified_name or '')
+    assert renders.markers == ()                       # active
 
     updates = next(c for qn, c in cases.items() if qn.endswith('updates'))
-    assert updates.line_start == 6
+    assert updates.line_start == 7
     assert 'AsyncWidgetSuite' in (updates.parent_qualified_name or '')
+    assert updates.markers == ('pending',)             # pending body
 
-    # Slice 2: each enclosing suite surfaces as a scala_test_suite, relabeled
-    # from its scala_class definition — exactly the suites that own tests.
-    suites = {e.qualified_name: e for e in elements
-              if e.subtype == 'scala_test_suite'}
-    assert set(suites) == {renders.parent_qualified_name,
-                           updates.parent_qualified_name}
-    # Relabel, not duplicate: no scala_class lingers for a suite with tests.
+    flaky = next(c for qn, c in cases.items() if qn.endswith('flaky'))
+    assert 'WidgetSuite' in (flaky.parent_qualified_name or '')
+    assert flaky.markers == ('skipped',)               # ignore(...)
+
+    # Each enclosing suite surfaces as scala_test_suite, relabeled from its
+    # SCIP class definition — the suite QN (recovered from the class-def symbol
+    # at the class-name position) matches the class element's QN.
+    suites = {e.qualified_name for e in elements if e.subtype == 'scala_test_suite'}
+    assert suites == {renders.parent_qualified_name, updates.parent_qualified_name}
     assert not [e for e in elements
                 if e.subtype == 'scala_class' and e.qualified_name in suites]
-    # Derived from the real class def — keeps the class's range + signature,
-    # not a fabricated stub.
-    widget_suite = suites[renders.parent_qualified_name]
-    assert widget_suite.line_start == 1
-    assert 'WidgetSuite' in widget_suite.signature
     # Selectivity: a non-test class in the same file stays scala_class.
     helpers = [e for e in elements if e.qualified_name.endswith('Helpers')]
     assert len(helpers) == 1 and helpers[0].subtype == 'scala_class'
 
 
-def test_scalatest_degrades_gracefully_on_partial_scip(tmp_path):
-    """When the index doesn't carry the enclosing suite, a test still surfaces
-    with no parent; a stale test occurrence pointing at no source call is
-    skipped rather than crashing."""
+def test_scalatest_suite_name_falls_back_to_ast_when_scip_lacks_class(tmp_path):
+    """When the index doesn't carry the suite's class definition, the suite is
+    still recovered from the AST as a bare class name (ast-grep enclosure does
+    not depend on SCIP); a test outside any class is parentless; a stale test
+    occurrence pointing at no source call is skipped rather than crashing."""
     src = (
         'class S extends AnyFunSuite {\n'   # 1
         '  test("alone") {}\n'              # 2
         '}\n'                               # 3
+        'test("orphan") {}\n'              # 4: top-level — no enclosing class
     )
     f = tmp_path / 'S.scala'
     f.write_text(src, encoding='utf-8')
 
     occs = [
-        # No def occurrence for `S` → its enclosing range is unknown.
+        # No def occurrence for `S` → no canonical QN, AST gives the bare name.
         _occ_at(src, 'test', _FUNSUITE_TEST_SYM, nth=0),   # 'alone' @ line 2
+        _occ_at(src, 'test', _FUNSUITE_TEST_SYM, nth=1),   # 'orphan' @ line 4
         # A test occurrence pointing where there is no call (stale/skewed index).
         _ScipOccurrence(
             symbol=_FUNSUITE_TEST_SYM, range=(99, 0, 99, 4), is_definition=False),
     ]
     elements = extract(f, source_root=tmp_path, index=_make_index(f, tmp_path, occs))
 
-    cases = [e for e in elements if e.subtype == 'scala_test_case']
-    assert len(cases) == 1
-    assert cases[0].qualified_name == 'alone'          # no suite prefix
-    assert cases[0].parent_qualified_name is None
-    # No class symbol in the index → the suite is not promoted; the case
-    # surfaces parentless rather than us fabricating a scala_test_suite stub.
+    cases = {c.qualified_name: c for c in elements if c.subtype == 'scala_test_case'}
+    assert set(cases) == {'S > alone', 'orphan'}
+    # 'alone' is inside class S, but no SCIP class def → bare-name suite from AST.
+    assert cases['S > alone'].parent_qualified_name == 'S'
+    assert cases['S > alone'].markers == ()
+    # 'orphan' has no enclosing class → parentless.
+    assert cases['orphan'].parent_qualified_name is None
+    # No scala_class to promote (no class symbol) → no suite element fabricated.
     assert not [e for e in elements if e.subtype == 'scala_test_suite']
 
 
 def test_non_test_scala_file_yields_no_test_cases(tmp_path):
-    """A Scala file with no ScalaTest `test` occurrences produces no
-    scala_test_case elements (the common, non-test-file path)."""
+    """A Scala file with no ScalaTest `test`/`ignore` occurrences produces no
+    scala_test_case / scala_test_suite elements (the common, non-test path)."""
     src = (
         'class Widget {\n'
         '  def render(): Unit = ()\n'
@@ -203,7 +221,7 @@ def test_non_test_scala_file_yields_no_test_cases(tmp_path):
     )
     f = tmp_path / 'Widget.scala'
     f.write_text(src, encoding='utf-8')
-    occs = [_def_occ(_SUITE_SYM, 1, 3)]  # a definition, but no `test` reference
+    occs = [_def_occ_at(src, 'Widget', _SUITE_SYM)]  # a definition, no `test` ref
     elements = extract(f, source_root=tmp_path, index=_make_index(f, tmp_path, occs))
     assert not [e for e in elements if e.subtype == 'scala_test_case']
     assert not [e for e in elements if e.subtype == 'scala_test_suite']

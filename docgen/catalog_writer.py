@@ -151,6 +151,8 @@ def _element_metadata(el: ElementInfo, source_name: str) -> dict:
     }
     if el.documentation is not None:
         meta['documentation'] = el.documentation
+    if el.markers:
+        meta['markers'] = list(el.markers)
     return meta
                                                                                                                                                                                      
                 

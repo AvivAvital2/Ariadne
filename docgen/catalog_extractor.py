@@ -74,6 +74,9 @@ class ElementInfo:
     # Sphinx autodoc targets referenced by an rst section (rst only);
     # resolved against the SCIP index downstream. () for other languages.
     autodoc_targets: tuple[str, ...] = ()
+    # Disabled-status markers for test elements: ('skipped',) for an ignored
+    # test, ('pending',) for a pending one. () for non-test elements.
+    markers: tuple[str, ...] = ()
                 
 
 def _sha(text: str) -> str:
