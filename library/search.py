@@ -202,6 +202,69 @@ class SearchMixin:
 
         return matching
 
+    def find_documents_page_by_source_files(
+        self,
+        file_paths: list[str],
+        *,
+        limit: int,
+        content_types: list[str] | None = None,
+        offset: int = 0,
+    ) -> tuple[list[Document], int]:
+        """Memory-bounded, paginated fetch by source file — the bounded counterpart to
+        :meth:`find_documents_by_source_files` (which loads every match).
+
+        Pushes the basename LIKE match, an optional ``content_type`` filter, a stable
+        ``ORDER BY`` and ``LIMIT``/``OFFSET`` down to SQL so only the page's rows are
+        loaded into Python. ``COUNT(*) OVER ()`` rides along on each row, so the full
+        pre-LIMIT match total comes back in the same single scan — no extra COUNT query.
+
+        Args:
+            file_paths: File paths to match (by basename, as in find_documents_by_source_files).
+            limit: Max rows to return for this page (required — this is the paginated fetch).
+            content_types: If given, restrict to these types (pushed into the WHERE clause).
+            offset: Number of leading rows to skip.
+
+        Returns:
+            ``(page_documents, total_matches)`` — page bounded by ``limit``; total is the
+            full count before pagination.
+        """
+        if not file_paths:
+            return [], 0
+
+        like_clauses: list[str] = []
+        params: list[object] = []
+        for fp in file_paths:
+            basename = fp.split('/')[-1] if '/' in fp else fp
+            like_clauses.append('source_files LIKE ?')
+            params.append(f'%{basename}%')
+        where = '(' + ' OR '.join(like_clauses) + ')'
+
+        if content_types:
+            placeholders = ','.join('?' * len(content_types))
+            where += f' AND content_type IN ({placeholders})'
+            params.extend(content_types)
+
+        query = (
+            f'SELECT id, content_type, title, content, source_files, embedding, '
+            f'created_at, updated_at, metadata, source_name, COUNT(*) OVER () AS total '
+            f'FROM documents WHERE {where} ORDER BY content_type, id LIMIT ? OFFSET ?'
+        )
+        params.extend([limit, offset])
+
+        with self._conn_provider.acquire() as conn:
+            rows = conn.execute(query, params).fetchall()
+
+        if not rows:
+            return [], 0
+
+        page: list[Document] = []
+        total = 0
+        for row in rows:
+            cols = tuple(row)
+            total = cols[-1]  # COUNT(*) OVER () — identical on every row
+            page.append(self._row_to_document(cols[:-1]))
+        return page, total
+
     def filter_documents_by_scope(
         self,
         docs: list[Document],

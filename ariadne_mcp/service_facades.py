@@ -132,9 +132,9 @@ class FacadesMixin:
     # Knowledge & explanation (facade over Library)
     # ------------------------------------------------------------------
 
-    def explain(self, file_path: str) -> dict:
+    def explain(self, file_path: str, kinds: list[str] | None = None, sections_only: bool = False, offset: int = 0, limit: int | None = None) -> dict:
         """Explain a file using Ariadne docs."""
-        return self.library.explain(file_path)
+        return self.library.explain(file_path, kinds=kinds, sections_only=sections_only, offset=offset, limit=limit)
 
     def review_checklist(self, changed_files: list[str]) -> list[dict]:
         """Generate PR review checklist from knowledge of changed files."""

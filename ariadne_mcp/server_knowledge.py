@@ -113,6 +113,10 @@ def ariadne_summarize(
 
 def ariadne_explain(
     file_path: str,
+    kinds: list[str] | None = None,
+    sections_only: bool = False,
+    offset: int = 0,
+    limit: int | None = None,
 ) -> ExplainResponse:
     """Get everything Ariadne knows about a specific source file.
 
@@ -126,7 +130,7 @@ def ariadne_explain(
     from ariadne_mcp.service import AriadneService, _trim_related_documents
 
     svc = AriadneService.get()
-    raw = svc.explain(file_path)
+    raw = svc.explain(file_path, kinds=kinds, sections_only=sections_only, offset=offset, limit=limit)
 
     return ExplainResponse(
         file=raw['file'],
@@ -139,6 +143,9 @@ def ariadne_explain(
             for ct, docs in raw['documents'].items()
         },
         graph_neighbors=raw['graph_neighbors'],
+        offset=raw['offset'],
+        returned=raw['returned'],
+        next_offset=raw['next_offset'],
     )
 
 

@@ -24,7 +24,7 @@ class IntelligenceMixin:
     - self.find_documents_by_source_files() from SearchMixin
     """
 
-    def explain(self, file_path: str) -> dict[str, Any]:
+    def explain(self, file_path: str, kinds: list[str] | None = None, sections_only: bool = False, offset: int = 0, limit: int | None = None) -> dict[str, Any]:
         """Get everything Ariadne knows about a specific file.
 
         Assembles all document types (explanation, architecture, topic, finding)
@@ -37,19 +37,25 @@ class IntelligenceMixin:
             Dict with 'file', 'documents' (grouped by type), 'graph_neighbors',
             and 'summary' fields.
         """
-        # Find all docs for this file
-        docs = self.find_documents_by_source_files([file_path])
+        # Fetch the docs for this file as a page.
+        if limit is None:
+            # Default path — unchanged behavior/perf: load all matching docs, then
+            # filter by kind and order deterministically in Python.
+            all_docs = self.find_documents_by_source_files([file_path])
+            if kinds is not None:
+                all_docs = [d for d in all_docs if d.content_type in kinds]
+            all_docs.sort(key=lambda d: (d.content_type, d.id))
+            total = len(all_docs)
+            docs = all_docs[offset:] if offset else all_docs
+            next_offset = None
+        else:
+            # Paginated path — push LIMIT/OFFSET (+ kinds) to SQL so only the page
+            # of rows is loaded into Python; the full total rides along (COUNT OVER).
+            docs, total = self.find_documents_page_by_source_files(
+                [file_path], content_types=kinds, offset=offset, limit=limit)
+            next_offset = offset + len(docs) if offset + len(docs) < total else None
 
-        # Also try with just the filename for partial matching
-        if not docs:
-            import os
-            basename = os.path.basename(file_path)
-            # Use lite query first to find matching IDs, then fetch full docs
-            matching_ids = [m.id for m in self.list_documents_lite()
-                          if any(basename in sf for sf in m.source_files)]
-            docs = self.get_documents_batch(matching_ids) if matching_ids else []
-
-        # Group by content type
+        # Group the page by content type
         by_type: dict[str, list[dict[str, str]]] = {}
         for doc in docs:
             ct = doc.content_type
@@ -60,6 +66,8 @@ class IntelligenceMixin:
                 'title': doc.title,
                 'content': doc.content,
             })
+        if sections_only:
+            by_type = {ct: [{'id': e['id'], 'title': e['title'], 'content': _headings_outline(e['content'])} for e in entries] for ct, entries in by_type.items()}
 
         # Find graph neighbors if graph exists
         neighbors: list[dict[str, str]] = []
@@ -80,23 +88,25 @@ class IntelligenceMixin:
         except Exception:
             pass  # Graph may not be built
 
-        # Build summary
-        doc_count = sum(len(v) for v in by_type.values())
+        # Build summary. total is the full match count (pre-pagination); the
+        # breakdown describes this page.
         types_found = list(by_type.keys())
         summary = (
-            f'{doc_count} documents found for {file_path}: '
+            f'{total} documents found for {file_path}: '
             f'{", ".join(f"{len(v)} {k}" for k, v in by_type.items())}'
-            if doc_count > 0
+            if total > 0
             else f'No documentation found for {file_path}'
         )
-
         return {
             'file': file_path,
             'documents': by_type,
             'graph_neighbors': neighbors[:20],
-            'total_documents': doc_count,
+            'total_documents': total,
             'types_found': types_found,
             'summary': summary,
+            'offset': offset,
+            'returned': len(docs),
+            'next_offset': next_offset,
         }
 
     def auto_tag_clusters(self, n_clusters: int = 10) -> list[dict[str, Any]]:
@@ -754,3 +764,8 @@ class IntelligenceMixin:
         if doc1.updated_at > doc2.updated_at:
             return doc1
         return doc2
+
+
+def _headings_outline(content: str) -> str:
+    """Markdown heading lines only (body prose dropped) — a compact navigable outline."""
+    return '\n'.join(line for line in content.splitlines() if re.match(r'\s*#{1,6}\s+\S', line))

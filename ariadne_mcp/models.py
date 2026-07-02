@@ -266,6 +266,9 @@ class ExplainResponse(BaseModel):
     types_found: list[str] = Field(default_factory=list)
     documents: dict[str, list[ExplainDocument]] = Field(default_factory=dict)
     graph_neighbors: list[dict[str, str]] = Field(default_factory=list)
+    offset: int = 0
+    returned: int = 0
+    next_offset: int | None = None
 
 
 class CoverageResponse(BaseModel):
