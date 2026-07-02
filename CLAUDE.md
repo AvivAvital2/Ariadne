@@ -51,7 +51,8 @@ uv run ariadne discover --source X --config-only   # Same but skip the future au
 uv run ariadne index --source X           # Run scip-X per declared kind, then 10 persist_* steps fill library_scip
 uv run ariadne callers <symbol>           # Cross-source caller tree
 uv run ariadne callees <symbol>           # Cross-source callee tree
-uv run ariadne impact_radius <symbol> --depth 3   # Files affected by changing a symbol
+uv run ariadne symbol_impact_radius <symbol> --depth 3   # Files affected by changing a symbol
+uv run ariadne file_impact_radius <file>          # Files/tests/docs affected by changing a file (SCIP call-site graph)
 uv run ariadne improve --dead-code        # Zero-reference symbols + stale rst (autodoc targets that no longer resolve)
 uv run ariadne trace-flow <symbol> --depth 3      # Cross-language flow trace (SCIP + HTTP tiers)
 ```

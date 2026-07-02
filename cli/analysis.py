@@ -37,8 +37,9 @@ def register_commands(subparsers):
     review_parser = subparsers.add_parser('review-checklist', help='Generate PR review checklist')
     review_parser.add_argument('files', nargs='+', help='Changed file paths')
 
-    # impact-radius
-    impact_parser = subparsers.add_parser('impact-radius', help='Calculate change impact radius')
+    # file_impact_radius
+    impact_parser = subparsers.add_parser(
+        'file_impact_radius', help='What files/tests/docs are affected by changing a file')
     impact_parser.add_argument('file', help='File to analyze')
 
     # coupling
@@ -472,7 +473,7 @@ HANDLERS = {
     'relate': lambda args: cmd_relate(args),
     'decision-log': lambda args: cmd_decision_log(args),
     'review-checklist': lambda args: cmd_review_checklist(args),
-    'impact-radius': lambda args: cmd_impact_radius(args),
+    'file_impact_radius': lambda args: cmd_impact_radius(args),
     'coupling': lambda args: cmd_coupling(args),
     'summarize': lambda args: cmd_summarize(args),
     'semantic-dupes': lambda args: cmd_semantic_dupes(args),

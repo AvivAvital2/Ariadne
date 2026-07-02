@@ -771,6 +771,52 @@ class CrossSourceGraph:
         return tuple(sorted(self._rst_autodoc.get(symbol_qualified_name, ())))
 
 
+@frozen
+class ImpactReport:
+    """Aggregated reverse-edge walk: which files and symbols are affected if the
+    starting symbol changes.
+    """
+    start_symbol: object  # CrossSourceSymbol
+    affected_symbols: list  # list[CrossSourceSymbol] in walk order
+    files: set[str] = field(factory=set)
+
+
+def compute_impact_radius(
+    graph: 'CrossSourceGraph', start_id: str, depth: int,
+) -> ImpactReport:
+    """Walk reverse edges N-deep, collecting every symbol and file that
+    transitively depends on the starting symbol.
+    """
+    if start_id not in graph._symbols:
+        # Empty report — caller decides whether to error
+        return ImpactReport(start_symbol=None, affected_symbols=[], files=set())
+
+    start_sym = graph._symbols[start_id]
+
+    visited: set[str] = set()
+    # The starting symbol IS affected — it's the thing being changed.
+    affected: list = [start_sym]
+
+    def _walk(sym_id: str, d: int) -> None:
+        if d <= 0 or sym_id in visited:
+            return
+        visited.add(sym_id)
+        for edge in graph.callers_of(sym_id):
+            caller_id = edge.caller.canonical_id
+            if caller_id not in visited:
+                affected.append(edge.caller)
+            _walk(caller_id, d - 1)
+
+    _walk(start_id, depth)
+
+    files = {sym.file for sym in affected}
+    return ImpactReport(
+        start_symbol=start_sym,
+        affected_symbols=affected,
+        files=files,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -941,6 +987,8 @@ __all__ = [
     'CrossSourceEdge',
     'CrossSourceGraph',
     'CrossSourceSymbol',
+    'ImpactReport',
     'SymbolResolution',
+    'compute_impact_radius',
     'load_source_from_manifest',
 ]

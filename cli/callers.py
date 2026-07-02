@@ -22,6 +22,9 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.tree import Tree
 
+# Relocated to the graph layer so library/ can reuse them without importing cli/.
+from docgen.scip_cross_source import ImpactReport, compute_impact_radius
+
 if TYPE_CHECKING:
     from docgen.scip_cross_source import CrossSourceEdge, CrossSourceGraph
 
@@ -186,57 +189,6 @@ def cmd_callers(args: argparse.Namespace) -> int:
     return 0
 
 
-from attrs import field, frozen
-
-
-@frozen
-class ImpactReport:
-    """Aggregated reverse-edge walk: which files and symbols are
-    affected if the starting symbol changes."""
-    start_symbol: object  # CrossSourceSymbol
-    affected_symbols: list  # list[CrossSourceSymbol] in walk order
-    files: set[str] = field(factory=set)
-
-
-def compute_impact_radius(
-    graph: 'CrossSourceGraph', start_id: str, depth: int,
-) -> ImpactReport:
-    """Walk reverse edges N-deep, collect every symbol and file that
-    transitively depends on the starting symbol."""
-    if start_id not in graph._symbols:
-        # Empty report — caller decides whether to error
-        return ImpactReport(
-            start_symbol=None,
-            affected_symbols=[],
-            files=set(),
-        )
-
-    start_sym = graph._symbols[start_id]
-
-    visited: set[str] = set()
-    # The starting symbol IS affected — it's the thing being changed.
-    affected: list = [start_sym]
-
-    def _walk(sym_id: str, d: int) -> None:
-        if d <= 0 or sym_id in visited:
-            return
-        visited.add(sym_id)
-        for edge in graph.callers_of(sym_id):
-            caller_id = edge.caller.canonical_id
-            if caller_id not in visited:
-                affected.append(edge.caller)
-            _walk(caller_id, d - 1)
-
-    _walk(start_id, depth)
-
-    files = {sym.file for sym in affected}
-    return ImpactReport(
-        start_symbol=start_sym,
-        affected_symbols=affected,
-        files=files,
-    )
-
-
 def format_dead_code_report(
     graph: 'CrossSourceGraph', source_name: str,
 ) -> str | None:
@@ -324,7 +276,7 @@ def cmd_callees(args: argparse.Namespace) -> int:
 
 
 def register_commands(subparsers):
-    """Register `ariadne callers`, `callees`, and `impact_radius`
+    """Register `ariadne callers`, `callees`, and `symbol_impact_radius`
     subcommands."""
     callers_parser = subparsers.add_parser(
         'callers',
@@ -355,8 +307,8 @@ def register_commands(subparsers):
     )
 
     impact_parser = subparsers.add_parser(
-        'impact_radius',
-        help='Show what files/symbols are affected by a change to a symbol',
+        'symbol_impact_radius',
+        help='What files/symbols are affected by changing a symbol (cross-source)',
     )
     impact_parser.add_argument('symbol', help='Symbol to query')
     impact_parser.add_argument(
@@ -372,7 +324,7 @@ def register_commands(subparsers):
 HANDLERS = {
     'callers': lambda args: cmd_callers(args),
     'callees': lambda args: cmd_callees(args),
-    'impact_radius': lambda args: cmd_impact_radius(args),
+    'symbol_impact_radius': lambda args: cmd_impact_radius(args),
 }
 
 

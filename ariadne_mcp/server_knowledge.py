@@ -81,6 +81,16 @@ def ariadne_impact_radius(
     from ariadne_mcp.service import AriadneService
 
     result = AriadneService.get().impact_radius(file_path)
+    # Honesty: when the file's source has no SCIP index, the dependency counts are
+    # not "0 dependents" (a leaf) — they're unknown. Say so instead of a silent 0.
+    if not result.get('scip_indexed', False):
+        return AdminActionResponse(output='\n'.join([
+            f'Impact Radius: {file_path}',
+            '  source not SCIP-indexed: dependency counts unavailable '
+            '(run `ariadne index` for this source).',
+            f'  Affected docs: {result["affected_docs"]}',
+            f'  Affected tests: {result["affected_tests"]}',
+        ]))
     lines = [
         f'Impact Radius: {file_path}',
         f'  Direct dependents: {result["direct_dependents"]}',
@@ -89,6 +99,12 @@ def ariadne_impact_radius(
         f'  Affected tests: {result["affected_tests"]}',
         f'  Radius score: {result["radius_score"]}',
     ]
+    by_source = result.get('dependents_by_source') or {}
+    if by_source:
+        lines.append(
+            '  Dependents by source: '
+            + ', '.join(f'{src} ({n})' for src, n in sorted(by_source.items())),
+        )
     if result['top_dependents']:
         lines.append(f'  Top dependents: {", ".join(result["top_dependents"])}')
     return AdminActionResponse(output='\n'.join(lines))

@@ -511,40 +511,96 @@ class IntelligenceMixin:
 
         return checklist
 
-    def impact_radius(self, file_path: str) -> dict[str, Any]:
-        """Calculate how many files/tests/docs would be affected by changing a file."""
-        # Direct dependents (files that import this one)
-        dependents: set[str] = set()
+    def impact_radius(self, file_path: str, depth: int = 2) -> dict[str, Any]:
+        """How many files/tests/docs a change to ``file_path`` would affect.
+
+        Counts dependents from the SCIP cross-source call graph
+        (``scip_symbols``/``scip_edges`` — the data ``callers``/``callees`` use). A
+        *dependent* is a file with a **call site** referencing a symbol defined in
+        ``file_path``, counted by ``edge.file`` (the call location), which is reliable
+        even when the calling symbol is a SCIP ``local`` (lambda/comprehension/nested)
+        with no stable cross-file identity. ``direct`` is exact; ``transitive`` is a
+        conservative file-level lower bound — a further hop over *named* dependents only,
+        since ``local`` callees can't be attributed to a file. ``scip_indexed``
+        distinguishes "source not SCIP-indexed" (counts meaningless) from a genuine
+        zero-dependency leaf.
+        """
+        from config import get_config
+        from docgen.scip_cross_source import CrossSourceGraph
+
+        cfg = get_config()
+        graph = CrossSourceGraph()
         with self._conn_provider.acquire() as conn:
-            for row in conn.execute(
-                "SELECT source_id FROM doc_graph WHERE target_id LIKE ? AND edge_type = 'imports'",
-                (f'%{file_path}%',),
-            ).fetchall():
-                dependents.add(row[0])
+            graph.load_from(conn)
 
-        # Transitive dependents (2 hops)
-        transitive: set[str] = set()
-        with self._conn_provider.acquire() as conn2:
-            for dep in dependents:
-                for row2 in conn2.execute(
-                    "SELECT source_id FROM doc_graph WHERE target_id LIKE ? AND edge_type = 'imports'",
-                    (f'%{dep.split("/")[-1]}%',),
-                ).fetchall():
-                    transitive.add(row2[0])
+        # Resolve the file to its source + source-relative path.
+        source_name: str | None = None
+        rel = file_path
+        for name, root in cfg.get_all_source_paths().items():
+            root_s = str(root).rstrip('/')
+            if file_path.startswith(root_s + '/'):
+                source_name = name
+                rel = file_path[len(root_s) + 1:]
+                break
 
-        all_affected = dependents | transitive
+        scip_indexed = source_name is not None and graph.has_scip(source_name)
+
+        def named_symbols_in(src: str, rel_file: str) -> list[str]:
+            """Named (non-``local``) symbols defined in a given source file."""
+            return [
+                cid for cid, sym in graph._symbols.items()
+                if sym.source_name == src and sym.file == rel_file
+                and not cid.startswith('local ')
+            ]
+
+        def call_site_files(symbols: list[str]) -> set[tuple[str, str]]:
+            """Distinct ``(source, file)`` of every call site referencing one of
+            ``symbols`` — by ``edge.file`` (reliable for ``local`` callers too) —
+            excluding the target file itself (intra-file refs aren't impact).
+            """
+            out: set[tuple[str, str]] = set()
+            for sym in symbols:
+                for edge in graph.callers_of(sym):
+                    if edge.file and not (
+                        edge.caller.source_name == source_name and edge.file == rel
+                    ):
+                        out.add((edge.caller.source_name, edge.file))
+            return out
+
+        file_symbols = named_symbols_in(source_name, rel) if source_name is not None else []
+        direct = call_site_files(file_symbols)
+
+        # Transitive: file-level BFS over the named symbols of each dependent file.
+        # Conservative — paths that run only through ``local`` symbols aren't followed.
+        all_deps = set(direct)
+        frontier = set(direct)
+        for _hop in range(max(depth - 1, 0)):
+            next_syms = [s for (src, f) in frontier for s in named_symbols_in(src, f)]
+            nxt = call_site_files(next_syms) - all_deps
+            if not nxt:
+                break
+            all_deps |= nxt
+            frontier = nxt
+        transitive = all_deps - direct
+
+        by_source: dict[str, int] = {}
+        for src, _f in all_deps:
+            by_source[src] = by_source.get(src, 0) + 1
+
         affected_docs = self.find_documents_by_source_files([file_path])
         tests = self.find_tests_for(file_path)
 
         return {
             'file': file_path,
-            'direct_dependents': len(dependents),
+            'scip_indexed': scip_indexed,
+            'direct_dependents': len(direct),
             'transitive_dependents': len(transitive),
-            'total_affected_files': len(all_affected),
+            'total_affected_files': len(all_deps),
+            'dependents_by_source': by_source,
             'affected_docs': len(affected_docs),
             'affected_tests': len(tests),
-            'radius_score': len(dependents) * 2 + len(transitive) + len(tests),
-            'top_dependents': sorted(f.split('/')[-1] for f in list(dependents)[:10]),
+            'radius_score': len(direct) * 2 + len(transitive) + len(tests),
+            'top_dependents': sorted({f.split('/')[-1] for _s, f in direct})[:10],
         }
 
     def coupling_report(self, source_path: Path) -> list[dict[str, Any]]:
