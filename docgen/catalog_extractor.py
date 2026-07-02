@@ -34,12 +34,12 @@ Subtype = Literal[
     'function', 'async_function', 'class', 'method', 'variable',
     'html_element',
     'js_function', 'js_class', 'js_export', 'js_branch',
-    'json_key', 'yaml_key', 'md_section',
+    'js_test_suite', 'js_test_case', 'json_key', 'yaml_key', 'md_section',
     'hocon_key',
     'scala_class', 'scala_object', 'scala_trait', 'scala_def',
     'scala_val', 'scala_var', 'scala_implicit', 'scala_type',
     'scala_package_object',
-    'java_class', 'java_interface', 'java_enum',
+    'scala_test_suite', 'scala_test_case', 'java_class', 'java_interface', 'java_enum',
     'java_method', 'java_constructor', 'java_field',
     'rst_section',
     # Dockerfile (Phase 2): one stage per FROM, plus ENV/ARG/EXPOSE instructions.
@@ -600,6 +600,66 @@ line_offset: int = 0) -> list[ElementInfo]:
             parent_qualified_name=parent_qn,                                                                                                                            
         ))      
     return out
+def _js_call_first_string_arg(call):
+    """First positional argument of a JS call iff it is a plain string literal,
+    quotes stripped; None when there are no args or the first argument is not a
+    string literal (a dynamically-named block)."""
+    for child in call.children():
+        if child.kind() == 'arguments':
+            for arg in child.children():
+                if arg.kind() not in ('(', ')', ','):
+                    return arg.text()[1:-1] if arg.kind() == 'string' else None
+    return None
+
+
+def _enclosing_describe_names(node):
+    """String-literal names of the describe() blocks enclosing ``node``,
+    outermost first."""
+    names = []
+    cur = node.parent()
+    while cur is not None:
+        if cur.kind() == 'call_expression' and _first_identifier(cur) == 'describe':
+            nm = _js_call_first_string_arg(cur)
+            if nm is not None:
+                names.append(nm)
+        cur = cur.parent()
+    names.reverse()
+    return names
+
+
+def _extract_jest_blocks(root, module_qn: str, file_s: str) -> list[ElementInfo]:
+    """Recognize Jest/Mocha BDD blocks (describe/it/test) as catalog elements.
+
+    describe -> js_test_suite, it/test -> js_test_case. Nesting is resolved by
+    walking the parent chain (ast-grep ``find_all`` is flat). Blocks whose first
+    argument is not a string literal are skipped (dynamically named).
+    """
+    out: list[ElementInfo] = []
+    for call in root.find_all(kind='call_expression'):
+        callee = _first_identifier(call)
+        if callee not in ('describe', 'it', 'test'):
+            continue
+        name = _js_call_first_string_arg(call)
+        if name is None:
+            continue
+        chain = _enclosing_describe_names(call)
+        parent_qn = f'{module_qn}::' + ' > '.join(chain) if chain else module_qn
+        qn = f'{module_qn}::' + ' > '.join([*chain, name])
+        r = call.range()
+        out.append(ElementInfo(
+            language='javascript',
+            subtype='js_test_suite' if callee == 'describe' else 'js_test_case',
+            file=file_s,
+            qualified_name=qn,
+            signature=_signature(call.text()),
+            line_start=r.start.line + 1,
+            line_end=r.end.line + 1,
+            col_start=r.start.column,
+            col_end=r.end.column,
+            body_sha=_sha(call.text()),
+            parent_qualified_name=parent_qn,
+        ))
+    return out
 def _extract_javascript(src: str, path: Path, source_root: Path) -> list[ElementInfo]:
     module_qn = _js_module_qn(path, source_root)                                                                                                                                     
     root = SgRoot(src, 'javascript').root()
@@ -653,6 +713,7 @@ def _extract_javascript(src: str, path: Path, source_root: Path) -> list[Element
                 body_sha=_sha(lex.text()),                                                                                                                                           
             ))
                                                                                                                                                                                      
+    out.extend(_extract_jest_blocks(root, module_qn, file_s))
     return out  
 def _js_elements_from_src(                                                                                                                                              
     src: str,                                                                                                                                                           

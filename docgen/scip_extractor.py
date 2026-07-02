@@ -462,6 +462,10 @@ def extract(
             body_sha=body_sha,
             documentation=documentation,
         ))
+    if language == 'scala':
+        from docgen.scip_scala_test_extractor import extract_scalatest_cases
+        out.extend(extract_scalatest_cases(
+            doc, file=file, source_text='\n'.join(src_lines)))
 
     return out
 
