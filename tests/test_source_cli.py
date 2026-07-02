@@ -59,6 +59,9 @@ def _isolated_config(monkeypatch, tmp_path):
     import config as config_module
 
     monkeypatch.setattr(config_module, '_global_config', None, raising=False)
+    # Isolate the package-root config-search rung so these tests never fall
+    # through to — and mutate — the developer's real repo ariadne.yaml.
+    monkeypatch.setattr(config_module, '_PACKAGE_ROOT', tmp_path / '_no_pkg_config')
     return cfg_path
 
 
@@ -174,3 +177,41 @@ def test_source_group_evolves_through_contract(monkeypatch, tmp_path):
     assert cfg.source_skip_dependency_detection('epsilon') is True
     # Omitting the flag leaves the default (off), not None-clobbered.
     assert cfg.get_source_config('delta').skip_dependency_detection is False
+
+
+def test_source_add_honors_explicit_config_over_package_fallthrough(monkeypatch, tmp_path):
+    """`source add` with an explicit $ARIADNE_CONFIG must bootstrap THERE,
+    never fall through to a package-root ariadne.yaml that merely exists —
+    which would silently mutate an unrelated config (the bug that polluted
+    the developer's real ariadne.yaml)."""
+    import config as config_module
+
+    # A package-root config exists (stands in for the shipped repo config).
+    pkg_root = tmp_path / 'pkg'
+    pkg_root.mkdir()
+    package_cfg = pkg_root / 'ariadne.yaml'
+    package_cfg.write_text('sources:\n  preexisting:\n    path: /elsewhere\n')
+    monkeypatch.setattr(config_module, '_PACKAGE_ROOT', pkg_root)
+
+    # The project the user is actually in: empty cwd + explicit ARIADNE_CONFIG
+    # pointing at a path that does not exist yet.
+    proj = tmp_path / 'proj'
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+    target = proj / 'ariadne.yaml'
+    monkeypatch.setenv('ARIADNE_CONFIG', str(target))
+    monkeypatch.setattr('sys.stdin.isatty', lambda: False)
+    monkeypatch.setattr(config_module, '_global_config', None, raising=False)
+
+    src = tmp_path / 'src'
+    src.mkdir()
+    assert not target.exists()
+    rc = _run(['source', 'add', 'mine', '--path', str(src)])
+    assert rc == 0
+
+    # Bootstrapped at the explicit $ARIADNE_CONFIG, not the package config.
+    assert target.exists(), 'source add must bootstrap at $ARIADNE_CONFIG'
+    assert _fresh_config(target).get_source_config('mine') is not None
+    # The unrelated package config is left exactly as it was.
+    assert 'mine' not in package_cfg.read_text()
+    assert _fresh_config(package_cfg).get_source_config('preexisting') is not None

@@ -314,6 +314,7 @@ class TestCmdSyncAutoEnablesFlag:
         args = argparse.Namespace(
             source='scalaproject', status=False, force=False, dry_run=False,
             skip_generate=False, no_export=True, vs_main=False, branch=False,
+            concurrency=1,
             db=None,
         )
         await cmd_sync(args)
@@ -424,6 +425,7 @@ class TestNonScipSourcesAlsoGetCatalogPath:
         args = argparse.Namespace(
             source='plainpy', status=False, force=False, dry_run=False,
             skip_generate=False, no_export=True, vs_main=False, branch=False,
+            concurrency=1,
             db=None,
         )
         await cmd_sync(args)

@@ -48,6 +48,13 @@ def register_commands(subparsers):
     mcp_parser = subparsers.add_parser('mcp', help='Start the MCP server (stdio transport)')
     mcp_parser.add_argument('--directory', help='Ariadne project directory (default: directory containing ariadne.yaml)')
 
+    serve_parser = subparsers.add_parser(
+        'serve', help='Start the web onboarding UI (connects to the MCP server)')
+    serve_parser.add_argument(
+        '--host', default='127.0.0.1', help='Bind host (default: 127.0.0.1)')
+    serve_parser.add_argument(
+        '--port', type=int, default=8765, help='Bind port (default: 8765)')
+
     # sync-claude-md (internal command for PostToolUse hook)
     sync_md_parser = subparsers.add_parser('sync-claude-md', help='Sync edited CLAUDE.md to Ariadne')
     sync_md_parser.add_argument('file', help='Path to the edited CLAUDE.md file')
@@ -504,6 +511,28 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Start the web onboarding UI.
+
+    Runs an aiohttp server that connects to the Ariadne MCP server (spawned
+    as a stdio subprocess) and serves the single-page onboarding wizard.
+    Open the printed URL to add a source, discover its languages, preview
+    cost, and generate docs — all driven over MCP.
+    """
+    from web.server import serve
+
+    console.print(
+        f'[green]Ariadne onboarding UI →[/green] '
+        f'http://{args.host}:{args.port}',
+    )
+    serve(
+        host=args.host,
+        port=args.port,
+        config_path=os.environ.get('ARIADNE_CONFIG'),
+    )
+    return 0
+
+
 def cmd_sync_claude_md(args: argparse.Namespace) -> int:
     """Sync an edited CLAUDE.md back to Ariadne's authoritative location.
 
@@ -604,15 +633,26 @@ def _resolve_writable_config():
     refuse to write. Bootstrap a minimal file at ``$ARIADNE_CONFIG`` (or
     ``./ariadne.yaml``) so `source add` works as a project's very first
     Ariadne command.
+
+    An explicit ``$ARIADNE_CONFIG`` is authoritative for writes: when it is
+    set but the file doesn't exist yet, bootstrap THERE rather than adopt
+    whatever ``config_search_paths`` fell through to (e.g. the package-root
+    ariadne.yaml that ships for the ``ariadne mcp`` / ``uv run --directory``
+    case). Otherwise `source add` would silently mutate an unrelated config.
     """
     import config as config_module
     from config import Config, get_config
 
+    env = os.environ.get('ARIADNE_CONFIG')
     cfg = get_config()
-    if cfg.config_path is not None:
+    # Reuse an already-resolved config UNLESS an explicit $ARIADNE_CONFIG
+    # points elsewhere (set-but-missing falls through to a fallback rung).
+    if cfg.config_path is not None and (
+        env is None
+        or Path(env).resolve() == Path(cfg.config_path).resolve()
+    ):
         return cfg
 
-    env = os.environ.get('ARIADNE_CONFIG')
     cfg_file = Path(env) if env else Path.cwd() / 'ariadne.yaml'
     if not cfg_file.exists():
         cfg_file.parent.mkdir(parents=True, exist_ok=True)
@@ -775,6 +815,7 @@ HANDLERS = {
     'init': lambda args: cmd_init(args),
     'config': lambda args: cmd_config(args),
     'mcp': lambda args: cmd_mcp(args),
+    'serve': lambda args: cmd_serve(args),
     'sync-claude-md': lambda args: cmd_sync_claude_md(args),
     'edit-instructions': lambda args: cmd_edit_instructions(args),
     'source': lambda args: cmd_source(args),
