@@ -41,6 +41,16 @@ def _is_dotenv(path: Path) -> bool:
     return path.name == '.env' or path.name.startswith('.env.')
 
 
+def _is_dockerfile(path: Path) -> bool:
+    """``Dockerfile`` / ``Dockerfile.<suffix>`` / ``*.dockerfile`` -- matched
+    by NAME, since a Dockerfile carries no extension."""
+    return (
+        path.name == 'Dockerfile'
+        or path.name.startswith('Dockerfile.')
+        or path.suffix.lower() == '.dockerfile'
+    )
+
+
 def _is_tree(node: object) -> bool:
     """Lark Tree vs Token. Trees have ``data`` and ``children``."""
     return hasattr(node, 'data') and hasattr(node, 'children')
@@ -340,11 +350,18 @@ def _walk_config_files(source_root: Path):
             suffix in _HOCON_SUFFIXES
             or suffix in _YAML_SUFFIXES
             or _is_dotenv(path)
+            or _is_dockerfile(path)
         ):
             yield path
 
 
 def _extract_for_path(path: Path) -> list[tuple[str, str, int]]:
+    if _is_dockerfile(path):
+        from docgen.scip_config_scanners import scan_dockerfile
+        return [
+            (cv.key, cv.value, cv.line_start)
+            for cv in scan_dockerfile(path)
+        ]
     suffix = path.suffix.lower()
     try:
         text = path.read_text(encoding='utf-8', errors='replace')

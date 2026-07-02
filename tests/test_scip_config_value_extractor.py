@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+from docgen.scip_config_value_extractor import ingest_config_values
+
 
 @pytest.fixture
 def conn():
@@ -479,3 +481,52 @@ class TestReIngest:
         assert my.get('mine') == 'v'
         # Other source untouched
         assert other.get('preserved') == 'kept'
+
+
+# ---------------------------------------------------------------------------
+# Dockerfile (ENV / ARG) — must flow through the SAME index path
+# ---------------------------------------------------------------------------
+
+
+class TestDockerfile:
+    """Dockerfile ``ENV``/``ARG`` must land in ``config_values`` via the SAME
+    index path (``ingest_config_values``) as HOCON/YAML/dotenv — so the config
+    bridge can resolve a Dockerfile env to its code read sites. The scanner
+    (``scip_config_scanners.scan_dockerfile``) already worked but was wired
+    only into the test-only aggregator, never this index path."""
+
+    def test_dockerfile_env_arg_ingested_via_index_path(
+        self, tmp_path: Path, conn: sqlite3.Connection,
+    ) -> None:
+        (tmp_path / 'Dockerfile').write_text(
+            'ARG BASE_IMAGE=python:3.12-slim\n'   # ARG default
+            'FROM ${BASE_IMAGE}\n'                # directive, not a key
+            'ENV MODEL_PATH=/models DEBUG=1\n'    # multi-var ENV
+            'ENV LEGACY value here\n'             # legacy space form
+            'RUN echo not-a-key\n'                # directive, not a key
+        )
+        (tmp_path / 'Dockerfile.prod').write_text('ENV PROD_KEY=prod\n')
+        (tmp_path / 'svc.dockerfile').write_text('ARG SVC_ARG=svc\n')
+        (tmp_path / 'Makefile').write_text('NOT_A_KEY=nope\n')
+
+        ingest_config_values(
+            source_name='myapi', source_root=tmp_path, conn=conn,
+        )
+        rows = _query_config_values(conn, 'myapi')
+        kv = _kv(rows)
+
+        # ENV + ARG captured (multi-var, legacy space form, ARG default)
+        assert kv.get('BASE_IMAGE') == 'python:3.12-slim'
+        assert kv.get('MODEL_PATH') == '/models'
+        assert kv.get('DEBUG') == '1'
+        assert kv.get('LEGACY') == 'value here'
+        # Variant filenames recognized as Dockerfiles
+        assert kv.get('PROD_KEY') == 'prod'
+        assert kv.get('SVC_ARG') == 'svc'
+        # Negatives: FROM/RUN are directives, not keys; a Makefile sharing the
+        # KEY=value shape is NOT scanned as a Dockerfile
+        assert 'FROM' not in kv
+        assert 'RUN' not in kv
+        assert 'NOT_A_KEY' not in kv
+        # Attribution points back at the Dockerfile
+        assert any(r['file'].endswith('Dockerfile') for r in rows)

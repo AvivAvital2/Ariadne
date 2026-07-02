@@ -16,6 +16,15 @@ if TYPE_CHECKING:
     from library import Library
                 
 
+
+# Catalog subtypes that denote a config KEY definition (key=value), across every
+# config format the catalog knows -- HOCON, YAML, JSON, and Dockerfile ENV/ARG
+# (dockerfile_stage / dockerfile_expose are not config keys).
+_CONFIG_KEY_SUBTYPES = frozenset({
+    'hocon_key', 'yaml_key', 'json_key', 'dockerfile_env', 'dockerfile_arg',
+})
+
+
 def lookup_symbol(
     library: "Library",
     source_name: str,                                                                                                                                                                
@@ -205,7 +214,7 @@ def config_usage(
         md = d.metadata or {}
         if md.get('source_name') != source_name or md.get('kind') != CATALOG_KIND_ELEMENT:
             continue
-        if md.get('subtype') != 'hocon_key':
+        if md.get('subtype') not in _CONFIG_KEY_SUBTYPES:
             continue
         qn = md.get('qualified_name') or ''
         if qn == key or qn.endswith('.' + key):

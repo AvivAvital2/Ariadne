@@ -15,6 +15,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from docgen.catalog_lookup import config_usage
+
 
 @pytest.fixture
 def library(tmp_path):
@@ -208,3 +210,32 @@ def test_mixed_per_site_confidence(library) -> None:
     by_file = {s['file']: s['confidence'] for s in out['read_sites']}
     assert by_file['a.scala'] == 'config-resolved'
     assert by_file['b.rb'] == 'string-match'
+
+
+def test_config_usage_surfaces_non_hocon_config_keys(library) -> None:
+    """config_usage must bridge config keys from EVERY config format the
+    catalog knows — not just HOCON. A Dockerfile ``ENV`` and a YAML key both
+    count as definitions; a Dockerfile *stage* (same leaf, but not a config
+    key) does not. Before the fix the hocon_key-only filter hid all of these."""
+    def _el(qn, signature, subtype, file, line):
+        library.add_document(
+            content_type='catalog', title=qn, content=signature,
+            source_files=[file], embedding=np.zeros(8, dtype=np.float32),
+            metadata={
+                'kind': 'element', 'source_name': 'src1', 'subtype': subtype,
+                'qualified_name': qn, 'signature': signature,
+                'location': {'line_start': line},
+            },
+            doc_id=f'{subtype}::{qn}',
+        )
+
+    _el('stage0.MODEL_PATH', 'ENV MODEL_PATH=/models', 'dockerfile_env', 'Dockerfile', 7)
+    _el('deploy.cfg.MODEL_PATH', 'MODEL_PATH: /m', 'yaml_key', 'deploy.yaml', 3)
+    # Same leaf, but a build stage — NOT a config key; must be excluded.
+    _el('build.MODEL_PATH', 'FROM img AS MODEL_PATH', 'dockerfile_stage', 'Dockerfile', 1)
+
+    out = config_usage(library, 'src1', 'MODEL_PATH')
+    assert out['found'] is True
+    defs = {d['default_value'] for d in out['definitions']}
+    # The ENV and the YAML key surface; the stage does not.
+    assert defs == {'ENV MODEL_PATH=/models', 'MODEL_PATH: /m'}
