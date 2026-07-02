@@ -7,6 +7,8 @@ from pathlib import Path
 import yaml
 from attrs import field, frozen
 
+from slack_bridge.budget import TurnBudget
+
 # The ariadne repo root, derived from THIS package's location rather than a
 # hardcoded name. ``slack_bridge/`` is a subpackage of the repo, so its parent is
 # the repo root — which means the directory can be renamed without breaking the
@@ -33,8 +35,7 @@ class BridgeConfig:
     model: str | None = None
     max_size: int = 50
     idle_ttl_seconds: float = 480.0
-    turn_timeout_seconds: float = 240.0
-    soft_timeout_seconds: float = 120.0
+    turn_budget: TurnBudget = field(factory=TurnBudget)
     enable_feedback: bool = False
     source_descriptions: Mapping[str, str] = field(factory=dict)
     source_aliases: Mapping[str, Sequence[str]] = field(factory=dict)
@@ -95,8 +96,7 @@ class BridgeConfig:
             model=data.get('model') or os.environ.get('ARIADNE_SLACK_MODEL'),
             max_size=int(pool.get('max_size', 50)),
             idle_ttl_seconds=float(pool.get('idle_ttl_seconds', 480.0)),
-            turn_timeout_seconds=float(pool.get('turn_timeout_seconds', 240.0)),
-            soft_timeout_seconds=float(pool.get('soft_timeout_seconds', 120.0)),
+            turn_budget=TurnBudget.from_pool(pool),
             enable_feedback=bool(data.get('enable_feedback', False)),
             source_descriptions=data.get('source_descriptions') or {},
             source_aliases=data.get('source_aliases') or {},

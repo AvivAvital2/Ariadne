@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from slack_bridge.budget import TurnBudget
 from slack_bridge.config import BridgeConfig
 from tests._slack_bridge_helpers import bridge_config
 
@@ -48,7 +51,8 @@ def test_from_env_loads_tokens_from_env_and_rest_from_yaml(tmp_path, monkeypatch
     # Operational config comes from the yaml file.
     assert cfg.allowed_users == frozenset({'U1', 'U2'})
     assert cfg.allowed_channels == frozenset({'C1'})
-    assert (cfg.max_size, cfg.idle_ttl_seconds, cfg.turn_timeout_seconds, cfg.soft_timeout_seconds) == (7, 60.0, 30.0, 15.0)
+    assert (cfg.max_size, cfg.idle_ttl_seconds) == (7, 60.0)
+    assert cfg.turn_budget == TurnBudget(soft_seconds=15.0, total_seconds=30.0)   # parsed by the ONE policy home
     assert cfg.enable_feedback is True
     assert cfg.source_descriptions['projecta'] == 'First project'
     assert cfg.source_aliases['projecta'] == ['proja']
@@ -121,3 +125,31 @@ def test_from_env_parses_allowed_orgs(tmp_path, monkeypatch):
     empty.write_text('allowed_users: []\n')
     monkeypatch.setenv('ARIADNE_SLACK_CONFIG', str(empty))
     assert BridgeConfig.from_env().allowed_orgs == frozenset()
+
+
+def test_turn_budget_is_the_single_validated_home_of_the_turn_time_policy(tmp_path, monkeypatch):
+    """The whole slow-turn time policy lives on TurnBudget: the defaults, the
+    yaml parsing, the derived extension window, and the invariant that makes a
+    zero-width window unrepresentable (the production bug: a deployed yaml
+    pinned turn_timeout_seconds at the 120s soft default, so the bot posted the
+    'still working' notice and gave up in the same instant)."""
+    # Defaults live on the class — the only place they are written.
+    assert TurnBudget() == TurnBudget(soft_seconds=120.0, total_seconds=240.0)
+    # The extension window is derived, never recomputed at call sites.
+    assert TurnBudget(soft_seconds=15.0, total_seconds=40.0).extension_seconds == 25.0
+    # from_pool parses the yaml keys; absent keys keep the defaults.
+    assert TurnBudget.from_pool({}) == TurnBudget()
+    assert TurnBudget.from_pool({'turn_timeout_seconds': 300}) == TurnBudget(soft_seconds=120.0, total_seconds=300.0)
+    assert TurnBudget.from_pool({'soft_timeout_seconds': 15, 'turn_timeout_seconds': 30}) == TurnBudget(soft_seconds=15.0, total_seconds=30.0)
+    # THE regression: a cap at (or under) the soft point zeroes the extension
+    # window — now rejected loudly, naming both yaml keys.
+    with pytest.raises(ValueError, match='turn_timeout_seconds.*soft_timeout_seconds'):
+        TurnBudget(soft_seconds=120.0, total_seconds=120.0)
+    with pytest.raises(ValueError, match='soft_timeout_seconds'):
+        TurnBudget(soft_seconds=0.0, total_seconds=240.0)
+    # And it bites at startup, not mid-turn: the degenerate yaml refuses to load.
+    bad = tmp_path / 'slack_bridge.yaml'
+    bad.write_text('pool: {turn_timeout_seconds: 120}\n')   # soft stays at its 120 default
+    monkeypatch.setenv('ARIADNE_SLACK_CONFIG', str(bad))
+    with pytest.raises(ValueError, match='turn_timeout_seconds'):
+        BridgeConfig.from_env()

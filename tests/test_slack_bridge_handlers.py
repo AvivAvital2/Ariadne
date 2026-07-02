@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import types
 
 import pytest
 
 import slack_usage
 import testimonials
+from slack_bridge.budget import TurnBudget, _SLOW_AFTER, _SLOW_BEFORE, slow_notice
 from slack_bridge.diagram import dot_available
 from slack_bridge.handlers import (
     _channel_is_shared,
@@ -721,7 +723,7 @@ async def test_slow_turn_posts_still_working_notice_then_answers_same_run():
     reply = types.SimpleNamespace(text='the answer', is_error=False, session_id='S')
     pool = _FakePool(_SlowSession(reply, delay=0.3), contains=True)
     slack = _FakeSlack()
-    cfg = bridge_config(channels=frozenset({'C1'}), soft_timeout_seconds=0.05, turn_timeout_seconds=5.0)
+    cfg = bridge_config(channels=frozenset({'C1'}), turn_budget=TurnBudget(soft_seconds=0.05, total_seconds=5.0))
     event = {'user': 'U1', 'channel': 'C1', 'ts': 'T1', 'text': '<@UBOT> how does it work?'}
 
     await handle_event(cfg=cfg, pool=pool, slack=slack, bot_user_id='UBOT', ack=_noop_ack, event=event)
@@ -729,8 +731,26 @@ async def test_slow_turn_posts_still_working_notice_then_answers_same_run():
     assert pool._session.asked == ['how does it work?']        # ran once — same turn, not restarted
     notices = [t for _, _, t in slack.updated if t.startswith('⏳')]
     assert len(notices) == 1                                   # one 'still working' notice
-    assert ' — ' in notices[0]                                 # composed shape, not a fixed string
+    before, sep, after = notices[0].removeprefix('⏳ ').removesuffix('.').partition(' — ')
+    assert sep and before in _SLOW_BEFORE and after in _SLOW_AFTER   # a real pool draw
     assert slack.updated[-1][2] == 'the answer'                # real answer still landed
+
+
+def test_slow_notice_is_randomized_from_the_phrase_pools():
+    """The 'still working' notice is composed fresh on every draw from the two
+    phrase pools: each draw is well-formed (⏳ before — after.), both halves come
+    from their pools, and across draws both halves actually vary — a randomized
+    line, not one canned string."""
+    befores, afters = set(), set()
+    for _ in range(60):
+        notice = slow_notice()
+        match = re.fullmatch(r'⏳ (?P<before>.+) — (?P<after>.+)\.', notice)
+        assert match, f'malformed notice: {notice!r}'
+        assert match['before'] in _SLOW_BEFORE
+        assert match['after'] in _SLOW_AFTER
+        befores.add(match['before'])
+        afters.add(match['after'])
+    assert len(befores) > 1 and len(afters) > 1   # randomized on both halves
 
 
 async def test_turn_exceeding_hard_cap_gives_up_with_a_distinct_budget_message(caplog):
@@ -741,7 +761,7 @@ async def test_turn_exceeding_hard_cap_gives_up_with_a_distinct_budget_message(c
     reply = types.SimpleNamespace(text='late', is_error=False, session_id='S')
     pool = _FakePool(_SlowSession(reply, delay=5.0), contains=True)
     slack = _FakeSlack()
-    cfg = bridge_config(channels=frozenset({'C1'}), soft_timeout_seconds=0.05, turn_timeout_seconds=0.3)
+    cfg = bridge_config(channels=frozenset({'C1'}), turn_budget=TurnBudget(soft_seconds=0.05, total_seconds=0.3))
     event = {'user': 'U1', 'channel': 'C1', 'ts': 'T1', 'text': '<@UBOT> big question'}
 
     with caplog.at_level(logging.WARNING):
@@ -777,7 +797,7 @@ async def test_fast_internal_timeout_is_not_mistaken_for_soft_deadline(caplog):
     slack = _FakeSlack()
     # Generous deadlines: if these were ever hit, the test would be slow. It isn't —
     # the turn fails instantly, proving the budget was never the gate.
-    cfg = bridge_config(channels=frozenset({'C1'}), soft_timeout_seconds=30.0, turn_timeout_seconds=60.0)
+    cfg = bridge_config(channels=frozenset({'C1'}), turn_budget=TurnBudget(soft_seconds=30.0, total_seconds=60.0))
     event = {'user': 'U1', 'channel': 'C1', 'ts': 'T1', 'text': '<@UBOT> q'}
 
     with caplog.at_level(logging.ERROR):

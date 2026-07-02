@@ -20,7 +20,10 @@ allowed_orgs: []         # hard org boundary, independent of allow_all: list you
 pool:
   max_size: 50           # max concurrent warm sessions (each holds an Ariadne MCP subprocess)
   idle_ttl_seconds: 480  # evict a thread's session after this much idle time
-  turn_timeout_seconds: 240  # hard cap per turn; a "still working" notice posts at the built-in 120s soft point, then the same turn keeps running to here
+  soft_timeout_seconds: 120  # when the "still working" notice posts (the turn keeps running)
+  turn_timeout_seconds: 240  # hard cap per turn; the SAME turn runs from the notice to here.
+                             # Must exceed soft_timeout_seconds — the gap is the post-notice window,
+                             # so if you raise soft, raise this too. The bridge refuses to start otherwise.
 
 enable_feedback: false   # opt-in: allow the bot to write ariadne_log_hit/miss (usage_events)
 
