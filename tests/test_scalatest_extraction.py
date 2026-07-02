@@ -10,7 +10,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from docgen.scip_extractor import ScipIndex, _ScipDoc, _ScipOccurrence, extract
+from docgen.scip_extractor import (
+    ScipIndex,
+    _ScipDoc,
+    _ScipOccurrence,
+    _ScipSymbol,
+    extract,
+)
 
 # Real ScalaTest `test` method symbols (FunSuite / AsyncFunSuite) that scip-java
 # resolves a `test(...)` call to — the recognizer must match these.
@@ -30,16 +36,20 @@ _BASECLASS_SYM = (
 )
 _SUITE_SYM = 'scip-java semanticdb maven . . . com/example/WidgetSuite#'
 _ASYNC_SUITE_SYM = 'scip-java semanticdb maven . . . com/example/AsyncWidgetSuite#'
+# A non-test class in the same file — its element must stay scala_class and
+# never be relabeled to a test suite (slice-2 selectivity).
+_HELPER_SYM = 'scip-java semanticdb maven . . . com/example/Helpers#'
 
 
 def _make_index(src_file: Path, source_root: Path,
-                occurrences: list[_ScipOccurrence]) -> ScipIndex:
+                occurrences: list[_ScipOccurrence],
+                symbols: tuple[_ScipSymbol, ...] = ()) -> ScipIndex:
     rel = src_file.relative_to(source_root)
     return ScipIndex(
         documents=(_ScipDoc(
             relative_path=str(rel),
             occurrences=tuple(occurrences),
-            symbols=(),
+            symbols=tuple(symbols),
         ),),
         source_root=source_root,
     )
@@ -83,8 +93,10 @@ def _occ_at(text: str, marker: str, symbol: str, *, nth: int = 0) -> _ScipOccurr
 
 def test_funsuite_and_asyncfunsuite_test_blocks_extracted(tmp_path):
     """`test("...")` calls in FunSuite and AsyncFunSuite become located
-    scala_test_case elements parented to their suite; a dynamically-named
-    `test(x)` and a non-test base-class reference are not."""
+    scala_test_case elements parented to their suite, and each enclosing suite
+    class is relabeled from scala_class to scala_test_suite. A dynamically-named
+    `test(x)`, a non-test base-class reference, and a plain helper class are
+    none of those."""
     src = (
         'class WidgetSuite extends AnyFunSuite {\n'        # 1
         '  test("renders") {}\n'                            # 2: case
@@ -93,6 +105,9 @@ def test_funsuite_and_asyncfunsuite_test_blocks_extracted(tmp_path):
         'class AsyncWidgetSuite extends AsyncFunSuite {\n'  # 5
         '  test("updates") {}\n'                            # 6: case (async parity)
         '}\n'                                               # 7
+        'class Helpers {\n'                                 # 8: non-test class
+        '  def make(): Int = 0\n'                           # 9
+        '}\n'                                               # 10
     )
     f = tmp_path / 'WidgetSuite.scala'
     f.write_text(src, encoding='utf-8')
@@ -100,12 +115,21 @@ def test_funsuite_and_asyncfunsuite_test_blocks_extracted(tmp_path):
     occs = [
         _def_occ(_SUITE_SYM, 1, 4),
         _def_occ(_ASYNC_SUITE_SYM, 5, 7),
+        _def_occ(_HELPER_SYM, 8, 10),
         _occ_at(src, 'test', _FUNSUITE_TEST_SYM, nth=0),   # renders
         _occ_at(src, 'test', _FUNSUITE_TEST_SYM, nth=1),   # dynamicName
         _occ_at(src, 'test', _ASYNC_TEST_SYM, nth=2),      # updates
         _occ_at(src, 'AnyFunSuite', _BASECLASS_SYM, nth=0),  # non-test ref
     ]
-    elements = extract(f, source_root=tmp_path, index=_make_index(f, tmp_path, occs))
+    # Class symbols so the definition loop emits a scala_class per class —
+    # the two suite ones are what slice 2 relabels.
+    syms = (
+        _ScipSymbol(symbol=_SUITE_SYM, kind='Class'),
+        _ScipSymbol(symbol=_ASYNC_SUITE_SYM, kind='Class'),
+        _ScipSymbol(symbol=_HELPER_SYM, kind='Class'),
+    )
+    elements = extract(
+        f, source_root=tmp_path, index=_make_index(f, tmp_path, occs, syms))
 
     cases = {e.qualified_name: e for e in elements if e.subtype == 'scala_test_case'}
     leaf_names = {qn.split(' > ')[-1] for qn in cases}
@@ -119,6 +143,24 @@ def test_funsuite_and_asyncfunsuite_test_blocks_extracted(tmp_path):
     updates = next(c for qn, c in cases.items() if qn.endswith('updates'))
     assert updates.line_start == 6
     assert 'AsyncWidgetSuite' in (updates.parent_qualified_name or '')
+
+    # Slice 2: each enclosing suite surfaces as a scala_test_suite, relabeled
+    # from its scala_class definition — exactly the suites that own tests.
+    suites = {e.qualified_name: e for e in elements
+              if e.subtype == 'scala_test_suite'}
+    assert set(suites) == {renders.parent_qualified_name,
+                           updates.parent_qualified_name}
+    # Relabel, not duplicate: no scala_class lingers for a suite with tests.
+    assert not [e for e in elements
+                if e.subtype == 'scala_class' and e.qualified_name in suites]
+    # Derived from the real class def — keeps the class's range + signature,
+    # not a fabricated stub.
+    widget_suite = suites[renders.parent_qualified_name]
+    assert widget_suite.line_start == 1
+    assert 'WidgetSuite' in widget_suite.signature
+    # Selectivity: a non-test class in the same file stays scala_class.
+    helpers = [e for e in elements if e.qualified_name.endswith('Helpers')]
+    assert len(helpers) == 1 and helpers[0].subtype == 'scala_class'
 
 
 def test_scalatest_degrades_gracefully_on_partial_scip(tmp_path):
@@ -146,6 +188,9 @@ def test_scalatest_degrades_gracefully_on_partial_scip(tmp_path):
     assert len(cases) == 1
     assert cases[0].qualified_name == 'alone'          # no suite prefix
     assert cases[0].parent_qualified_name is None
+    # No class symbol in the index → the suite is not promoted; the case
+    # surfaces parentless rather than us fabricating a scala_test_suite stub.
+    assert not [e for e in elements if e.subtype == 'scala_test_suite']
 
 
 def test_non_test_scala_file_yields_no_test_cases(tmp_path):
@@ -161,3 +206,4 @@ def test_non_test_scala_file_yields_no_test_cases(tmp_path):
     occs = [_def_occ(_SUITE_SYM, 1, 3)]  # a definition, but no `test` reference
     elements = extract(f, source_root=tmp_path, index=_make_index(f, tmp_path, occs))
     assert not [e for e in elements if e.subtype == 'scala_test_case']
+    assert not [e for e in elements if e.subtype == 'scala_test_suite']

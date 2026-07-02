@@ -463,9 +463,14 @@ def extract(
             documentation=documentation,
         ))
     if language == 'scala':
-        from docgen.scip_scala_test_extractor import extract_scalatest_cases
-        out.extend(extract_scalatest_cases(
-            doc, file=file, source_text='\n'.join(src_lines)))
+        from docgen.scip_scala_test_extractor import (
+            extract_scalatest_cases,
+            relabel_suites,
+        )
+        cases = extract_scalatest_cases(
+            doc, file=file, source_text='\n'.join(src_lines))
+        out = relabel_suites(out, cases)
+        out.extend(cases)
 
     return out
 

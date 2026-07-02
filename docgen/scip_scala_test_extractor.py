@@ -23,6 +23,7 @@ import hashlib
 from pathlib import Path
 
 from ast_grep_py import SgRoot
+from attrs import evolve
 
 from docgen.catalog_extractor import ElementInfo
 from docgen.scip_extractor import _ScipDoc, _qualified_name_from_symbol
@@ -117,4 +118,30 @@ def extract_scalatest_cases(
     return out
 
 
-__all__ = ['extract_scalatest_cases']
+def relabel_suites(
+    elements: list[ElementInfo], cases: list[ElementInfo],
+) -> list[ElementInfo]:
+    """Relabel each ``scala_class`` that encloses a ScalaTest case to
+    ``scala_test_suite``.
+
+    A test case's enclosing suite is its ``parent_qualified_name``; that
+    class is already emitted as ``scala_class`` by the SCIP definition
+    loop, so we promote that element in place — keeping its real
+    range/signature/doc — instead of fabricating a duplicate. A suite
+    whose class definition is absent from the index is simply left alone;
+    no stub is invented."""
+    suite_qns = {
+        c.parent_qualified_name for c in cases if c.parent_qualified_name
+    }
+    if not suite_qns:
+        return elements
+    relabeled: list[ElementInfo] = []
+    for e in elements:
+        if e.subtype == 'scala_class' and e.qualified_name in suite_qns:
+            relabeled.append(evolve(e, subtype='scala_test_suite'))
+        else:
+            relabeled.append(e)
+    return relabeled
+
+
+__all__ = ['extract_scalatest_cases', 'relabel_suites']
