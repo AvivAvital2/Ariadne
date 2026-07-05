@@ -49,6 +49,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     # usage
     usage_parser = subparsers.add_parser('usage', help='Show usage statistics')
     usage_parser.add_argument('--days', '-d', type=int, default=30,
+                              nargs='?', const=30,
                               help='Number of days to include (default: 30)')
     usage_parser.add_argument('--tool', '-t', default=None,
                               help='Filter by tool name')
