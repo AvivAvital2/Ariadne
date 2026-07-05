@@ -105,8 +105,10 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
 
     # export
     export_parser = subparsers.add_parser('export', help='Export to markdown')
-    export_parser.add_argument('output', nargs='?', help='Output directory (default: docs_base/source)')
+    export_parser.add_argument('output', nargs='?', help='Output path: zip file in archive mode, directory with --no-archive (default: docs_base/source)')
     export_parser.add_argument('--source', '-s', help='Source name for docs path (default from config)')
+    export_parser.add_argument('--archive', action=argparse.BooleanOptionalAction, default=True,
+                               help='Write a single zip artifact (default); --no-archive writes the docs tree')
 
     # import
     import_parser = subparsers.add_parser('import', help='Import from markdown')
@@ -519,7 +521,8 @@ def cmd_delete(args: argparse.Namespace) -> int:
 
 
 def cmd_export(args: argparse.Namespace) -> int:
-    """Export library to markdown files."""
+    """Export the library — a single zip artifact by default, or a markdown
+    tree with --no-archive."""
     from export import LibraryExporter
 
     cfg = get_config()
@@ -531,11 +534,11 @@ def cmd_export(args: argparse.Namespace) -> int:
         exporter = LibraryExporter(library)
 
         if args.output:
-            output_dir = Path(args.output)
+            output_path = Path(args.output)
         elif source:
-            output_dir = cfg.resolve_docs_path(source)
+            output_path = cfg.resolve_docs_path(source)
         else:
-            output_dir = Path(DEFAULT_EXPORT_PATH)
+            output_path = Path(DEFAULT_EXPORT_PATH)
 
         # Get source path for CLAUDE.md generation
         source_path = cfg.resolve_source(source) if source else None
@@ -545,23 +548,47 @@ def cmd_export(args: argparse.Namespace) -> int:
         if source:
             dependencies = cfg.get_effective_dependencies(source)
 
+        if args.archive:
+            archive_path = (
+                output_path if output_path.suffix == '.zip'
+                else output_path.with_suffix('.zip')
+            )
+            try:
+                path = exporter.export_archive(
+                    archive_path,
+                    source_name=source,
+                    source_path=source_path,
+                    dependencies=dependencies,
+                )
+                console.print(f'[green]Exported archive {path}[/green]')
+            except FileExistsError as exc:
+                console.print(f'[red]{exc}[/red]')
+                return 1
+            return 0
+
         paths = exporter.export_all(
-            output_dir=output_dir,
+            output_dir=output_path,
             source_name=source,
             source_path=source_path,
             dependencies=dependencies,
         )
 
-        console.print(f'[green]Exported {len(paths)} documents to {output_dir}[/green]')
+        console.print(f'[green]Exported {len(paths)} documents to {output_path}[/green]')
         return 0
 
     finally:
         library.close()
 
 
+def _resolve_default_import_path(docs_dir: Path) -> Path:
+    """Default import input: prefer the sibling zip artifact when present."""
+    zip_path = docs_dir.with_suffix('.zip')
+    return zip_path if zip_path.exists() else docs_dir
+
+
 def cmd_import_(args: argparse.Namespace) -> int:
-    """Import documents from markdown files."""
-    from export import import_from_markdown
+    """Import documents from a markdown tree or a zip export artifact."""
+    from export import import_from_archive, import_from_markdown
 
     cfg = get_config()
     source = args.source or cfg.default_source
@@ -570,19 +597,26 @@ def cmd_import_(args: argparse.Namespace) -> int:
 
     try:
         if args.input:
-            input_dir = Path(args.input)
+            input_path = Path(args.input)
         elif source:
-            input_dir = cfg.resolve_docs_path(source)
+            input_path = _resolve_default_import_path(cfg.resolve_docs_path(source))
         else:
-            input_dir = Path(DEFAULT_EXPORT_PATH)
+            input_path = _resolve_default_import_path(Path(DEFAULT_EXPORT_PATH))
 
-        if not input_dir.exists():
-            console.print(f'[red]Directory not found: {input_dir}[/red]')
+        if not input_path.exists():
+            console.print(f'[red]Input not found: {input_path}[/red]')
             return 1
 
-        count = import_from_markdown(library, input_dir)
+        if input_path.is_file():
+            try:
+                count = import_from_archive(library, input_path)
+            except ValueError as exc:
+                console.print(f'[red]{exc}[/red]')
+                return 1
+        else:
+            count = import_from_markdown(library, input_path)
 
-        console.print(f'[green]Imported {count} documents from {input_dir}[/green]')
+        console.print(f'[green]Imported {count} documents from {input_path}[/green]')
 
         if not args.skip_embeddings:
             console.print('Regenerating embeddings...')

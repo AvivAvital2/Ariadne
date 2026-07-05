@@ -8,8 +8,10 @@ from __future__ import annotations
 __all__ = ['ExportConfig', 'export_library']
 
 import re
+import tempfile
+import zipfile
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from attrs import frozen
@@ -19,6 +21,9 @@ from schema import CATALOG_KIND_FILE_INDEX, ContentType, Document
 
 # Path to locate project's CLAUDE.md relative to source
 PROJECT_CLAUDE_MD_PATHS = ('CLAUDE.md', 'docs/CLAUDE.md')
+
+
+ARCHIVE_COMMENT = b'ariadne-export'
 
 
 @frozen
@@ -97,6 +102,18 @@ def _get_subdirectory(content_type: ContentType) -> str:
         'finding': 'findings',
     }
     return mapping.get(content_type, 'other')
+
+
+def _is_ariadne_archive(path: Path) -> bool:
+    """True when ``path`` is a zip stamped with ``ARCHIVE_COMMENT``.
+
+    Anything else — including a non-zip file — counts as user-created,
+    and the exporter refuses to overwrite it.
+    """
+    if not zipfile.is_zipfile(path):
+        return False
+    with zipfile.ZipFile(path) as zf:
+        return zf.comment == ARCHIVE_COMMENT
 
 
 class LibraryExporter:
@@ -209,6 +226,53 @@ class LibraryExporter:
             paths.append(claude_md_path)
 
         return paths
+
+    def export_archive(
+        self,
+        archive_path: Path,
+        source_name: str | None = None,
+        source_path: Path | None = None,
+        dependencies: list[str] | None = None,
+    ) -> Path:
+        """Export the whole library as a single zip artifact.
+
+        Runs export_all into a temporary directory and packs that tree into
+        ``archive_path``, with members rooted at the archive's stem. The zip
+        carries the ``ARCHIVE_COMMENT`` archive comment so later runs can
+        tell Ariadne-written archives from user-created ones.
+
+        Args:
+            archive_path: Target zip file path.
+            source_name: Name of the source (for CLAUDE.md generation).
+            source_path: Path to the project source (for CLAUDE.md merging).
+            dependencies: List of dependency source names for cross-references.
+
+        Returns:
+            Path to the created archive.
+        """
+        if archive_path.exists() and not _is_ariadne_archive(archive_path):
+            raise FileExistsError(
+                f'{archive_path} exists but was not written by Ariadne '
+                f'(missing archive marker) — move it or pass a different '
+                f'output path.'
+            )
+
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        root = archive_path.stem
+        with tempfile.TemporaryDirectory() as tmp:
+            tree_dir = Path(tmp) / root
+            self.export_all(
+                tree_dir,
+                source_name=source_name,
+                source_path=source_path,
+                dependencies=dependencies,
+            )
+            with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                zf.comment = ARCHIVE_COMMENT
+                for file in sorted(tree_dir.rglob('*')):
+                    if file.is_file():
+                        zf.write(file, file.relative_to(Path(tmp)).as_posix())
+        return archive_path
 
     def generate_manifest(self, output_dir: Path) -> Path:
         """Generate a YAML manifest of all documents.
@@ -609,6 +673,40 @@ class LibraryExporter:
         return content
 
 
+def _strip_title_h1(text: str, title: str) -> str:
+    """Drop a leading H1 line that exactly matches the doc title.
+
+    The exporter prepends ``# {title}`` to every file; parsing or comparing
+    bodies must not treat that generated line as document content.
+    """
+    first, _, rest = text.partition('\n')
+    if first.strip() == f'# {title}':
+        return rest.strip()
+    return text
+
+
+def _is_unchanged(
+    existing: Document,
+    title: str,
+    body: str,
+    source_files: list[str],
+    metadata: dict[str, Any],
+) -> bool:
+    """True when an import would write the same values the document already has.
+
+    Compares exactly the fields update_document writes. Bodies are compared
+    with the title H1 normalized away on both sides, so databases whose
+    content was round-tripped before the H1 fix still match their exports.
+    """
+    return (
+        existing.title == title
+        and _strip_title_h1(existing.content.strip(), title)
+        == _strip_title_h1(body.strip(), title)
+        and list(existing.source_files) == list(source_files)
+        and dict(existing.metadata) == metadata
+    )
+
+
 def import_from_markdown(
     library: Library,
     markdown_dir: Path,
@@ -623,7 +721,8 @@ def import_from_markdown(
         markdown_dir: Directory containing markdown files.
 
     Returns:
-        Number of documents imported.
+        Number of documents written; docs already present with
+        identical content, source files and metadata are skipped.
     """
     import re
 
@@ -631,7 +730,7 @@ def import_from_markdown(
 
     # Find all markdown files
     for md_file in markdown_dir.rglob('*.md'):
-        if md_file.name in ('README.md', 'manifest.yaml'):
+        if md_file.name in ('README.md', 'INDEX.md', 'CLAUDE.md', 'manifest.yaml'):
             continue
 
         content = md_file.read_text()
@@ -697,6 +796,9 @@ def import_from_markdown(
                 title = h1_match.group(1)
                 # Remove H1 from body
                 body = body[h1_match.end():].strip()
+        
+        if title:
+            body = _strip_title_h1(body, title)
 
         # Determine content type from frontmatter or directory
         content_type = frontmatter.get('type', 'explanation')
@@ -741,6 +843,12 @@ def import_from_markdown(
         # derived index data, regenerated from the element docs after import.
         if metadata.get('kind') == CATALOG_KIND_FILE_INDEX:
             continue
+        
+        existing = library.get_document(doc_id)
+        if existing is not None and _is_unchanged(
+            existing, final_title, body, source_files, metadata,
+        ):
+            continue
 
         library.add_document(
             content_type=content_type,
@@ -754,3 +862,60 @@ def import_from_markdown(
         count += 1
 
     return count
+
+
+def _find_export_root(extract_dir: Path) -> Path:
+    """Locate the exported tree inside an extracted archive.
+
+    Ariadne archives root their members at the archive stem; hand-zipped
+    trees are sometimes flat. Either way, the root is the directory
+    holding manifest.yaml.
+    """
+    if (extract_dir / 'manifest.yaml').is_file():
+        return extract_dir
+    nested = [
+        d for d in extract_dir.iterdir()
+        if d.is_dir() and (d / 'manifest.yaml').is_file()
+    ]
+    if len(nested) == 1:
+        return nested[0]
+    raise ValueError(
+        f'archive has no export root: expected exactly one directory '
+        f'containing manifest.yaml, found {len(nested)}'
+    )
+
+
+def import_from_archive(library: Library, archive_path: Path) -> int:
+    """Import documents from a single-file zip export artifact.
+
+    Extracts to a temporary directory — refusing member paths that would
+    escape it, skipping macOS packaging junk (__MACOSX/, ._* files) — then
+    locates the export root and delegates to import_from_markdown, so the
+    delta-skip semantics apply unchanged. The Ariadne archive marker is NOT
+    required: hand-zipped export trees import fine.
+
+    Args:
+        library: The library to import into.
+        archive_path: Path to the zip file.
+
+    Returns:
+        Number of documents written (identical docs are skipped).
+    """
+    if not zipfile.is_zipfile(archive_path):
+        raise ValueError(f'not a zip archive: {archive_path}')
+
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp)
+        with zipfile.ZipFile(archive_path) as zf:
+            for member in zf.infolist():
+                name = member.filename
+                if (
+                    name.startswith('__MACOSX/')
+                    or PurePosixPath(name).name.startswith('._')
+                ):
+                    continue
+                resolved = (dest / name).resolve()
+                if not resolved.is_relative_to(dest.resolve()):
+                    raise ValueError(f'unsafe member path in archive: {name}')
+                zf.extract(member, dest)
+        return import_from_markdown(library, _find_export_root(dest))

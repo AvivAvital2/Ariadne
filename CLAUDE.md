@@ -14,8 +14,8 @@ uv run ariadne onboard           # Full pipeline in one run: free phases + cost 
 uv run ariadne onboard --approve # Skip the proceed-prompt (non-interactive/CI); --live/--batch also skip the LLM-mode prompt
 uv run ariadne dry-run           # Estimate LLM cost of the pipeline; runs only the free phases, no API calls
 uv run ariadne generate          # Generate docs from source code
-uv run ariadne export            # Export docs to ./docs/{source}/
-uv run ariadne import            # Import docs from ./docs/{source}/
+uv run ariadne export            # Export the library as ONE zip artifact: ./docs/{source}.zip (--no-archive writes the ./docs/{source}/ tree)
+uv run ariadne import            # Import from ./docs/{source}.zip when present, else ./docs/{source}/ — delta: identical docs are skipped
 uv run ariadne rebuild           # Rebuild embeddings
 uv run ariadne check             # Check for stale documentation
 uv run ariadne config            # Show current configuration

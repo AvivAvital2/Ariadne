@@ -17,6 +17,7 @@ import asyncio
 import io
 import os
 import textwrap
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -65,7 +66,7 @@ def _ns(**kw):
         'source_files': None, 'finding': None, 'topic': None, 'no_embed': False,
         'force': False, 'output': None, 'input': None, 'skip_embeddings': False,
         'feature': None, 'alias': None, 'remove_branch': None, 'clear': False,
-        'recreate': False, 'yes': False,
+        'recreate': False, 'yes': False,'archive': True
     }
     return argparse.Namespace(**{**base, **kw})
 
@@ -621,14 +622,46 @@ def test_delete_out_of_scope_refuses(set_config, srcdir, tmp_path, capsys):
 
 # --- export -----------------------------------------------------------------
 
-def test_export_to_explicit_output_writes_files(set_config, srcdir, tmp_path, capsys):
+def test_export_default_emits_single_zip(set_config, srcdir, tmp_path, capsys):
+    set_config(_src1_yaml(srcdir, tmp_path))
+    lib = _lib(tmp_path)
+    _add(lib, title='ExportMe', source='src1', content='exported content')
+    db = lib.path
+    lib.close()
+    rc = cmd_export(_ns(db=db, source='src1', output=None))
+    assert rc == 0
+    assert 'Exported' in _out(capsys)
+    # one artifact: docs_base/src1.zip — and no docs tree left behind
+    docs_base = tmp_path / 'docs_out'
+    assert (docs_base / 'src1.zip').exists()
+    assert not (docs_base / 'src1').exists()
+    with zipfile.ZipFile(docs_base / 'src1.zip') as zf:
+        assert zf.comment == b'ariadne-export'
+        assert any(n.endswith('.md') for n in zf.namelist())
+
+
+def test_export_explicit_output_archive_writes_zip(set_config, srcdir, tmp_path):
+    set_config(_src1_yaml(srcdir, tmp_path))
+    lib = _lib(tmp_path)
+    _add(lib, title='ExportMe', source='src1')
+    db = lib.path
+    lib.close()
+    target = tmp_path / 'explicit_out' / 'bundle.zip'
+    rc = cmd_export(_ns(db=db, source='src1', output=str(target)))
+    assert rc == 0
+    # the positional output names the zip itself in archive mode
+    assert target.is_file() and zipfile.is_zipfile(target)
+    assert list(target.parent.iterdir()) == [target]
+
+
+def test_export_no_archive_to_explicit_output_writes_files(set_config, srcdir, tmp_path, capsys):
     set_config(_src1_yaml(srcdir, tmp_path))
     lib = _lib(tmp_path)
     _add(lib, title='ExportMe', source='src1', content='exported content')
     db = lib.path
     lib.close()
     outdir = tmp_path / 'explicit_out'
-    rc = cmd_export(_ns(db=db, source='src1', output=str(outdir)))
+    rc = cmd_export(_ns(db=db, source='src1', output=str(outdir), archive=False))
     assert rc == 0
     assert 'Exported' in _out(capsys)
     # files actually landed in the chosen output dir
@@ -636,13 +669,13 @@ def test_export_to_explicit_output_writes_files(set_config, srcdir, tmp_path, ca
     assert list(outdir.rglob('*.md'))
 
 
-def test_export_default_source_path_writes_files(set_config, srcdir, tmp_path):
+def test_export_no_archive_default_source_path_writes_files(set_config, srcdir, tmp_path):
     set_config(_src1_yaml(srcdir, tmp_path))
     lib = _lib(tmp_path)
     _add(lib, title='ExportMe', source='src1')
     db = lib.path
     lib.close()
-    rc = cmd_export(_ns(db=db, source='src1', output=None))
+    rc = cmd_export(_ns(db=db, source='src1', output=None, archive=False))
     assert rc == 0
     # default output resolves to docs_base/src1
     assert (tmp_path / 'docs_out' / 'src1' / 'manifest.yaml').exists()
@@ -659,9 +692,47 @@ def test_export_no_source_falls_back_to_default_path(set_config, tmp_path):
     try:
         rc = cmd_export(_ns(db=db, source=None, output=None))
         assert rc == 0
+        # archive default: the fallback docs dir becomes ./docs.zip
+        assert (tmp_path / 'docs.zip').exists()
+        assert not (tmp_path / 'docs').exists()
+    finally:
+        os.chdir(cwd)
+
+
+def test_export_no_archive_no_source_falls_back_to_default_path(set_config, tmp_path):
+    set_config('sources: {}\n')
+    lib = _lib(tmp_path)
+    _add(lib, title='ExportMe', source=None)
+    db = lib.path
+    lib.close()
+    cwd = Path.cwd()
+    os.chdir(tmp_path)
+    try:
+        rc = cmd_export(_ns(db=db, source=None, output=None, archive=False))
+        assert rc == 0
         assert (tmp_path / 'docs' / 'manifest.yaml').exists()
     finally:
         os.chdir(cwd)
+
+
+def test_export_refuses_overwriting_foreign_zip(set_config, srcdir, tmp_path, capsys):
+    set_config(_src1_yaml(srcdir, tmp_path))
+    lib = _lib(tmp_path)
+    _add(lib, title='ExportMe', source='src1')
+    db = lib.path
+    lib.close()
+    docs_base = tmp_path / 'docs_out'
+    docs_base.mkdir()
+    foreign = docs_base / 'src1.zip'
+    with zipfile.ZipFile(foreign, 'w') as zf:
+        zf.writestr('keep/precious.md', 'user data, not ours')
+    before = foreign.read_bytes()
+
+    rc = cmd_export(_ns(db=db, source='src1', output=None))
+
+    assert rc == 1
+    assert 'not written by Ariadne' in _out(capsys)
+    assert foreign.read_bytes() == before  # the user file survives
 
 
 # --- import -----------------------------------------------------------------
@@ -674,7 +745,40 @@ def test_import_missing_dir(set_config, srcdir, tmp_path, capsys):
     rc = cmd_import_(_ns(db=db, source='src1', input=str(tmp_path / 'nope'),
                          skip_embeddings=True))
     assert rc == 1
-    assert 'Directory not found' in _out(capsys)
+    assert 'Input not found' in _out(capsys)
+
+
+def test_import_prefers_default_zip(set_config, srcdir, tmp_path, capsys):
+    set_config(_src1_yaml(srcdir, tmp_path))
+    lib = _lib(tmp_path)
+    _add(lib, title='Zipped Doc', source='src1', content='travels by zip')
+    db = lib.path
+    lib.close()
+    rc = cmd_export(_ns(db=db, source='src1', output=None))
+    assert rc == 0  # produces docs_base/src1.zip
+
+    target = tmp_path / 'target.db'
+    Library(target).close()
+    rc = cmd_import_(_ns(db=target, source='src1', input=None, skip_embeddings=True))
+    assert rc == 0
+    assert 'Imported' in _out(capsys)
+    lib2 = _reopen(target)
+    titles = {d.title for d in lib2.list_documents()}
+    lib2.close()
+    assert 'Zipped Doc' in titles
+
+
+def test_import_bogus_zip_input_fails(set_config, srcdir, tmp_path, capsys):
+    set_config(_src1_yaml(srcdir, tmp_path))
+    lib = _lib(tmp_path)
+    db = lib.path
+    lib.close()
+    bogus = tmp_path / 'fake.zip'
+    bogus.write_text('not an archive')
+    rc = cmd_import_(_ns(db=db, source='src1', input=str(bogus),
+                         skip_embeddings=True))
+    assert rc == 1
+    assert 'not a zip archive' in _out(capsys)
 
 
 def test_import_populates_fresh_db(set_config, srcdir, tmp_path, capsys):
@@ -945,7 +1049,7 @@ def test_import_input_none_uses_docs_path(set_config, srcdir, tmp_path, capsys):
     # input=None + source -> resolve_docs_path(src1), which doesn't exist
     rc = cmd_import_(_ns(db=db, source='src1', input=None, skip_embeddings=True))
     assert rc == 1
-    assert 'Directory not found' in _out(capsys)
+    assert 'Input not found' in _out(capsys)
 
 
 def test_import_input_none_default_path(set_config, tmp_path, capsys):
@@ -960,7 +1064,7 @@ def test_import_input_none_default_path(set_config, tmp_path, capsys):
     finally:
         os.chdir(cwd)
     assert rc == 1
-    assert 'Directory not found' in _out(capsys)
+    assert 'Input not found' in _out(capsys)
 
 
 # --- wiring -----------------------------------------------------------------
