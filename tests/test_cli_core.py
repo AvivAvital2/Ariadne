@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import io
+import logging
 import os
 import textwrap
 import zipfile
@@ -25,6 +26,7 @@ import numpy as np
 import pytest
 
 import config as config_module
+import cli.main as cli_main
 from cli.core import (
     HANDLERS,
     _print_document_list,
@@ -44,6 +46,7 @@ from cli.core import (
 from cli.core import console as core_console
 from cli.main import create_parser
 from config import Config
+import cli.main as cli_main
 from export import LibraryExporter
 from library import Library
 from library.embedding_matrix import ARTIFACT_NAME, matrix_dir_for
@@ -66,7 +69,7 @@ def _ns(**kw):
         'source_files': None, 'finding': None, 'topic': None, 'no_embed': False,
         'force': False, 'output': None, 'input': None, 'skip_embeddings': False,
         'feature': None, 'alias': None, 'remove_branch': None, 'clear': False,
-        'recreate': False, 'yes': False,'archive': True
+        'recreate': False, 'yes': False,'archive': True, 'batch': False, 'live': False
     }
     return argparse.Namespace(**{**base, **kw})
 
@@ -1079,3 +1082,30 @@ def test_commands_registered_and_dispatchable():
     expected = {'search', 'list', 'get', 'add', 'finding', 'delete',
                 'export', 'import', 'rebuild', 'build-matrix', 'tag'}
     assert expected <= set(HANDLERS)
+
+
+def test_global_debug_flag_parses_and_configures_logging():
+    parser = create_parser()
+    assert parser.parse_args(['--debug', 'config']).debug is True
+    assert parser.parse_args(['config']).debug is False
+
+    root = logging.getLogger()
+    saved = root.level
+    try:
+        cli_main._configure_logging(True)
+        assert root.level == logging.DEBUG
+        cli_main._configure_logging(False)
+        assert root.level == logging.WARNING
+    finally:
+        root.setLevel(saved)
+
+
+def test_main_configures_logging_from_debug_flag(monkeypatch, capsys):
+    root = logging.getLogger()
+    saved = root.level
+    monkeypatch.setattr('sys.argv', ['ariadne', '--debug'])
+    try:
+        assert cli_main.main() == 0  # no command -> help, after logging setup
+        assert root.level == logging.DEBUG
+    finally:
+        root.setLevel(saved)

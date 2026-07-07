@@ -291,31 +291,29 @@ def _prompt_proceed() -> bool:
     return resp.strip().lower() in ('y', 'yes')
 
 
-def _prompt_for_batch_mode() -> str:
-    """Interactively pick live vs batched catalog-describe.
+def _prompt_for_batch_mode(
+    options: tuple = _BATCH_MODE_OPTIONS,
+    title: str = 'LLM mode (catalog-describe + generate)',
+) -> str:
+    """Interactively pick live vs batched work.
 
     Uses arrow-key selection on a TTY (no typing required). Falls back
     to a text prompt when stdin isn't a TTY (CI, piped input). Returns
-    ``'live'`` or ``'batch'``.
+    the selected option value (``'live'`` or ``'batch'``).
     """
     import sys
 
     if sys.stdin.isatty() and sys.stdout.isatty():
         try:
-            return _arrow_key_select(
-                _BATCH_MODE_OPTIONS,
-                title='LLM mode (catalog-describe + generate)',
-            )
+            return _arrow_key_select(options, title=title)
         except Exception:
             # Terminal doesn't support raw mode (e.g., minimal containers).
             # Fall through to the typed prompt rather than crash.
             pass
 
     console.print()
-    console.print(
-        '[bold]LLM mode (catalog-describe + generate)[/bold]',
-    )
-    for _, label, desc in _BATCH_MODE_OPTIONS:
+    console.print(f'[bold]{title}[/bold]')
+    for _, label, desc in options:
         console.print(f'  [cyan]{label.lower()}[/cyan] — {desc}')
     while True:
         choice = input(

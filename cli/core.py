@@ -116,6 +116,13 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     import_parser.add_argument('--source', '-s', help='Source name for docs path (default from config)')
     import_parser.add_argument('--skip-embeddings', action='store_true',
                                help='Skip embedding regeneration')
+    import_parser.add_argument('--yes', '-y', action='store_true',
+                               help='Skip the embedding-cost confirmation prompt')
+    import_mode = import_parser.add_mutually_exclusive_group()
+    import_mode.add_argument('--batch', action='store_true',
+                             help='Embed via the OpenAI Batch API (about half price, up to 24h)')
+    import_mode.add_argument('--live', action='store_true',
+                             help='Embed live at interactive speed (skips the mode prompt)')
 
     # rebuild
     rebuild_parser = subparsers.add_parser('rebuild', help='Rebuild all embeddings')
@@ -123,6 +130,11 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
                                 help='Embed only documents missing an embedding (cheap top-up); default re-embeds all')
     rebuild_parser.add_argument('--yes', '-y', action='store_true',
                                 help='Skip the confirmation prompt for a large rebuild')
+    rebuild_mode = rebuild_parser.add_mutually_exclusive_group()
+    rebuild_mode.add_argument('--batch', action='store_true',
+                              help='Embed via the OpenAI Batch API (about half price, up to 24h)')
+    rebuild_mode.add_argument('--live', action='store_true',
+                              help='Embed live at interactive speed (skips the mode prompt)')
 
     # tag
     tag_parser = subparsers.add_parser('tag', help='Tag a document with metadata')
@@ -620,7 +632,7 @@ def cmd_import_(args: argparse.Namespace) -> int:
 
         if not args.skip_embeddings:
             console.print('Regenerating embeddings...')
-            asyncio.run(_rebuild_embeddings(library, only_missing=True, assume_yes=True))
+            asyncio.run(_rebuild_embeddings(library, only_missing=True, assume_yes=args.yes, use_batch=_resolve_embed_mode(args)))
             console.print('[green]Embeddings regenerated.[/green]')
 
         # file_index docs are excluded from export/import (derived index data,
@@ -685,7 +697,7 @@ async def cmd_rebuild(args: argparse.Namespace) -> int:
     library = get_library(args.db)
 
     try:
-        await _rebuild_embeddings(library, only_missing=getattr(args, 'only_missing', False), assume_yes=getattr(args, 'yes', False))
+        await _rebuild_embeddings(library, only_missing=getattr(args, 'only_missing', False), assume_yes=getattr(args, 'yes', False), use_batch=_resolve_embed_mode(args))
         console.print('[green]All embeddings rebuilt.[/green]')
         return 0
 
@@ -693,25 +705,73 @@ async def cmd_rebuild(args: argparse.Namespace) -> int:
         library.close()
 
 
-async def _rebuild_embeddings(library: 'Library', only_missing: bool = False, assume_yes: bool = False) -> None:
-    """Rebuild embeddings (cost-estimated; confirms before a large full run)."""
+def _resolve_embed_mode(args: argparse.Namespace) -> bool | None:
+    """--batch → True, --live → False, neither → None (ask on large runs)."""
+    if getattr(args, 'batch', False):
+        return True
+    if getattr(args, 'live', False):
+        return False
+    return None
+
+
+def _prompt_embedding_mode(n: int, live_cost: float, live_eta: str,
+                           batch_cost: float) -> str:
+    """Live-vs-batch chooser for an embedding run — onboard's selector with
+    embedding-specific pricing. Returns ``'live'`` or ``'batch'``."""
+    from cli.onboard import _prompt_for_batch_mode
+    return _prompt_for_batch_mode(
+        options=(
+            ('live', 'Live',
+             f'~${live_cost:.2f}, {live_eta} — interactive speed'),
+            ('batch', 'Batch',
+             f'~${batch_cost:.2f} (about half price), finishes within 24h'),
+        ),
+        title=f'Embedding mode ({n:,} documents)',
+    )
+
+
+async def _rebuild_embeddings(
+    library: 'Library', only_missing: bool = False, assume_yes: bool = False,
+    use_batch: bool | None = None,
+) -> int | None:
+    """Rebuild embeddings (cost-estimated; confirms before a large run).
+
+    ``use_batch``: True routes through OpenAI's Batch API (~50% of the
+    live price, minutes-to-hours latency), False embeds live, and None
+    asks on large interactive runs — otherwise defaulting to live."""
     from cli.progress import format_duration, make_progress
 
     n = library.count_missing_embeddings() if only_missing else library.count_documents()
     tokens = n * EMBED_TOKENS_PER_DOC
-    cost = tokens / 1_000_000 * EMBED_COST_PER_1M_TOKENS
-    eta = format_duration(n / EMBED_DOCS_PER_SEC)
-    console.print(
-        f'Embedding {n} document(s) - ~{tokens:,} tokens, ~${cost:.2f}, ~{eta}'
-    )
+    live_cost = tokens / 1_000_000 * EMBED_COST_PER_1M_TOKENS
+    live_eta = f'~{format_duration(n / EMBED_DOCS_PER_SEC)}'
+    if use_batch is None:
+        if not assume_yes and n >= EMBED_CONFIRM_THRESHOLD:
+            use_batch = _prompt_embedding_mode(
+                n, live_cost, live_eta, live_cost * 0.5) == 'batch'
+        else:
+            use_batch = False
+    if use_batch:
+        cost = live_cost * 0.5
+        eta = 'up to 24h'
+        console.print(
+            f'Embedding {n} document(s) - ~{tokens:,} tokens, ~${cost:.2f} '
+            f'(Batch API, -50%), {eta}'
+        )
+    else:
+        cost = live_cost
+        eta = live_eta
+        console.print(
+            f'Embedding {n} document(s) - ~{tokens:,} tokens, ~${cost:.2f}, {eta}'
+        )
     if n == 0:
         console.print('Nothing to embed - already up to date.')
-        return
+        return None
     if not assume_yes and n >= EMBED_CONFIRM_THRESHOLD:
-        prompt = f'Proceed embedding {n} documents (~${cost:.2f}, ~{eta})? [y/N] '
+        prompt = f'Proceed embedding {n} documents (~${cost:.2f}, {eta})? [y/N] '
         if not console.input(prompt).strip().lower().startswith('y'):
             console.print('Aborted - nothing embedded.')
-            return
+            return None
     from writer import LibraryWriter
     async with LibraryWriter(library) as writer:
         with make_progress(console=console) as progress:
@@ -720,12 +780,25 @@ async def _rebuild_embeddings(library: 'Library', only_missing: bool = False, as
             def _on_progress(completed: int, total: int) -> None:
                 progress.update(task_id, completed=completed, total=total)
 
-            count = await writer.rebuild_all_embeddings(
-                only_missing=only_missing, on_progress=_on_progress,
-            )
+            if use_batch:
+                from docgen.llm.openai_batch import OpenAIEmbeddingsBatchStrategy
+                strategy = OpenAIEmbeddingsBatchStrategy(
+                    await writer._get_embedding_service())
+                count = await writer.rebuild_all_embeddings_batch(
+                    strategy, only_missing=only_missing,
+                    on_submit=lambda batch_id: console.print(
+                        f'Submitted embeddings batch {batch_id} — polling until '
+                        f'done (Ctrl-C leaves it running server-side)'),
+                    on_progress=_on_progress,
+                )
+            else:
+                count = await writer.rebuild_all_embeddings(
+                    only_missing=only_missing, on_progress=_on_progress,
+                )
         console.print(f'Updated {count} documents')
     from library.embedding_matrix import ensure_matrix
     ensure_matrix(library)
+    return count
 
 
 def cmd_tag(args: argparse.Namespace) -> int:

@@ -191,7 +191,7 @@ class EmbeddingService:
                     raise last_error from e
                 if attempt < max_retries - 1:
                     delay = _retry_delay_for(e.response, attempt)  # 1s, 2s, 4s
-                    _logger.warning(
+                    _logger.debug(
                         'Embedding API request failed (attempt %d/%d), retrying in %ds: %s',
                         attempt + 1, max_retries, delay, detail,
                     )
@@ -200,7 +200,7 @@ class EmbeddingService:
                 last_error = e
                 if attempt < max_retries - 1:
                     delay = 2 ** attempt  # 1s, 2s, 4s
-                    _logger.warning(
+                    _logger.debug(
                         'Embedding API request failed (attempt %d/%d), retrying in %ds: %s',
                         attempt + 1, max_retries, delay, e,
                     )

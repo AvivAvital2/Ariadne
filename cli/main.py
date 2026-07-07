@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -49,6 +50,11 @@ def create_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help='Path to database file (default from config or ariadne.db)',
+    )
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Verbose logging: API retry/backoff chatter, request details',
     )
 
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
@@ -110,12 +116,20 @@ def _load_env() -> None:
     load_dotenv()
 
 
+def _configure_logging(debug: bool) -> None:
+    """Root logging: WARNING by default; --debug reveals retry/backoff chatter."""
+    level = logging.DEBUG if debug else logging.WARNING
+    logging.basicConfig(level=level)
+    logging.getLogger().setLevel(level)
+
+
 def main() -> int:
     """Main entry point for the CLI."""
     _load_env()
 
     parser = create_parser()
     args = parser.parse_args()
+    _configure_logging(args.debug)
 
     if args.command is None:
         parser.print_help()

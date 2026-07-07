@@ -506,3 +506,83 @@ class LibraryWriter:
         if failed:
             print(f'  rebuild: {failed} batch(es) failed — re-run to embed the remainder')
         return count
+
+    async def rebuild_all_embeddings_batch(
+        self, strategy, only_missing: bool = False, on_progress=None,
+    on_submit=None) -> int:
+        """Batch-API counterpart of rebuild_all_embeddings — same target
+        set, same persistence, ~50% of the price, minutes-to-hours latency.
+
+        Submits ONE batch job carrying grouped doc-vector requests
+        (EMBED_BATCH_SIZE texts per group) plus one chunk group per
+        oversized doc, polls it to a terminal state, then writes vectors.
+        A group that failed server-side is skipped with a notice — its
+        docs stay NULL so a live ``rebuild --only-missing`` can top up.
+
+        ``on_progress(completed_groups, total_groups)`` mirrors the live
+        path's two-argument contract.
+        """
+        from docgen.llm.openai_batch import EmbeddingBatchRequest
+
+        docs = (
+            self.library.list_documents_without_embedding()
+            if only_missing
+            else self.library.list_documents()
+        )
+        docs = [d for d in docs if d.metadata.get('kind') != CATALOG_KIND_FILE_INDEX]
+        if not docs:
+            return 0
+
+        requests: list[EmbeddingBatchRequest] = []
+        doc_groups: list[list] = []
+        for i in range(0, len(docs), EMBED_BATCH_SIZE):
+            group = docs[i:i + EMBED_BATCH_SIZE]
+            doc_groups.append(group)
+            requests.append(EmbeddingBatchRequest(
+                custom_id=f'doc:{len(doc_groups) - 1}',
+                texts=[f'{d.title}\n\n{d.content[:2000]}' for d in group],
+            ))
+        chunked: dict[str, list[str]] = {}
+        for d in docs:
+            if len(d.content) > self.chunk_config.chunk_size:
+                texts = chunk_text(d.content, self.chunk_config)
+                if texts:
+                    chunked[d.id] = texts
+                    requests.append(EmbeddingBatchRequest(
+                        custom_id=f'chunks:{d.id}', texts=texts))
+
+        submission = await strategy.submit_batch(requests)
+        if on_submit is not None:
+            on_submit(submission.batch_id)
+        total_groups = len(requests)
+
+        def _poll_progress(processing: int, succeeded: int, errored: int) -> None:
+            if on_progress is not None:
+                on_progress(succeeded + errored, total_groups)
+
+        await strategy.poll_batch(submission.batch_id, on_progress=_poll_progress)
+        results = await strategy.fetch_batch_results(submission.batch_id)
+
+        count = 0
+        for gi, group in enumerate(doc_groups):
+            vectors = results.get(f'doc:{gi}')
+            if not vectors or len(vectors) != len(group):
+                print(f'  rebuild: embeddings batch group doc:{gi} failed, '
+                      f'skipping {len(group)} doc(s)')
+                continue
+            for doc, vector in zip(group, vectors):
+                self.library.update_document(doc.id, embedding=vector)
+                count += 1
+        for doc_id, texts in chunked.items():
+            vectors = results.get(f'chunks:{doc_id}')
+            if not vectors or len(vectors) != len(texts):
+                print(f'  rebuild: embeddings batch chunks for {doc_id} failed, '
+                      f'keeping existing chunks')
+                continue
+            self.library.delete_chunks(doc_id)
+            chunks = [
+                Chunk(document_id=doc_id, chunk_index=i, content=text, embedding=vector)
+                for i, (text, vector) in enumerate(zip(texts, vectors))
+            ]
+            self.library.add_chunks_batch(chunks)
+        return count

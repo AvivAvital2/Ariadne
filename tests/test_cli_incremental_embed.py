@@ -23,7 +23,7 @@ def recorder(monkeypatch):
     """Capture the only_missing value handed to the embedding rebuild."""
     seen: dict[str, object] = {}
 
-    async def fake_rebuild(library, only_missing=False, assume_yes=False):
+    async def fake_rebuild(library, only_missing=False, assume_yes=False, use_batch=False):
         seen['only_missing'] = only_missing
 
     monkeypatch.setattr(core, '_rebuild_embeddings', fake_rebuild)
@@ -55,7 +55,7 @@ def test_cmd_import_defaults_to_only_missing(recorder, monkeypatch, tmp_path):
     (docs / 'note.md').write_text('---\ntype: explanation\ntitle: "N"\n---\n# N\n\nbody\n')
     args = SimpleNamespace(
         input=str(docs), source=None, db=str(tmp_path / 't.db'), skip_embeddings=False,
-    )
+    yes=False, batch=False, live=False)
 
     core.cmd_import_(args)
 

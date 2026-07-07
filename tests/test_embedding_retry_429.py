@@ -16,6 +16,7 @@ run and orphaned every in-flight batch. These tests pin the contract:
   fix widens *only* the transient cases, not all 4xx).
 """
 from __future__ import annotations
+import logging
 
 import httpx
 import numpy as np
@@ -99,6 +100,20 @@ async def test_400_fails_fast_without_retry():
         await service.close()
 
     assert calls['n'] == 1, 'permanent 4xx must not be retried'
+
+
+async def test_retry_chatter_is_debug_not_warning(caplog):
+    service, _ = _service_with_script([429, 200])
+    try:
+        with caplog.at_level(logging.DEBUG, logger='embedding'):
+            await service.embed_batch(['hello'])
+    finally:
+        await service.close()
+
+    retry_records = [r for r in caplog.records if 'retrying' in r.getMessage()]
+    assert retry_records, 'the retry must still be logged (visible with --debug)'
+    assert all(r.levelno == logging.DEBUG for r in retry_records), (
+        'per-attempt retry logs must be DEBUG so they stay hidden by default')
 
 
 # --- Broader embed_batch / config coverage (same module Slice 1 modifies) ---

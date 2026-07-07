@@ -16,7 +16,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import numpy as np
 from collections.abc import Callable, Sequence
+from attrs import frozen
+from numpy.typing import NDArray
 
 from docgen.llm.anthropic import raise_if_quota_exhausted
 from docgen.llm.batch import (
@@ -26,6 +29,7 @@ from docgen.llm.batch import (
     request_with_retry,
 )
 from docgen.llm.openai import OpenAIProvider, token_limit_field
+from embedding import EmbeddingService
 
 _logger = logging.getLogger(__name__)
 
@@ -51,11 +55,18 @@ def _extract_text(row: dict) -> str | None:
 
 class OpenAIBatchStrategy:
     """Batch lifecycle over OpenAI's Batch API."""
+    # Endpoint recorded at batch creation; the embeddings subclass narrows it.
+    _endpoint = '/v1/chat/completions'
 
     def __init__(self, provider: OpenAIProvider) -> None:
         """Borrow ``provider`` for its authenticated httpx transport. This
         strategy owns only the batch-specific request shaping and polling."""
         self._provider = provider
+
+    @property
+    def _model(self) -> str:
+        """Model recorded in submit logs; the embeddings subclass overrides."""
+        return self._provider.model
 
     def _build_batch_line(self, req: BatchRequest) -> dict:
         """One JSONL line: a ``/v1/chat/completions`` request keyed by
@@ -116,11 +127,11 @@ class OpenAIBatchStrategy:
 
         _logger.info(
             'OpenAI batch submit: model=%s n=%d input_file=%s',
-            self._provider.model, len(requests), input_file_id,
+            self._model, len(requests), input_file_id,
         )
         response = await self._request_with_retry('POST', '/batches', json={
             'input_file_id': input_file_id,
-            'endpoint': '/v1/chat/completions',
+            'endpoint': self._endpoint,
             'completion_window': '24h',
         })
         batch_id = response.json()['id']
@@ -228,3 +239,112 @@ class OpenAIBatchStrategy:
                     'OpenAI batch result: malformed JSONL line, skipping',
                 )
         return rows
+
+
+def _extract_group_vectors(row: dict) -> list[NDArray[np.float32]] | None:
+    """Vectors for one embeddings output-file row, ordered by ``index`` and
+    unit-normalized (the live ``embed_batch`` contract), or ``None`` if the
+    request didn't succeed."""
+    response = row.get('response') or {}
+    if response.get('status_code') != 200:
+        return None
+    data = (response.get('body') or {}).get('data') or []
+    if not data:
+        return None
+    vectors: list[NDArray[np.float32]] = []
+    for item in sorted(data, key=lambda x: x['index']):
+        vector = np.array(item['embedding'], dtype=np.float32)
+        norm = np.linalg.norm(vector)
+        if norm > 0:
+            vector = vector / norm
+        vectors.append(vector)
+    return vectors
+
+
+@frozen
+class EmbeddingBatchRequest:
+    """One JSONL line of an embeddings batch: a GROUP of texts embedded in
+    a single request, so a large rebuild stays far below the Batch API's
+    per-job request cap. ``custom_id`` correlates the group's vectors back
+    to the caller's bookkeeping; the provider treats it as opaque."""
+    custom_id: str
+    texts: list[str]
+
+
+class OpenAIEmbeddingsBatchStrategy(OpenAIBatchStrategy):
+    """Batch lifecycle over OpenAI's Batch API for ``/v1/embeddings``.
+
+    Inherits the submit/poll/cancel mechanics (same ~50%-off, 24h-window
+    economics) and swaps the request shaping and result parsing: lines are
+    grouped-text embeddings requests, and results are unit-normalized
+    float32 vectors per custom_id (``None`` for failed groups). Borrows
+    ``EmbeddingService`` for its authenticated transport and embedding
+    config, the way the chat strategy borrows ``OpenAIProvider``.
+    """
+
+    _endpoint = '/v1/embeddings'
+
+    def __init__(self, service: EmbeddingService) -> None:
+        """Borrow ``service`` for its authenticated httpx transport and
+        embedding config (model, dimensions)."""
+        self._service = service
+
+    @property
+    def _model(self) -> str:
+        return self._service.config.model
+
+    def _build_batch_line(self, req: EmbeddingBatchRequest) -> dict:
+        body: dict = {
+            'model': self._service.config.model,
+            'input': list(req.texts),
+        }
+        if self._service.config.dimensions is not None:
+            body['dimensions'] = self._service.config.dimensions
+        return {
+            'custom_id': req.custom_id,
+            'method': 'POST',
+            'url': '/v1/embeddings',
+            'body': body,
+        }
+
+    async def _request_with_retry(self, method: str, url: str, **kwargs):
+        """Same retry budget as the chat strategy, over the embedding
+        service's client (an async accessor, unlike the provider's)."""
+        client = await self._service._get_client()
+        return await request_with_retry(
+            client, method, url,
+            retry_delay=2.0, logger=_logger, label='OpenAI embeddings batch',
+            on_status=raise_if_quota_exhausted,
+            **kwargs,
+        )
+
+    async def fetch_batch_results(
+        self, batch_id: str,
+    ) -> dict[str, list[NDArray[np.float32]] | None]:
+        """``{custom_id: [vectors] | None}`` merged from the batch's output
+        file (succeeded groups) and error file (failed groups)."""
+        client = await self._service._get_client()
+        meta = await client.get(f'/batches/{batch_id}')
+        meta.raise_for_status()
+        data = meta.json()
+
+        results: dict[str, list[NDArray[np.float32]] | None] = {}
+        output_file_id = data.get('output_file_id')
+        if output_file_id:
+            for row in await self._download_jsonl(client, output_file_id):
+                cid = row.get('custom_id')
+                if cid:
+                    results[cid] = _extract_group_vectors(row)
+        error_file_id = data.get('error_file_id')
+        if error_file_id:
+            for row in await self._download_jsonl(client, error_file_id):
+                cid = row.get('custom_id')
+                if cid:
+                    results[cid] = None
+
+        _logger.info(
+            'OpenAI embeddings batch results fetched: id=%s n=%d ok=%d',
+            batch_id, len(results),
+            sum(1 for v in results.values() if v is not None),
+        )
+        return results

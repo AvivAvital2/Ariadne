@@ -15,8 +15,8 @@ uv run ariadne onboard --approve # Skip the proceed-prompt (non-interactive/CI);
 uv run ariadne dry-run           # Estimate LLM cost of the pipeline; runs only the free phases, no API calls
 uv run ariadne generate          # Generate docs from source code
 uv run ariadne export            # Export the library as ONE zip artifact: ./docs/{source}.zip (--no-archive writes the ./docs/{source}/ tree)
-uv run ariadne import            # Import from ./docs/{source}.zip when present, else ./docs/{source}/ — delta: identical docs are skipped
-uv run ariadne rebuild           # Rebuild embeddings
+uv run ariadne import            # Import from ./docs/{source}.zip when present, else ./docs/{source}/ — delta: identical docs are skipped; large embed runs PROMPT live-vs-batch + cost (--live/--batch pick the mode, --yes approves; batch = half price via OpenAI Batch API)
+uv run ariadne rebuild           # Rebuild embeddings (same live-vs-batch prompt on large runs; --live/--batch skip it, --yes skips the cost prompt)
 uv run ariadne check             # Check for stale documentation
 uv run ariadne config            # Show current configuration
 uv run ariadne source add NAME --path DIR   # Add/update a source in ariadne.yaml (no manual editing)
