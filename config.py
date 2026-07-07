@@ -247,6 +247,7 @@ _DEFAULT_MENTION_MESSAGE = (
 
 DEFAULTS = {
     'model': 'gpt-5.5',
+    'ask_synthesis': True,
     'provider': 'openai',
     'db_path': 'ariadne.db',
     'docs_base': './docs',
@@ -985,6 +986,16 @@ class Config:
         if isinstance(raw, dict):
             return str(raw.get('message', _DEFAULT_MENTION_MESSAGE))
         return _DEFAULT_MENTION_MESSAGE
+
+    @property
+    def ask_synthesis(self) -> bool:
+        """Whether ``ariadne_ask`` synthesizes an answer from retrieved
+        docs via an LLM call. Default ``True``; set
+        ``ask_synthesis: false`` in ariadne.yaml to disable the
+        autonomous completion (ask returns retrieval-only). Synthesis
+        also needs the resolved provider's API key; without one, ask
+        degrades to retrieval regardless."""
+        return bool(self._config.get('ask_synthesis', True))
 
     def resolve_docs_path(self, source: str) -> Path:
         """Resolve the documentation output path for a source.

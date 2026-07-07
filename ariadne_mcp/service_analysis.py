@@ -256,6 +256,14 @@ class AnalysisMixin:
                 event_id=search_result.event_id,
             )
 
+        if not self.config.ask_synthesis:
+            return AskResponse(
+                answer=badge + f'Based on {len(sources)} docs (LLM synthesis disabled):\n\n{context}',
+                sources=sources,
+                confidence=confidence,
+                event_id=search_result.event_id,
+            )
+
         # 4b. Synthesize answer with LLM (developer role — existing path)
         api_key = os.environ.get('OPENAI_API_KEY')
         if not api_key:
@@ -275,11 +283,11 @@ class AnalysisMixin:
 
         try:
             from llm import chat_complete
-            answer = await chat_complete(
-                system_prompt='You are a technical documentation assistant. Answer questions concisely using only the provided documentation. Cite document titles.',
-                user_prompt=prompt,
-                max_tokens=1024,
-            )
+            messages = [
+                {'role': 'system', 'content': 'You are a technical documentation assistant. Answer questions concisely using only the provided documentation. Cite document titles.'},
+                {'role': 'user', 'content': prompt},
+            ]
+            answer = await chat_complete(messages=messages, max_tokens=1024)
 
             return AskResponse(
                 answer=badge + answer,
