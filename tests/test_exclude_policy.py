@@ -111,6 +111,7 @@ def test_default_exclude_policy_contains_expected_names():
         'target',  # JVM/Scala/Rust
         '.idea', '.vscode',
         '.mypy_cache', '.pytest_cache', '.ruff_cache',
+        '.ariadne',  # Ariadne's own output artifacts — never self-scan
     }
     missing = must_contain - set(DEFAULT_EXCLUDE_POLICY)
     assert not missing, (

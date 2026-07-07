@@ -165,3 +165,27 @@ def test_default_policy_prunes_claude_tooling_dir(tmp_path):
     assert not any('.claude' in r for r in rels), (
         f'.claude tooling dir leaked into the catalog: {rels}'
     )
+
+
+def test_default_policy_prunes_ariadne_output_dir(tmp_path):
+    """`.ariadne` is Ariadne's own output (embedding matrix, SCIP artifacts,
+    derived indexes), not project source. The default policy must prune it,
+    or Ariadne catalogs its own derived data when a source tree carries a
+    `.ariadne/` dir — as happened documenting Ariadne itself."""
+    from config import DEFAULT_EXCLUDE_POLICY
+    from docgen.staleness import find_catalog_files
+
+    (tmp_path / 'app.py').write_text('x = 1\n', encoding='utf-8')
+    own = tmp_path / '.ariadne'
+    own.mkdir()
+    (own / 'doc_embeddings.npy').write_bytes(b'\x00')
+    (own / 'index.scip').write_bytes(b'\x00')
+    (own / 'notes.py').write_text('derived = True\n', encoding='utf-8')
+
+    found = list(find_catalog_files(
+        tmp_path, exclude_patterns=(), exclude_dir_names=DEFAULT_EXCLUDE_POLICY))
+    rels = sorted(str(f.relative_to(tmp_path)) for f in found)
+    assert 'app.py' in rels
+    assert not any('.ariadne' in r for r in rels), (
+        f'.ariadne output dir leaked into the catalog: {rels}'
+    )

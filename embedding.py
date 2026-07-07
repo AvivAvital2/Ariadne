@@ -142,14 +142,17 @@ class EmbeddingService:
         """
         if not texts:
             return []
-
-        # Filter out empty/whitespace-only texts (waste of API calls)
-        valid_texts = [t for t in texts if t and t.strip()]
-        if not valid_texts:
+        # Empty/whitespace texts get zero vectors IN PLACE — the API would
+        # reject them, and the result must stay positionally aligned with the
+        # input (callers zip vectors onto their doc/chunk lists, so a shifted
+        # result silently assigns wrong embeddings).
+        dim = self.config.dimensions or 1536
+        valid_positions = [i for i, t in enumerate(texts) if t and t.strip()]
+        if not valid_positions:
             _logger.warning('All texts were empty/whitespace — skipping embedding API call')
-            return [np.zeros(self.config.dimensions or 1536, dtype=np.float32)] * len(texts)
-
-        texts = valid_texts
+            return [np.zeros(dim, dtype=np.float32)] * len(texts)
+        original_count = len(texts)
+        texts = [texts[i] for i in valid_positions]
 
         import asyncio
 
@@ -217,7 +220,11 @@ class EmbeddingService:
             if norm > 0:
                 embedding = embedding / norm
             embeddings.append(embedding)
-
+        if len(valid_positions) != original_count:
+            aligned = [np.zeros(dim, dtype=np.float32) for _ in range(original_count)]
+            for position, vector in zip(valid_positions, embeddings):
+                aligned[position] = vector
+            return aligned
         return embeddings
 
 

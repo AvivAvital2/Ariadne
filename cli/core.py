@@ -519,7 +519,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
                 )
                 return 1
             console.print(f'About to delete: [bold]{doc.title}[/bold]')
-            if not console.input('Are you sure? [y/N] ').lower().startswith('y'):
+            if not console.input('Are you sure? \\[y/N] ').lower().startswith('y'):
                 console.print('[yellow]Cancelled.[/yellow]')
                 return 0
 
@@ -675,7 +675,7 @@ def cmd_build_matrix(args: argparse.Namespace) -> int:
         artifact = matrix_dir / ARTIFACT_NAME
         if getattr(args, 'recreate', False) and artifact.exists():
             if not getattr(args, 'yes', False) and not console.input(
-                f'Remove the existing embedding matrix at {artifact} and rebuild it? [y/N] '
+                f'Remove the existing embedding matrix at {artifact} and rebuild it? \\[y/N] '
             ).strip().lower().startswith('y'):
                 console.print('[yellow]Cancelled — existing matrix left in place.[/yellow]')
                 return 0

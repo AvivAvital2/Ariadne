@@ -24,6 +24,7 @@ from unittest import mock
 
 import numpy as np
 import pytest
+from rich.text import Text
 
 import config as config_module
 import cli.main as cli_main
@@ -572,13 +573,16 @@ def test_delete_confirm_yes_removes(set_config, srcdir, tmp_path):
     doc = _add(lib, title='Confirmed', source='src1')
     db = lib.path
     lib.close()
-    with mock.patch.object(core_console, 'input', return_value='y'):
+    with mock.patch.object(core_console, 'input', return_value='y') as prompt:
         rc = cmd_delete(_ns(db=db, id=doc.id, source='src1', force=False))
     assert rc == 0
     lib2 = _reopen(db)
     gone = lib2.get_document(doc.id)
     lib2.close()
     assert gone is None
+    # The y/N hint must survive Rich markup rendering — an unescaped
+    # '[y/N]' parses as a markup tag and vanishes from the terminal.
+    assert '[y/N]' in Text.from_markup(prompt.call_args[0][0]).plain
 
 
 def test_delete_confirm_no_keeps_document(set_config, srcdir, tmp_path, capsys):
@@ -883,11 +887,14 @@ def test_build_matrix_recreate_confirm_no_keeps_artifact(tmp_path, capsys):
     lib2 = _reopen(db)
     artifact = matrix_dir_for(lib2) / ARTIFACT_NAME
     lib2.close()
-    with mock.patch.object(core_console, 'input', return_value='n'):
+    with mock.patch.object(core_console, 'input', return_value='n') as prompt:
         rc = cmd_build_matrix(_ns(db=db, recreate=True))
     assert rc == 0
     assert 'Cancelled' in _out(capsys)
     assert artifact.exists()  # declining recreate leaves the artifact in place
+    # The y/N hint must survive Rich markup rendering (same swallowed-tag
+    # bug as the embedding proceed prompt).
+    assert '[y/N]' in Text.from_markup(prompt.call_args[0][0]).plain
 
 
 def test_build_matrix_recreate_yes(tmp_path, capsys):
