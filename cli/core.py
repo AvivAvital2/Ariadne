@@ -24,10 +24,12 @@ console = Console()
 EMBED_TOKENS_PER_DOC = 500
 EMBED_COST_PER_1M_TOKENS = 0.13
 EMBED_CONFIRM_THRESHOLD = 1000
-# Rough embedding throughput (docs/sec) with the default batch size +
-# concurrency, used only for the up-front time estimate. The live progress
-# bar's ETA refines this from the actual rate once the run starts.
-EMBED_DOCS_PER_SEC = 100
+# Up-front live-ETA throughput range (docs/sec). FAST is the ideal local
+# rate; SLOW is the floor observed under sustained OpenAI rate limiting
+# (a real 64k-doc run held ~10 docs/s). The live progress bar's ETA
+# refines from the actual rate once the run starts.
+EMBED_DOCS_PER_SEC_FAST = 100
+EMBED_DOCS_PER_SEC_SLOW = 10
 
 
 def get_library(db_path: Path | None = None) -> 'Library':
@@ -730,6 +732,18 @@ def _prompt_embedding_mode(n: int, live_cost: float, live_eta: str,
     )
 
 
+def _live_eta_range(n: int) -> str:
+    """Up-front live-run ETA as a fast–slow range.
+
+    Real throughput varies ~10× with OpenAI rate limiting, so a single
+    point at the ideal rate over-promises. Collapses to one duration
+    when both bounds format the same (tiny runs)."""
+    from cli.progress import format_duration
+    fast = format_duration(n / EMBED_DOCS_PER_SEC_FAST)
+    slow = format_duration(n / EMBED_DOCS_PER_SEC_SLOW)
+    return f'~{fast}' if fast == slow else f'~{fast}–{slow}'
+
+
 async def _rebuild_embeddings(
     library: 'Library', only_missing: bool = False, assume_yes: bool = False,
     use_batch: bool | None = None,
@@ -739,12 +753,12 @@ async def _rebuild_embeddings(
     ``use_batch``: True routes through OpenAI's Batch API (~50% of the
     live price, minutes-to-hours latency), False embeds live, and None
     asks on large interactive runs — otherwise defaulting to live."""
-    from cli.progress import format_duration, make_progress
+    from cli.progress import make_progress
 
     n = library.count_missing_embeddings() if only_missing else library.count_documents()
     tokens = n * EMBED_TOKENS_PER_DOC
     live_cost = tokens / 1_000_000 * EMBED_COST_PER_1M_TOKENS
-    live_eta = f'~{format_duration(n / EMBED_DOCS_PER_SEC)}'
+    live_eta = _live_eta_range(n)
     if use_batch is None:
         if not assume_yes and n >= EMBED_CONFIRM_THRESHOLD:
             use_batch = _prompt_embedding_mode(
@@ -768,7 +782,7 @@ async def _rebuild_embeddings(
         console.print('Nothing to embed - already up to date.')
         return None
     if not assume_yes and n >= EMBED_CONFIRM_THRESHOLD:
-        prompt = f'Proceed embedding {n} documents (~${cost:.2f}, {eta})? [y/N] '
+        prompt = f'Proceed embedding {n} documents (~${cost:.2f}, {eta})? \\[y/N] '
         if not console.input(prompt).strip().lower().startswith('y'):
             console.print('Aborted - nothing embedded.')
             return None

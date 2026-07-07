@@ -26,11 +26,67 @@ import argparse
 
 import pytest
 
+import cli.onboard as onboard
+
 
 @pytest.fixture(autouse=True)
 def _test_config(monkeypatch, tmp_path):
     from tests._scoped_config_fixture import install_test_config
     install_test_config(monkeypatch, tmp_path, 'test')
+
+
+class _EnterOnlyStdin:
+    """Fake TTY stdin whose first keypress is Enter (confirm)."""
+
+    def fileno(self) -> int:
+        return 0
+
+    def read(self, n: int) -> str:
+        return '\r'
+
+
+class _DummyLive:
+    """Stand-in for rich.live.Live — the transient picker UI that erases
+    itself; anything only rendered through it does NOT persist on screen."""
+
+    def __init__(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def update(self, *a, **k):
+        pass
+
+
+def test_arrow_select_echo_keeps_every_option_visible(monkeypatch):
+    """After the transient picker closes, the scrollback must retain ALL
+    options with their descriptions (prices live there), chosen one marked —
+    otherwise the user never sees what the un-chosen mode would have cost."""
+    lines: list[str] = []
+    monkeypatch.setattr(
+        onboard.console, 'print',
+        lambda *a, **k: lines.append(' '.join(str(x) for x in a)),
+    )
+    monkeypatch.setattr('rich.live.Live', _DummyLive)
+    monkeypatch.setattr('sys.stdin', _EnterOnlyStdin())
+    monkeypatch.setattr('termios.tcgetattr', lambda fd: None)
+    monkeypatch.setattr('termios.tcsetattr', lambda fd, when, attrs: None)
+    monkeypatch.setattr('tty.setcbreak', lambda fd: None)
+
+    value = onboard._arrow_key_select(
+        [('live', 'Live', '~$8.00, ~1m–10m — interactive speed'),
+         ('batch', 'Batch', '~$4.00 (about half price), finishes within 24h')],
+        title='Embedding mode (9,999 documents)',
+    )
+
+    assert value == 'live'
+    blob = '\n'.join(lines)
+    assert '$8.00' in blob and '$4.00' in blob
+    assert '▶' in blob
 
 
 @pytest.mark.asyncio

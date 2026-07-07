@@ -364,7 +364,7 @@ def _arrow_key_select(
         for i, (_, label, desc) in enumerate(options):
             cursor = '▶ ' if i == idx else '  '
             row = Text(cursor + label, style='cyan' if i == idx else '')
-            row.append(f'  — {desc}', style='dim')
+            row.append(f'  — {desc}')
             body.append(row)
             body.append('\n')
         return body
@@ -401,10 +401,12 @@ def _arrow_key_select(
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
 
     chosen = options[idx]
-    console.print(
-        f'[bold]{title}[/bold]: [cyan]{chosen[1].lower()}[/cyan] '
-        f'[dim]— {chosen[2]}[/dim]',
-    )
+    console.print(f'[bold]{title}[/bold]')
+    for i, (_, label, desc) in enumerate(options):
+        if i == idx:
+            console.print(f'  ▶ [cyan]{label.lower()}[/cyan] — {desc}')
+        else:
+            console.print(f'    {label.lower()} — {desc}')
     return chosen[0]
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from rich.text import Text
 
 import cli.core as core
 from cli.main import create_parser
@@ -57,6 +58,9 @@ async def test_estimate_is_printed(printed, embed_recorder, tmp_path):
         lib.close()
     blob = '\n'.join(printed)
     assert '3' in blob and '$' in blob, 'estimate with doc count and cost must be printed'
+    # A tiny run where fast and slow bounds format identically must collapse
+    # to a single duration, not print a degenerate '~0s–0s' range.
+    assert '–' not in blob
 
 
 async def test_declined_large_run_skips_embedding(printed, embed_recorder, monkeypatch, tmp_path):
@@ -81,13 +85,24 @@ async def test_zero_docs_skips_embedding(printed, embed_recorder, tmp_path):
 
 async def test_confirmed_large_run_embeds(printed, embed_recorder, monkeypatch, tmp_path):
     monkeypatch.setattr(core, 'EMBED_CONFIRM_THRESHOLD', 1)
-    monkeypatch.setattr(core.console, 'input', lambda *a, **k: 'y')
+    prompts: list[str] = []
+
+    def _input(prompt='', *a, **k):
+        prompts.append(prompt)
+        return 'y'
+
+    monkeypatch.setattr(core.console, 'input', _input)
     lib = _seed(tmp_path, 3)
     try:
         await core._rebuild_embeddings(lib, only_missing=False, assume_yes=False, use_batch=False)
     finally:
         lib.close()
     assert embed_recorder['called'] is True
+    # The y/N hint must survive Rich markup rendering — an unescaped
+    # '[y/N]' parses as a markup tag and vanishes from the terminal,
+    # leaving the user guessing what to type.
+    rendered = Text.from_markup(prompts[0]).plain
+    assert '[y/N]' in rendered
 
 
 async def test_assume_yes_skips_prompt(printed, embed_recorder, monkeypatch, tmp_path):
@@ -252,10 +267,15 @@ def test_cmd_import_threads_batch(monkeypatch, tmp_path):
 async def test_no_flag_large_run_mode_prompt_batch(
         printed, embed_recorder, batch_recorder, monkeypatch, tmp_path):
     monkeypatch.setattr(core, 'EMBED_CONFIRM_THRESHOLD', 1)
-    monkeypatch.setattr(core, '_prompt_embedding_mode',
-                        lambda n, live_cost, live_eta, batch_cost: 'batch')
+    seen: dict[str, object] = {}
+
+    def fake_mode_prompt(n, live_cost, live_eta, batch_cost):
+        seen['live_eta'] = live_eta
+        return 'batch'
+
+    monkeypatch.setattr(core, '_prompt_embedding_mode', fake_mode_prompt)
     monkeypatch.setattr(core.console, 'input', lambda *a, **k: 'y')
-    lib = _seed(tmp_path, 3)
+    lib = _seed(tmp_path, 30)
     try:
         await core._rebuild_embeddings(
             lib, only_missing=False, assume_yes=False, use_batch=None)
@@ -264,6 +284,10 @@ async def test_no_flag_large_run_mode_prompt_batch(
     assert batch_recorder['called'] is True
     assert embed_recorder['called'] is False
     assert 'Batch API' in '\n'.join(printed)
+    # The up-front live ETA must bracket real throughput as a fast–slow
+    # range (sustained rate limiting slows runs ~10×); a single-point
+    # promise at the ideal rate misled a real 64k-doc run by an hour+.
+    assert seen['live_eta'] == '~0s–3s'
 
 
 async def test_no_flag_large_run_mode_prompt_live(
