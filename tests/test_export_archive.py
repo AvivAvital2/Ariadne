@@ -11,6 +11,9 @@ Slices (evolving TDD):
      skip), export-root discovery, delegation to import_from_markdown.
   5-6. Archive delta parity — re-import is a no-op; exporter meta files
      (README/INDEX/CLAUDE) never import as documents.
+  7. Scoped archive round-trip (design intent: export-scoping fix) — a
+     source-scoped archive plants exactly that source's docs into a fresh
+     destination; foreign and unattributable docs never travel.
 
 New surface under test is accessed as an attribute (exporter.export_archive,
 export.import_from_archive) so each red phase fails at call time instead of
@@ -35,13 +38,13 @@ def _make_library(db_path):
         content_type='explanation', title='First Topic',
         content='How the first thing works.',
         source_files=['pkg/first.py'], embedding=np.zeros(8, dtype=np.float32),
-        metadata={'topic': 'first'},
+        metadata={'topic': 'first'}, source_name='src1',
     )
     lib.add_document(
         content_type='architecture', title='Second Topic',
         content='Why the second thing is shaped this way.',
         source_files=['pkg/second.py'], embedding=np.zeros(8, dtype=np.float32),
-        metadata={'topic': 'second'},
+        metadata={'topic': 'second'}, source_name='src1',
     )
     return lib
 
@@ -253,3 +256,44 @@ class TestArchiveDeltaParity:
         second_after = next(
             d for d in dst.list_documents() if d.title == 'Second Topic')
         assert second_after.updated_at == second_before.updated_at
+
+
+class TestScopedArchiveRoundTrip:
+    def test_scoped_archive_plants_only_the_sources_docs(self, tmp_path):
+        """Integration of the export-scoping fix (design intent): shipping
+        a src1 archive to a fresh destination must plant exactly src1's
+        corpus — never foreign sources, never unattributable docs — and a
+        re-import of the same archive is a clean delta no-op."""
+        src1_dir = tmp_path / 'src1'
+        src1_dir.mkdir()
+        lib = Library(tmp_path / 'src.db')
+        keep_named = lib.add_document(
+            content_type='explanation', title='Src1 Doc',
+            content='src1 body.', source_files=[],
+            embedding=np.zeros(8, dtype=np.float32), source_name='src1')
+        keep_legacy = lib.add_document(
+            content_type='explanation', title='Legacy Under Src1',
+            content='legacy body.', source_files=[str(src1_dir / 'm.py')],
+            embedding=np.zeros(8, dtype=np.float32))
+        lib.add_document(
+            content_type='explanation', title='Foreign Doc',
+            content='other source.', source_files=[],
+            embedding=np.zeros(8, dtype=np.float32), source_name='src2')
+        lib.add_document(
+            content_type='explanation', title='Unattributable Doc',
+            content='no home.', source_files=[],
+            embedding=np.zeros(8, dtype=np.float32))
+
+        archive = tmp_path / 'src1.zip'
+        LibraryExporter(lib).export_archive(
+            archive, source_name='src1', source_path=src1_dir)
+
+        dst = Library(tmp_path / 'dst.db')
+        assert export.import_from_archive(dst, archive) == 2
+        planted = {d.id for d in dst.list_documents()}
+        assert planted == {keep_named.id, keep_legacy.id}
+        # Both docs arrive attributed, ready for scoped use on the
+        # destination (whose filesystem knows nothing of src1_dir).
+        assert dst.get_document(keep_named.id).source_name == 'src1'
+        assert dst.get_document(keep_legacy.id).source_name == 'src1'
+        assert export.import_from_archive(dst, archive) == 0

@@ -49,8 +49,13 @@ def _slugify(text: str) -> str:
     return slug[:50]  # Limit length
 
 
-def _document_to_markdown(doc: Document, config: ExportConfig) -> str:
-    """Convert a document to markdown format."""
+def _document_to_markdown(doc: Document, config: ExportConfig,
+                          source_name: str | None = None) -> str:
+    """Convert a document to markdown format.
+
+    ``source_name`` is the effective attribution to serialize (an
+    export-scope decision); it defaults to the doc's own.
+    """
     parts: list[str] = []
 
     if config.include_frontmatter:
@@ -66,9 +71,17 @@ def _document_to_markdown(doc: Document, config: ExportConfig) -> str:
             frontmatter_lines.append('source_files:')
             for sf in doc.source_files:
                 frontmatter_lines.append(f'  - {sf}')
-        if doc.metadata:
+        # Serialize the EFFECTIVE attribution: an explicit export scope (the
+        # archive's selection decision) beats the column, which beats legacy
+        # metadata. Absent attribution is never invented.
+        metadata = dict(doc.metadata)
+        effective_source = (source_name or doc.source_name
+                            or metadata.get('source_name'))
+        if effective_source:
+            metadata['source_name'] = effective_source
+        if metadata:
             frontmatter_lines.append('metadata:')
-            for key, value in doc.metadata.items():
+            for key, value in metadata.items():
                 if isinstance(value, str):
                     frontmatter_lines.append(f'  {key}: "{value}"')
                 else:
@@ -116,6 +129,40 @@ def _is_ariadne_archive(path: Path) -> bool:
         return zf.comment == ARCHIVE_COMMENT
 
 
+def _select_docs_for_source(
+    docs: list[Document],
+    source_name: str | None,
+    source_path: Path | None,
+) -> list[Document]:
+    """Documents belonging to ``source_name``'s archive.
+
+    Explicit ``metadata.source_name`` is authoritative in both directions:
+    a doc named for the source is in even if its files live elsewhere, and
+    a doc named for another source is out even if its files overlap.
+    Unattributed docs (no ``source_name``) fall back to having an absolute
+    ``source_files`` entry under ``source_path``; relative or missing paths
+    are unattributable. ``source_name=None`` selects the whole library
+    (explicit no-scope mode).
+    """
+    if source_name is None:
+        return list(docs)
+    selected: list[Document] = []
+    for doc in docs:
+        owner = doc.source_name or doc.metadata.get('source_name')
+        if owner is not None:
+            if owner == source_name:
+                selected.append(doc)
+            continue
+        if source_path is None:
+            continue
+        if any(
+            Path(sf).is_absolute() and Path(sf).is_relative_to(source_path)
+            for sf in doc.source_files or []
+        ):
+            selected.append(doc)
+    return selected
+
+
 class LibraryExporter:
     """Export library contents to markdown files.
 
@@ -143,12 +190,18 @@ class LibraryExporter:
         self.library = library
         self.config = config or ExportConfig()
 
-    def export_document(self, doc: Document, output_dir: Path) -> Path:
+    def export_document(self, doc: Document, output_dir: Path,
+                            used: set[Path] | None = None,
+                            source_name: str | None = None) -> Path:
         """Export a single document to markdown.
 
         Args:
             doc: The document to export.
             output_dir: Base output directory.
+            used: Paths already written this run (threaded by
+                export_all) — colliding filenames get an id suffix.
+            source_name: Effective attribution to serialize into the
+                frontmatter; defaults to the doc's own.
 
         Returns:
             Path to the created file.
@@ -161,13 +214,17 @@ class LibraryExporter:
             dir_path = output_dir
 
         dir_path.mkdir(parents=True, exist_ok=True)
-
-        # Create filename from title
-        filename = f'{_slugify(doc.title)}.md'
-        file_path = dir_path / filename
-
-        # Convert to markdown
-        markdown = _document_to_markdown(doc, self.config)
+        # Filename from the title; when export_all threads a ``used`` set,
+        # colliding names get an id suffix instead of silently overwriting
+        # the earlier doc (same-titled docs are common across a catalog).
+        file_path = dir_path / f'{_slugify(doc.title)}.md'
+        if used is not None:
+            suffix = 8
+            while file_path in used:
+                file_path = dir_path / f'{_slugify(doc.title)}-{doc.id[:suffix]}.md'
+                suffix += 4
+            used.add(file_path)
+        markdown = _document_to_markdown(doc, self.config, source_name=source_name)
 
         # Write file
         file_path.write_text(markdown)
@@ -193,27 +250,27 @@ class LibraryExporter:
             List of paths to created files.
         """
         output_dir.mkdir(parents=True, exist_ok=True)
-
-        docs = self.library.list_documents()
+        # file_index docs are derived index data, not authored knowledge — never
+        # export them. They're regenerated from the element docs on import (see
+        # catalog_writer.regenerate_file_index_docs).
+        docs = [
+            doc for doc in _select_docs_for_source(
+                self.library.list_documents(), source_name, source_path)
+            if doc.metadata.get('kind') != CATALOG_KIND_FILE_INDEX
+        ]
         paths: list[Path] = []
+        used: set[Path] = set()
 
-        for doc in docs:
-            # file_index docs are derived index data, not authored knowledge —
-            # never export them. They're regenerated from the element docs on
-            # import (see catalog_writer.regenerate_file_index_docs).
-            if doc.metadata.get('kind') == CATALOG_KIND_FILE_INDEX:
-                continue
-            path = self.export_document(doc, output_dir)
+        for doc in sorted(docs, key=lambda d: d.id):
+            path = self.export_document(doc, output_dir, used=used, source_name=source_name)
             paths.append(path)
-
-        # Generate manifest
-        self.generate_manifest(output_dir)
-
-        # Generate README
-        self.generate_readme(output_dir)
-
-        # Generate INDEX.md (meta document, always visible)
-        self.generate_index(output_dir)
+        
+        # The meta files must describe exactly the exported set.
+        self.generate_manifest(output_dir, docs)
+        
+        self.generate_readme(output_dir, docs)
+        
+        self.generate_index(output_dir, docs)
 
         # Generate CLAUDE.md (merging with project instructions)
         if source_name:
@@ -274,7 +331,7 @@ class LibraryExporter:
                         zf.write(file, file.relative_to(Path(tmp)).as_posix())
         return archive_path
 
-    def generate_manifest(self, output_dir: Path) -> Path:
+    def generate_manifest(self, output_dir: Path, docs: list[Document]) -> Path:
         """Generate a YAML manifest of all documents.
 
         Args:
@@ -283,7 +340,6 @@ class LibraryExporter:
         Returns:
             Path to the manifest file.
         """
-        docs = self.library.list_documents()
 
         # Group by content type
         by_type: dict[str, list[Document]] = {}
@@ -339,7 +395,7 @@ class LibraryExporter:
 
         return manifest_path
 
-    def generate_readme(self, output_dir: Path) -> Path:
+    def generate_readme(self, output_dir: Path, docs: list[Document]) -> Path:
         """Generate a README file for the exported library.
 
         Args:
@@ -348,7 +404,6 @@ class LibraryExporter:
         Returns:
             Path to the README file.
         """
-        docs = self.library.list_documents()
 
         # Count by type
         counts: dict[str, int] = {}
@@ -401,7 +456,7 @@ class LibraryExporter:
 
         return readme_path
 
-    def generate_index(self, output_dir: Path) -> Path:
+    def generate_index(self, output_dir: Path, docs: list[Document]) -> Path:
         """Generate INDEX.md with a complete document listing.
 
         This is a meta document that lists all available documents including
@@ -414,7 +469,6 @@ class LibraryExporter:
         Returns:
             Path to the INDEX.md file.
         """
-        docs = self.library.list_documents()
 
         # Count by type and status
         by_type: dict[str, list[Document]] = {}
@@ -698,12 +752,18 @@ def _is_unchanged(
     with the title H1 normalized away on both sides, so databases whose
     content was round-tripped before the H1 fix still match their exports.
     """
+    stored_metadata = dict(existing.metadata)
+    if existing.source_name:
+        # The column and its serialized form must compare equal — an export
+        # stamps the effective attribution into the wire metadata, and that
+        # must not read as a change on re-import into the source db.
+        stored_metadata['source_name'] = existing.source_name
     return (
         existing.title == title
         and _strip_title_h1(existing.content.strip(), title)
         == _strip_title_h1(body.strip(), title)
         and list(existing.source_files) == list(source_files)
-        and dict(existing.metadata) == metadata
+        and stored_metadata == metadata
     )
 
 
@@ -849,7 +909,6 @@ def import_from_markdown(
             existing, final_title, body, source_files, metadata,
         ):
             continue
-
         library.add_document(
             content_type=content_type,
             title=final_title,
@@ -857,6 +916,7 @@ def import_from_markdown(
             source_files=source_files,
             doc_id=doc_id,
             metadata=metadata,
+            source_name=metadata.get('source_name'),
         )
 
         count += 1

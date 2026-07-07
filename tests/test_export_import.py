@@ -5,6 +5,17 @@ Slices (evolving TDD):
   2. Import stops prepending the exported H1 to stored content (root fix).
   3. _is_unchanged — field-level equality between an incoming doc and a stored one.
   4. import_from_markdown skips already-identical docs (delta import).
+  5. Scoped export — export_all(source_name=...) selects only that source's
+     docs (explicit source_name wins both ways; unattributed docs fall back
+     to absolute source_files under source_path); manifest/README/INDEX
+     describe exactly the scoped set.
+  6. Collision-proof filenames — same-titled docs never overwrite each
+     other: deterministic id-sorted order, first keeps the clean slug, the
+     rest get an id suffix; re-export is filename-stable.
+  7. Attribution round-trip — the wire format carries the EFFECTIVE
+     attribution (export scope > source_name column > legacy metadata,
+     never invented); import restores the column, so a scoped re-export
+     from the destination still selects the docs.
 
 Helpers under test are accessed as module attributes (export._name) so the
 red phase fails at call time instead of erroring at collection.
@@ -116,6 +127,29 @@ class TestIsUnchanged:
         import export
         assert not export._is_unchanged(
             stored, 'My Doc', 'Body line.\n\nSecond.', ['a.py'], {'topic': 'y'})
+
+    def test_column_attribution_equals_its_serialized_form(self, tmp_path):
+        """A column-attributed doc must compare unchanged against its own
+        export, whose wire metadata carries the stamped source_name —
+        otherwise every re-import into the source db churns."""
+        import numpy as np
+        import export
+        from library import Library
+
+        lib = Library(tmp_path / 'col.db')
+        stored = lib.add_document(
+            content_type='explanation', title='My Doc',
+            content='Body line.', source_files=['a.py'],
+            embedding=np.zeros(8, dtype=np.float32),
+            metadata={'topic': 'x'}, source_name='src1',
+        )
+        assert export._is_unchanged(
+            stored, 'My Doc', 'Body line.', ['a.py'],
+            {'topic': 'x', 'source_name': 'src1'})
+        # A genuinely different attribution is still a change.
+        assert not export._is_unchanged(
+            stored, 'My Doc', 'Body line.', ['a.py'],
+            {'topic': 'x', 'source_name': 'src2'})
 
 
 class TestDeltaImport:
@@ -253,19 +287,22 @@ class TestExportAll:
         lib.add_document(
             content_type='explanation', title='How Parsing Works',
             content='Parsing body.', source_files=['p.py'],
-            embedding=np.zeros(4, dtype=np.float32), metadata={'n': 1})
+            embedding=np.zeros(4, dtype=np.float32),
+            metadata={'n': 1, 'source_name': 'proj'})
         lib.add_document(
             content_type='architecture', title='Storage Design',
             content='Design body.', source_files=[],
-            embedding=np.zeros(4, dtype=np.float32), metadata={})
+            embedding=np.zeros(4, dtype=np.float32),
+            metadata={'source_name': 'proj'})
         lib.add_document(
             content_type='finding', title='Perf Insight',
             content='Finding body.', source_files=['f.py'],
-            embedding=np.zeros(4, dtype=np.float32), metadata={'kind': 'x'})
+            embedding=np.zeros(4, dtype=np.float32),
+            metadata={'kind': 'x', 'source_name': 'proj'})
         lib.add_document(
             content_type='catalog', title='files idx', content='idx',
             source_files=[], embedding=np.zeros(4, dtype=np.float32),
-            metadata={'kind': CATALOG_KIND_FILE_INDEX})
+            metadata={'kind': CATALOG_KIND_FILE_INDEX, 'source_name': 'proj'})
         return lib
 
     def test_export_all_generates_meta_files_and_skips_file_index(self, populated, tmp_path):
@@ -298,6 +335,190 @@ class TestExportAll:
         assert import_from_markdown(dst, out) == 3
         # second pass over the same export: pure delta, nothing written
         assert import_from_markdown(dst, out) == 0
+
+    def test_scoped_export_selects_only_the_named_sources_docs(self, tmp_path):
+        import numpy as np
+        from export import LibraryExporter
+        from library import Library
+
+        src1_dir = tmp_path / 'src1'
+        src1_dir.mkdir()
+        src2_dir = tmp_path / 'src2'
+        src2_dir.mkdir()
+
+        def _zeros():
+            return np.zeros(4, dtype=np.float32)
+
+        lib = Library(tmp_path / 'scoped.db')
+        # Explicit attribution is authoritative in BOTH directions and lives
+        # in TWO channels — the source_name column (modern) and the metadata
+        # key (legacy): a doc named src1 is in even when its files live
+        # under src2, and a doc named src2 is out even when its files live
+        # under src1.
+        lib.add_document(
+            content_type='explanation', title='Named Src1', content='b',
+            source_files=[str(src2_dir / 'x.py')], embedding=_zeros(),
+            source_name='src1')
+        lib.add_document(
+            content_type='explanation', title='Named Src2', content='b',
+            source_files=[str(src1_dir / 'y.py')], embedding=_zeros(),
+            source_name='src2')
+        lib.add_document(
+            content_type='explanation', title='Meta Src1', content='b',
+            source_files=[], embedding=_zeros(),
+            metadata={'source_name': 'src1'})
+        lib.add_document(
+            content_type='explanation', title='Meta Src2', content='b',
+            source_files=[str(src1_dir / 'z.py')], embedding=_zeros(),
+            metadata={'source_name': 'src2'})
+        # Unattributed docs fall back to absolute source_files under the
+        # source path; relative or missing files are unattributable.
+        lib.add_document(
+            content_type='explanation', title='Legacy Under Src1', content='b',
+            source_files=[str(src1_dir / 'c.py')], embedding=_zeros(),
+            metadata={})
+        lib.add_document(
+            content_type='explanation', title='Legacy Elsewhere', content='b',
+            source_files=[str(tmp_path / 'other' / 'd.py')],
+            embedding=_zeros(), metadata={})
+        lib.add_document(
+            content_type='explanation', title='Legacy Relative', content='b',
+            source_files=['rel.py'], embedding=_zeros(), metadata={})
+        lib.add_document(
+            content_type='explanation', title='Legacy No Files', content='b',
+            source_files=[], embedding=_zeros(), metadata={})
+
+        out = tmp_path / 'docs'
+        LibraryExporter(lib).export_all(
+            out, source_name='src1', source_path=src1_dir)
+
+        exported = {p.stem for p in out.rglob('*.md')
+                    if p.name not in ('README.md', 'INDEX.md', 'CLAUDE.md')}
+        assert exported == {'named-src1', 'meta-src1', 'legacy-under-src1'}
+        # Every meta surface must describe exactly the scoped set: manifest
+        # and INDEX list titles; README carries the total count.
+        for meta_name in ('manifest.yaml', 'INDEX.md'):
+            text = (out / meta_name).read_text()
+            assert 'Named Src1' in text and 'Legacy Under Src1' in text
+            assert 'Named Src2' not in text and 'Meta Src2' not in text
+            assert 'Legacy Elsewhere' not in text
+        assert 'Total documents: 3' in (out / 'README.md').read_text()
+
+        # Without a source_path there is no fallback: named docs only.
+        out2 = tmp_path / 'docs-no-path'
+        LibraryExporter(lib).export_all(out2, source_name='src1')
+        exported2 = {p.stem for p in out2.rglob('*.md')
+                     if p.name not in ('README.md', 'INDEX.md', 'CLAUDE.md')}
+        assert exported2 == {'named-src1', 'meta-src1'}
+
+    def test_colliding_titles_all_export_without_loss(self, tmp_path):
+        import numpy as np
+        from export import LibraryExporter, import_from_markdown
+        from library import Library
+
+        lib = Library(tmp_path / 'collide.db')
+        ids = [
+            lib.add_document(
+                content_type='explanation', title='Shared Title',
+                content=f'body variant {i}', source_files=[],
+                embedding=np.zeros(4, dtype=np.float32),
+                source_name='src1').id
+            for i in range(3)
+        ]
+        out = tmp_path / 'docs'
+        LibraryExporter(lib).export_all(out, source_name='src1')
+        md = sorted(p for p in out.rglob('*.md')
+                    if p.name not in ('README.md', 'INDEX.md', 'CLAUDE.md'))
+        assert len(md) == 3, 'colliding titles must never overwrite silently'
+        # Deterministic naming: the id-sorted winner keeps the clean slug,
+        # the rest carry an id suffix.
+        assert {p.name for p in md} == {'shared-title.md'} | {
+            f'shared-title-{i[:8]}.md' for i in sorted(ids)[1:]}
+        # Filenames are stable across re-export of the same doc set.
+        out2 = tmp_path / 'docs2'
+        LibraryExporter(lib).export_all(out2, source_name='src1')
+        assert ({p.name for p in out2.rglob('*.md')}
+                == {p.name for p in out.rglob('*.md')})
+        # Nothing is lost end-to-end: all three docs import distinctly.
+        dst = Library(tmp_path / 'dst.db')
+        assert import_from_markdown(dst, out) == 3
+        assert {d.id for d in dst.list_documents()} == set(ids)
+
+    def test_attribution_survives_the_round_trip(self, tmp_path):
+        import numpy as np
+        from export import LibraryExporter, import_from_markdown
+        from library import Library
+
+        src1_dir = tmp_path / 'src1'
+        src1_dir.mkdir()
+
+        def _zeros():
+            return np.zeros(4, dtype=np.float32)
+
+        meta_files = ('README.md', 'INDEX.md', 'CLAUDE.md')
+        lib = Library(tmp_path / 'attr.db')
+        col = lib.add_document(
+            content_type='explanation', title='Column Attributed',
+            content='b', source_files=[], embedding=_zeros(),
+            source_name='src1')
+        lib.add_document(
+            content_type='explanation', title='Divergent Channels',
+            content='b', source_files=[], embedding=_zeros(),
+            source_name='src1', metadata={'source_name': 'src2'})
+        legacy = lib.add_document(
+            content_type='explanation', title='Legacy Under Src1',
+            content='b', source_files=[str(src1_dir / 'c.py')],
+            embedding=_zeros())
+        lib.add_document(
+            content_type='explanation', title='Plain Unattributed',
+            content='b', source_files=[], embedding=_zeros())
+
+        # A scoped export serializes the EFFECTIVE attribution: the column
+        # beats a divergent legacy metadata value, and a path-matched
+        # legacy doc is stamped with the scope it was selected for (its
+        # absolute paths mean nothing on the destination machine).
+        out = tmp_path / 'docs'
+        LibraryExporter(lib).export_all(
+            out, source_name='src1', source_path=src1_dir)
+        texts = {p.stem: p.read_text() for p in out.rglob('*.md')
+                 if p.name not in meta_files}
+        assert set(texts) == {
+            'column-attributed', 'divergent-channels', 'legacy-under-src1'}
+        for stem in texts:
+            assert 'source_name: "src1"' in texts[stem]
+
+        # Import into a fresh destination restores the attribution column,
+        # and a scoped re-export from the destination (which has no source
+        # paths to fall back on) still selects every doc.
+        dst = Library(tmp_path / 'dst.db')
+        assert import_from_markdown(dst, out) == 3
+        assert dst.get_document(col.id).source_name == 'src1'
+        assert dst.get_document(legacy.id).source_name == 'src1'
+        out2 = tmp_path / 'docs2'
+        LibraryExporter(dst).export_all(out2, source_name='src1')
+        stems2 = {p.stem for p in out2.rglob('*.md')
+                  if p.name not in meta_files}
+        assert stems2 == {
+            'column-attributed', 'divergent-channels', 'legacy-under-src1'}
+        # Re-import of the same tree is a clean delta no-op.
+        assert import_from_markdown(dst, out) == 0
+
+        # An unscoped export serializes existing attribution but never
+        # invents one for unattributed docs.
+        out3 = tmp_path / 'docs3'
+        LibraryExporter(lib).export_all(out3)
+        texts3 = {p.stem: p.read_text() for p in out3.rglob('*.md')
+                  if p.name not in meta_files}
+        assert 'source_name: "src1"' in texts3['column-attributed']
+        assert 'source_name' not in texts3['plain-unattributed']
+        assert 'source_name' not in texts3['legacy-under-src1']
+
+        # Re-importing the scoped tree into the SOURCE db converges: only
+        # the path-fallback doc gets its stamped attribution written back
+        # (once), column-attributed docs never churn, and the second pass
+        # is a clean no-op.
+        assert import_from_markdown(lib, out) == 1
+        assert import_from_markdown(lib, out) == 0
 
     def test_export_document_bare_config(self, populated, tmp_path):
         from export import ExportConfig, LibraryExporter
