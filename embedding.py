@@ -102,10 +102,7 @@ class EmbeddingService:
         if self._client is None:
             self._client = httpx.AsyncClient(
                 base_url=self.config.get_base_url(),
-                headers={
-                    'Authorization': f'Bearer {self.config.get_api_key()}',
-                    'Content-Type': 'application/json',
-                },
+                headers={'Authorization': f'Bearer {self.config.get_api_key()}'},
                 timeout=60.0,
             )
         return self._client

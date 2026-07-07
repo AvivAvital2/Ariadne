@@ -327,3 +327,46 @@ class TestWriterBatchRebuild:
 
         assert count == 1
         assert [r.custom_id for r in strategy.requests] == ['doc:0']
+
+
+async def test_file_upload_reaches_the_wire_as_multipart(monkeypatch):
+    """Regression (415 on first live run): the real EmbeddingService client
+    pinned a client-level 'Content-Type: application/json', which httpx
+    lets override the multipart encoding of the /files upload — OpenAI
+    rejected the JSONL upload with 415 Unsupported Media Type. Drive the
+    REAL client construction (mock transport only) and assert the wire
+    request is multipart with the purpose field and the JSONL part."""
+    import httpx
+
+    captured = {}
+
+    def handler(request):
+        if request.url.path.endswith('/files'):
+            captured['content_type'] = request.headers.get('content-type', '')
+            captured['body'] = request.read()
+            return httpx.Response(200, json={'id': 'file_in_1'})
+        if request.url.path.endswith('/batches'):
+            return httpx.Response(
+                200, json={'id': 'batch_emb_1', 'status': 'validating'})
+        raise AssertionError(f'unexpected {request.url.path}')
+
+    real_async_client = httpx.AsyncClient
+
+    def with_mock_transport(**kwargs):
+        return real_async_client(
+            transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(httpx, 'AsyncClient', with_mock_transport)
+    service = EmbeddingService(EmbeddingConfig(
+        api_key='test-key', model='emb-test-model', dimensions=4))
+    try:
+        strategy = oaib.OpenAIEmbeddingsBatchStrategy(service)
+        await strategy.submit_batch([
+            oaib.EmbeddingBatchRequest(custom_id='g0', texts=['alpha', 'beta']),
+        ])
+    finally:
+        await service.close()
+
+    assert captured['content_type'].startswith('multipart/form-data')
+    assert b'purpose' in captured['body']
+    assert b'batch_input.jsonl' in captured['body']

@@ -474,3 +474,47 @@ class TestMakeBatchStrategy:
 
         with pytest.raises(ValueError):
             batch_strategy_for(object())
+
+
+async def test_file_upload_reaches_the_wire_as_multipart(monkeypatch):
+    """Regression twin of the embeddings-strategy test: OpenAIProvider's
+    client pinned 'Content-Type: application/json' at client level, which
+    would turn the chat-batch /files upload into a 415 exactly like the
+    embeddings path did on its first live run."""
+    import httpx
+
+    from docgen.llm.batch import BatchRequest
+    from docgen.llm.openai import OpenAIProvider
+    from docgen.llm.openai_batch import OpenAIBatchStrategy
+
+    captured = {}
+
+    def handler(request):
+        if request.url.path.endswith('/files'):
+            captured['content_type'] = request.headers.get('content-type', '')
+            captured['body'] = request.read()
+            return httpx.Response(200, json={'id': 'file_in_1'})
+        if request.url.path.endswith('/batches'):
+            return httpx.Response(
+                200, json={'id': 'batch_1', 'status': 'validating'})
+        raise AssertionError(f'unexpected {request.url.path}')
+
+    real_async_client = httpx.AsyncClient
+
+    def with_mock_transport(**kwargs):
+        return real_async_client(
+            transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(httpx, 'AsyncClient', with_mock_transport)
+    provider = OpenAIProvider(model='gpt-test', api_key='test-key')
+    try:
+        strategy = OpenAIBatchStrategy(provider)
+        await strategy.submit_batch([
+            BatchRequest(custom_id='r0', system_prompt='s', user_prompt='u'),
+        ])
+    finally:
+        await provider.aclose()
+
+    assert captured['content_type'].startswith('multipart/form-data')
+    assert b'purpose' in captured['body']
+    assert b'batch_input.jsonl' in captured['body']

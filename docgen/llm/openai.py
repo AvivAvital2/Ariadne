@@ -54,7 +54,6 @@ class OpenAIProvider:
                 base_url=self.base_url,
                 timeout=httpx.Timeout(self.timeout),
                 headers={
-                    'Content-Type': 'application/json',
                     'Authorization': f'Bearer {self.api_key}',
                 },
             )
