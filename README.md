@@ -18,8 +18,9 @@ When an LLM agent works with a codebase it greps and reads files to understand i
 
 - **Five complementary doc types per file.** An `explanation` (what the code does), an `architecture` note (how it's built and who depends on it), `qa` pairs, `gotcha`s (the traps that bite you), and a `diagram` — curated per language, so a JSON file never gets an architecture essay it can't support.
 - **Automatic theme discovery.** Leiden community detection over a hybrid structural-plus-semantic graph finds clusters of code that share a concern — authentication, caching, retries — even when they're scattered across dozens of files, and writes each up as its own theme doc. This is what raw `grep` can never give an agent.
-- **Compiler-precise cross-source intelligence.** For Scala/Java, Ariadne builds a real [SCIP](docs/scip-cross-source.md) call graph — not regex heuristics — and joins it *across repos and languages*. Ask for a symbol's `callers`/`callees`, compute the `impact_radius` of a change *before* you make it, `trace-flow` a request from an HTTP route through several services, or surface dead code with zero references anywhere.
+- **Compiler-precise cross-source intelligence.** For Python, JS/TS, and Scala/Java, Ariadne builds a real [SCIP](docs/scip-cross-source.md) call graph — not regex heuristics — and joins it *across repos and languages*. Ask for a symbol's `callers`/`callees`, compute the `impact_radius` of a change *before* you make it, `trace-flow` a request from an HTTP route through several services, or surface dead code with zero references anywhere.
 - **Served over MCP.** The whole library lives in one queryable SQLite store exposed to any MCP agent (Claude Code, custom agents), automatically scoped to the source it's working in plus that source's dependencies — so results never bleed across unrelated codebases.
+- **Portable — author once, consume anywhere.** `export` packs the whole library into a single git-committable zip (or a markdown tree with `--no-archive`); `import` rebuilds a fully searchable database from it on any machine, re-embedding locally — so the model that *authors* the docs and the one that *serves* them can differ (a local model works fine). Re-import is a **delta**: documents whose content hasn't changed are skipped, so syncing a team's knowledge base only costs the docs that actually moved. See [docs/import-export.md](docs/import-export.md).
 - **Ask from Slack (optional).** A read-only Slack bot puts the knowledge base in your team's chat — @mention it, DM it, or run `/ariadne`, and Claude (via the Agent SDK) answers from Ariadne's docs. It runs in Socket Mode (an outbound WebSocket, no public URL to expose). See [docs/slack-bridge-deployment.md](docs/slack-bridge-deployment.md).
 
 **Effortless setup**
@@ -38,7 +39,7 @@ When an LLM agent works with a codebase it greps and reads files to understand i
 
 Ariadne runs a one-time pipeline over your source tree, then keeps the result current as the code changes. Each stage adds a layer that agents can query:
 
-1. **Catalog the structure.** It walks the tree and extracts a structural index of every public class, function, method, and module-level value — using ast-grep for Python, JS/TS (and Vue), HTML, and the common config and documentation formats (JSON, YAML, Markdown, HOCON, CSS), and SCIP for Scala/Java (compiler-precise symbols and call graphs, not heuristics). This layer alone gives exact symbol lookup and cross-file relationships, and it uses no LLM, so it's cheap to build and refresh.
+1. **Catalog the structure.** It walks the tree and extracts a structural index of every public class, function, method, and module-level value — using **SCIP** (compiler-precise symbols and call graphs, not heuristics) for Python, JS/TS (and Vue), Scala, and Java, and **ast-grep** for HTML and the common config and documentation formats (JSON, YAML, Markdown, HOCON, CSS). This layer alone gives exact symbol lookup and cross-file relationships, and it uses no LLM, so it's cheap to build and refresh.
 
 2. **Document each file.** For every file, an LLM (Claude or OpenAI) writes the doc types you ask for — an `explanation` of what the code does, an `architecture` note on how it's put together, `qa` pairs, `gotcha`s, and a `diagram`. Every document is validated (closed code blocks, required sections) and retried on failure, so the library stays well-formed.
 
@@ -71,7 +72,7 @@ So generating with Claude needs both keys; generating with OpenAI needs only `OP
 | HTML | ✅ | ✅ | ✅ | — | — | — |
 | JSON / YAML / Markdown | ✅ | ✅ | — | — | — | — |
 
-Scala/Java need a one-time SCIP index; multi-language sources need a `scip merge`-capable binary — see [docs/scip-cross-source.md](docs/scip-cross-source.md).
+Python, JS/TS, and Scala/Java are indexed with SCIP — a one-time step that just needs the matching indexer installed (`scip-python`, `scip-typescript`, `scip-java`); multi-language sources also need a `scip merge`-capable binary. `discover` wires the config up for you — see [docs/scip-cross-source.md](docs/scip-cross-source.md).
 
 ## Getting started
 
@@ -125,9 +126,9 @@ Common ones (full reference: [docs/commands.md](docs/commands.md)):
 | `ariadne source add/list/remove` | Manage sources in `ariadne.yaml` |
 | `ariadne dry-run [-i]` | Estimate cost; `-i` opens the interactive explorer |
 | `ariadne onboard` | Full pipeline with a cost preview + prompt |
-| `ariadne generate` / `export` / `list` | Generate docs · write markdown · list docs |
+| `ariadne generate` / `export` / `import` | Generate docs · export to a zip (or markdown tree) · rebuild the DB elsewhere (delta) |
 | `ariadne search "query"` | Semantic search across the docs |
-| `ariadne sync` / `check` | Re-document git changes · find stale docs |
+| `ariadne sync` / `check` | Re-document only the changed files (delta) · find stale docs |
 | `ariadne mcp` | Start the MCP server (stdio) |
 
 ## Configuration

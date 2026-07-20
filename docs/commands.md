@@ -31,9 +31,9 @@
 | `ariadne testimonials` | Show the best-of Q&A from the local store, ranked by richness (score + diagram + source-file citations + detail); `--limit`, `--export DIR` (images), `--export-html FILE` (self-contained showcase page) |
 | **Maintenance** | |
 | `ariadne check` | Check for stale or missing documentation |
-| `ariadne sync` | Sync docs with git changes since last sync |
-| `ariadne export` | Export database to markdown files |
-| `ariadne import` | Import markdown files into database |
+| `ariadne sync` | Sync docs with git changes since last sync (delta — only changed files) |
+| `ariadne export` | Export the database to a single zip (`docs/<source>.zip`); `--no-archive` writes a markdown tree |
+| `ariadne import` | Import a zip or markdown tree into the database (delta — unchanged docs skipped); `--batch`/`--live`/`--yes`/`--skip-embeddings` control the embedding rebuild |
 | `ariadne rebuild` | Rebuild embeddings for all documents |
 | `ariadne add` | Add a new document manually |
 | `ariadne delete <id>` | Delete a document |

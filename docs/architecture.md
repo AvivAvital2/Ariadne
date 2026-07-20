@@ -2,7 +2,7 @@
 
 1. **Discovery**: Walks the source tree, honoring `exclude` / `exclude_dirs` and per-language type filters (e.g., JSON files only get `explanation`, never `architecture`).
 
-2. **Catalog extraction**: ast-grep (or SCIP for Scala/Java) extracts every public element. One catalog doc per element, plus a `file_index` doc per file linking them.
+2. **Catalog extraction**: SCIP (for Python, JS/TS, Scala, Java) or ast-grep (for HTML and the config/doc formats) extracts every public element. One catalog doc per element, plus a `file_index` doc per file linking them.
 
 3. **Per-file LLM generation**: For each requested doc-type (`explanation`, `architecture`, `qa`, `gotcha`, `diagram`), the LLM produces a markdown doc. Validation runs structural checks (closed code blocks, required sections); on failure, retries up to twice with temperature variance. ~5–10% of generations fail-after-retries on large or unusual files; those file/type combos remain stale until re-run picks them up.
 
@@ -24,8 +24,8 @@
 
 Beyond LLM-written docs, Ariadne maintains a **structural catalog** of every public class, method, function, and module-level value across the codebase. Built via:
 
-- **ast-grep** for Python, JavaScript, TypeScript, HTML, JSON, YAML, Markdown
-- **SCIP** (`scip-scala` / `scip-java`) for Scala and Java — uses precise compiler-derived semantic data, not heuristics
+- **SCIP** for Python, JavaScript/TypeScript (incl. Vue), Scala, and Java — via `scip-python`, `scip-typescript`, and `scip-java`; precise compiler-derived symbols and call graphs, not heuristics
+- **ast-grep** for HTML, JSON, YAML, Markdown, HOCON, CSS, and Dockerfiles
 
 The catalog powers `ariadne_symbol "module.ClassName"` lookups, fine-grained search, and cross-file relationship graphs that the crossref injector uses to link related docs.
 

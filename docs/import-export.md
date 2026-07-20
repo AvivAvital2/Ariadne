@@ -7,16 +7,16 @@ Ariadne keeps its documentation in a SQLite database (`ariadne.db`). `export` wr
 ## The two commands
 
 ```bash
-ariadne export [dir]         # database → markdown files
-ariadne import [dir]         # markdown files → database
+ariadne export [path]        # database → a single zip (or a markdown tree with --no-archive)
+ariadne import [path]        # zip or markdown tree → database (delta: unchanged docs skipped)
 ```
 
-Both default to `docs/<source>/` for your configured source, so you normally run them with no arguments. Pass a directory to override (e.g. `ariadne export /tmp/kb`), and `--source NAME` to pick a non-default source.
+Both default to your configured source under `docs/`, so you normally run them with no arguments. Pass a path to override (e.g. `ariadne export /tmp/kb.zip`), and `--source NAME` to pick a non-default source.
 
-- **`export`** writes one markdown file per document (organized into `explanations/`, `architecture/`, `findings/`, …) plus a `manifest.yaml` index.
-- **`import`** reads those files back in, then by default regenerates embeddings and rebuilds the per-file catalog index.
+- **`export`** packs the whole library into a single source-scoped zip — `docs/<source>.zip` — by default: one markdown file per document (organized into `explanations/`, `architecture/`, `findings/`, …) plus a `manifest.yaml` index. Pass `--no-archive` to write the loose `docs/<source>/` tree instead.
+- **`import`** reads a zip (or a markdown tree) back in, then by default regenerates embeddings and rebuilds the per-file catalog index. It auto-detects the input: `docs/<source>.zip` when present, else the `docs/<source>/` tree.
 
-Re-running either is safe: re-export overwrites the files, and re-import **updates** existing documents (matched by a deterministic ID) rather than creating duplicates.
+Re-running either is safe: re-export overwrites the artifact, and re-import is a **delta** — documents whose content, source files, and metadata are unchanged are skipped; only new or changed docs are written (matched by a deterministic ID), never duplicated.
 
 ## Embeddings are rebuilt, not carried
 
@@ -33,6 +33,8 @@ Pass `--skip-embeddings` to import the text without embedding (fast, no API call
 ariadne import --skip-embeddings   # text only; search disabled
 ariadne rebuild                    # build embeddings later
 ```
+
+On a large import the embedding rebuild shows the projected cost and **prompts** you to choose live vs batched embeddings first. `--live` / `--batch` skip that prompt (`--batch` routes through OpenAI's Batch API for roughly **half the price** when you're not in a hurry), and `--yes` approves the cost without prompting — the combination you want in CI. Because import is a delta, only the docs that actually changed get re-embedded.
 
 ## Team / multi-machine workflow
 
