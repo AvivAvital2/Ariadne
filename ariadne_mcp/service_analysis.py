@@ -93,10 +93,14 @@ class AnalysisMixin:
             )
 
         from llm import chat_complete
+        from spools import resolve_spools
 
-        doc_context = '\n\n'.join(
-            f'## {d.title}\n{d.content[:2000]}'
-            for d in search_result.documents[:3]
+        # CRIT-6: fence spool-origin docs as untrusted reference (the same
+        # fencing ask() applies) so injected instructions in remotely-fetched
+        # spool content can't drive the synthesis LLM.
+        doc_context = _assemble_ask_context(
+            search_result.documents[:3],
+            resolve_spools(self.config).scope_sources(),
         )
 
         prompt = (
