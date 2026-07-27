@@ -346,9 +346,19 @@ class TestSearchReturnsTheme:
         """
         from ariadne_mcp.service_search import SearchMixin
 
-        # Theme docs are cross-source by design (source_name=NULL) —
-        # the chokepoint admits them regardless of closure. No
-        # ``source_name=...`` here; that's the production shape.
+        # Theme docs are cross-source by design (source_name=NULL). The
+        # production shape is doc + themes row + members: the scope gate
+        # admits a base-pass theme iff a member element's source is in the
+        # closure, and a theme doc with NO themes row (a stale orphan)
+        # fails closed. Ground both themes with a member in 'test'.
+        member = library.add_document(
+            content_type='explanation',
+            title='retry helper element',
+            content='element grounding the themes in the test source',
+            source_files=[],
+            metadata={},
+            source_name='test',
+        )
         library.add_document(
             content_type='theme',
             title='Retry Logic with Exponential Backoff',
@@ -358,6 +368,12 @@ class TestSearchReturnsTheme:
             metadata={},
             doc_id='theme-retry',
         )
+        library.add_theme(
+            cluster_id='c-retry', doc_id='theme-retry',
+            member_count=1, resolution=1.0, summary_hash='h-retry',
+            association='',
+        )
+        library.set_theme_members('c-retry', [(member.id, 1.0)])
 
         # Add some other theme docs that should NOT match.
         library.add_document(
@@ -369,6 +385,12 @@ class TestSearchReturnsTheme:
             metadata={},
             doc_id='theme-db',
         )
+        library.add_theme(
+            cluster_id='c-db', doc_id='theme-db',
+            member_count=1, resolution=1.0, summary_hash='h-db',
+            association='',
+        )
+        library.set_theme_members('c-db', [(member.id, 1.0)])
 
         # Build a minimal search service via the mixin.
         class _FailEmbedder:

@@ -444,36 +444,31 @@ class ScopedLibrary:
         Filters out any document whose ``source_name`` is not in the
         closure. Theme docs (``content_type='theme'``) carry
         ``source_name=NULL`` (cross-source by design); they pass the
-        association gate instead — see :meth:`_admit`.
+        theme gate instead — see :meth:`_admitted_theme_ids`.
         """
         rows = self._library.list_documents_lite(content_type=content_type)
         theme_ids = [
             d.id for d in rows
             if d.source_name is None and d.content_type == 'theme'
         ]
-        theme_assoc = self._theme_associations(theme_ids)
-        return [d for d in rows if self._admit(d, theme_assoc)]
+        admitted_themes = self._admitted_theme_ids(theme_ids)
+        return [d for d in rows if self._admit(d, admitted_themes)]
 
-    def _admit(self, doc, theme_assoc=None) -> bool:
+    def _admit(self, doc, admitted_themes=None) -> bool:
         """Return True if ``doc`` should pass the scope filter.
 
         In-closure source matches admit it. A NULL-source theme is
-        admitted only when its ``themes.association`` passes the closure
-        gate (the base pass '' always; a scoped association iff every
-        source it spans is in the closure — see
-        :meth:`_theme_association_admitted`). ``theme_assoc`` is an
-        optional ``{doc_id: association}`` map for batch callers; when
-        absent the association is fetched per-doc. Everything else is
-        rejected.
+        admitted only when it passes the theme gate — see
+        :meth:`_admitted_theme_ids`. ``admitted_themes`` is an optional
+        precomputed admitted-id set for batch callers; when absent the
+        gate runs for just this doc. Everything else is rejected.
         """
         if doc.source_name in self._closure:
             return True
         if doc.source_name is None and doc.content_type == 'theme':
-            if theme_assoc is None:
-                theme_assoc = self._theme_associations([doc.id])
-            return self._theme_association_admitted(
-                theme_assoc.get(doc.id, ''),
-            )
+            if admitted_themes is None:
+                admitted_themes = self._admitted_theme_ids([doc.id])
+            return doc.id in admitted_themes
         return False
 
     def get_embeddings_for_ids(self, doc_ids):
@@ -639,11 +634,9 @@ class ScopedLibrary:
     def _filter_ids_by_closure(self, doc_ids):
         """Return the subset of ``doc_ids`` admitted by the scope.
 
-        In-closure sources are admitted; NULL-source theme rows are
-        admitted only when their ``themes.association`` passes the closure
-        gate (base pass '' always; a scoped association iff every source
-        it spans is in the closure). Batches to stay under SQLite's
-        variable limit."""
+        In-closure sources are admitted; NULL-source theme rows go
+        through the theme gate (:meth:`_admitted_theme_ids`). Batches to
+        stay under SQLite's variable limit."""
         if not doc_ids:
             return []
         if not self._closure:
@@ -652,72 +645,83 @@ class ScopedLibrary:
         doc_ids = list(doc_ids)
         closure_params = self._closure_params
         src_placeholders = ','.join('?' * len(closure_params))
-        allowed: list[str] = []
+        candidates: list[tuple[str, bool]] = []
         with self._library._conn_provider.acquire() as conn:
             for chunk in chunk_ids(doc_ids, reserved=len(closure_params)):
                 id_placeholders = ','.join('?' * len(chunk))
-                # LEFT JOIN themes so each NULL-source theme row's
-                # association is available and can be gated by closure
-                # exactly like ``_admit`` (base pass '' always; scoped iff
-                # every source the association spans is in the closure).
                 rows = conn.execute(
-                    f'SELECT d.id, d.source_name, d.content_type, '
-                    f"COALESCE(t.association, '') "
-                    f'FROM documents d '
-                    f'LEFT JOIN themes t ON t.doc_id = d.id '
-                    f'WHERE d.id IN ({id_placeholders}) '
+                    f'SELECT id, source_name FROM documents '
+                    f'WHERE id IN ({id_placeholders}) '
                     f'AND ('
-                    f'd.source_name IN ({src_placeholders}) '
-                    f"OR (d.source_name IS NULL AND d.content_type = 'theme')"
+                    f'source_name IN ({src_placeholders}) '
+                    f"OR (source_name IS NULL AND content_type = 'theme')"
                     f')',
                     chunk + list(closure_params),
                 ).fetchall()
-                for doc_id, source_name, content_type, association in rows:
-                    if source_name in self._closure:
-                        allowed.append(str(doc_id))
-                    elif (
-                        source_name is None
-                        and content_type == 'theme'
-                        and self._theme_association_admitted(association)
-                    ):
-                        allowed.append(str(doc_id))
-        return allowed
+                for doc_id, source_name in rows:
+                    needs_theme_gate = source_name not in self._closure
+                    candidates.append((str(doc_id), needs_theme_gate))
+        admitted_themes = self._admitted_theme_ids(
+            [d for d, needs_gate in candidates if needs_gate],
+        )
+        return [
+            d for d, needs_gate in candidates
+            if not needs_gate or d in admitted_themes
+        ]
 
     def _theme_association_admitted(self, association: str) -> bool:
-        """A theme's ``association`` passes the closure gate.
+        """A non-empty scoped ``association`` passes the closure gate.
 
-        '' is the base/user pass — always admitted. Otherwise the
-        association is a '|'-joined sorted source-name key naming every
-        source the theme spans; it is admitted iff every one of those
-        sources is in the closure. Because ``make_scoped_library`` unions
-        the enabled spool sources into the closure, a spool-scoped theme
-        is visible only when that spool is enabled (and a project x spool
-        theme only in that project's own scope).
+        The association is a '|'-joined sorted source-name key naming
+        every source the theme spans; it is admitted iff every one of
+        those sources is in the closure. Because ``make_scoped_library``
+        unions the enabled spool sources into the closure, a spool-scoped
+        theme is visible only when that spool is enabled (and a
+        project × spool theme only in that project's own scope). The base
+        pass ('') is not decided here — it is member-grounded, see
+        :meth:`_admitted_theme_ids`.
         """
         if not association:
-            return True
+            return False
         return all(
             token in self._closure for token in association.split('|')
         )
 
-    def _theme_associations(self, doc_ids) -> dict:
-        """Map each theme summary ``doc_id`` to its ``themes.association``.
+    def _admitted_theme_ids(self, doc_ids) -> set:
+        """The subset of theme summary ``doc_ids`` that pass the theme gate.
 
-        Missing ids (a theme doc with no themes row) default to '' — the
-        base pass — so they stay visible, matching the pre-gate behavior
-        for untracked theme docs."""
+        A scoped association is admitted iff every source it spans is in
+        the closure (:meth:`_theme_association_admitted`). A base-pass
+        ('') theme is member-grounded: admitted iff at least one member
+        element's source is in the closure — the base global pass
+        clusters the WHOLE store, so pass-level "always admit" leaked a
+        spool corpus's themes into every project's results. A theme doc
+        with no themes row (a stale orphan from an earlier rebuild) is
+        never admitted — fail closed.
+        """
+        doc_ids = [d for d in doc_ids if d]
         if not doc_ids:
-            return {}
+            return set()
         from library.sql_vars import chunk_ids
-        result: dict = {}
+        closure_params = self._closure_params
+        src_placeholders = ','.join('?' * len(closure_params))
+        admitted: set = set()
         with self._library._conn_provider.acquire() as conn:
-            for chunk in chunk_ids(list(doc_ids)):
-                placeholders = ','.join('?' * len(chunk))
+            for chunk in chunk_ids(list(doc_ids), reserved=len(closure_params)):
+                id_placeholders = ','.join('?' * len(chunk))
                 rows = conn.execute(
-                    f'SELECT doc_id, association FROM themes '
-                    f'WHERE doc_id IN ({placeholders})',
-                    chunk,
+                    f'SELECT t.doc_id, t.association, EXISTS('
+                    f'SELECT 1 FROM theme_members tm '
+                    f'JOIN documents md ON md.id = tm.element_id '
+                    f'WHERE tm.cluster_id = t.cluster_id '
+                    f'AND md.source_name IN ({src_placeholders})'
+                    f') FROM themes t WHERE t.doc_id IN ({id_placeholders})',
+                    list(closure_params) + chunk,
                 ).fetchall()
-                for doc_id, association in rows:
-                    result[str(doc_id)] = str(association)
-        return result
+                for doc_id, association, member_in_scope in rows:
+                    if association:
+                        if self._theme_association_admitted(str(association)):
+                            admitted.add(str(doc_id))
+                    elif member_in_scope:
+                        admitted.add(str(doc_id))
+        return admitted

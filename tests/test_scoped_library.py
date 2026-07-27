@@ -609,15 +609,16 @@ class TestScopedLibrary:
     # source_name=NULL (cross-source by design) and were admitted
     # unconditionally — so a spool's themes leaked into EVERY project's
     # results regardless of whether that spool was in scope. The rule for
-    # a NULL-source theme: admit iff its ``themes.association`` is the
-    # base/user pass ('') OR every source the association spans (the
-    # '|'-joined sorted source-name key) is in the closure. Since
-    # ``make_scoped_library`` unions the ENABLED spool sources into the
-    # closure, this makes a spool's themes visible only when that spool is
-    # enabled, and a project×spool theme only in that project's own scope:
-    #   - ''                    (base/user)      -> always visible
-    #   - 'product|spool:alpha' (cross-source)   -> iff product & spool:alpha in closure
-    #   - 'spool:beta'          (spool-internal) -> iff spool:beta in closure
+    # a NULL-source theme:
+    #   - scoped association ('|'-joined sorted source-name key, e.g.
+    #     'product|spool:alpha'): admitted iff EVERY source it spans is in
+    #     the closure (unchanged).
+    #   - base pass (''): member-grounded — admitted iff at least one
+    #     member element's source is in the closure. "Always visible" was
+    #     the leak: the base global pass clusters the WHOLE store, so a
+    #     spool corpus's themes surfaced in every project's results.
+    #   - a theme doc with NO themes row (a stale orphan from an earlier
+    #     rebuild) is never admitted — fail closed.
     def test_t8_theme_docs_gated_by_association_closure(
         self, tmp_path: Path,
     ) -> None:
@@ -625,14 +626,27 @@ class TestScopedLibrary:
 
         with Library(tmp_path / 'library.db') as library:
             # A normal in-closure doc — always visible, spool-independent.
-            library.add_document(
+            # Also the member element grounding the base theme in 'product'.
+            product_doc = library.add_document(
                 content_type='explanation', title='product-doc',
                 content='product content', source_name='product',
             )
-            # Three NULL-source theme summary docs at three associations.
+            # A spool-corpus doc: the member element grounding the leaked
+            # base-pass corpus theme in 'spool:beta'.
+            spool_member_doc = library.add_document(
+                content_type='explanation', title='spool-member-doc',
+                content='spool corpus content', source_name='spool:beta',
+                _allow_reserved_source=True,
+            )
+            # Four NULL-source theme summary docs + one orphan.
             base_theme = library.add_document(
                 content_type='theme', title='base-theme',
                 content='user/base pass theme', source_name=None,
+            )
+            corpus_theme = library.add_document(
+                content_type='theme', title='corpus-theme',
+                content='base-pass theme whose members are all spool corpus',
+                source_name=None,
             )
             xsrc_theme = library.add_document(
                 content_type='theme', title='xsrc-theme',
@@ -643,11 +657,23 @@ class TestScopedLibrary:
                 content_type='theme', title='spool-internal-theme',
                 content='spool-internal corpus theme', source_name=None,
             )
+            library.add_document(
+                content_type='theme', title='orphan-theme',
+                content='stale summary doc with no themes row',
+                source_name=None,
+            )
             library.add_theme(
                 cluster_id='c-base', doc_id=base_theme.id,
                 member_count=1, resolution=1.0, summary_hash='h1',
                 association='',
             )
+            library.set_theme_members('c-base', [(product_doc.id, 1.0)])
+            library.add_theme(
+                cluster_id='c-corpus', doc_id=corpus_theme.id,
+                member_count=1, resolution=1.0, summary_hash='h4',
+                association='',
+            )
+            library.set_theme_members('c-corpus', [(spool_member_doc.id, 1.0)])
             library.add_theme(
                 cluster_id='c-xsrc', doc_id=xsrc_theme.id,
                 member_count=1, resolution=1.0, summary_hash='h2',
@@ -668,42 +694,49 @@ class TestScopedLibrary:
                     for d in scoped_for(closure).list_documents_lite()
                 }
 
-            # Neither spool in scope: base theme + product doc only; both
-            # spool-associated themes are hidden.
+            # Neither spool in scope: the product doc + the base theme
+            # grounded by a product member. The base-pass CORPUS theme is
+            # hidden (its members are all spool docs — the leak), the
+            # scoped-association themes are hidden, the orphan is hidden.
             assert titles_for({'product', 'shared'}) == {
                 'product-doc', 'base-theme',
             }
 
             # spool:alpha in scope (enabled): the product×alpha theme
-            # joins; the spool:beta-only theme stays hidden.
+            # joins; beta-grounded/associated themes stay hidden.
             assert titles_for({'product', 'shared', 'spool:alpha'}) == {
                 'product-doc', 'base-theme', 'xsrc-theme',
             }
 
-            # Both spool sources in scope: every theme is admitted.
+            # Both spool sources in scope: every tracked theme is admitted
+            # (the corpus theme via its spool:beta member), plus the spool
+            # member doc itself as a regular in-closure doc. The orphan
+            # stays hidden — fail closed.
             assert titles_for(
                 {'product', 'shared', 'spool:alpha', 'spool:beta'},
             ) == {
-                'product-doc', 'base-theme', 'xsrc-theme',
-                'spool-internal-theme',
+                'product-doc', 'spool-member-doc', 'base-theme',
+                'corpus-theme', 'xsrc-theme', 'spool-internal-theme',
             }
 
-            # A cross-source theme is scoped to ITS project: querying a
-            # different project with spool:alpha enabled must NOT surface
-            # 'product|spool:alpha' (product is not in this closure).
-            assert titles_for({'other', 'shared', 'spool:alpha'}) == {
-                'base-theme',
-            }
+            # Member grounding scopes cross-repo themes to where their
+            # members actually live: a different project sees NEITHER the
+            # product-grounded base theme NOR 'product|spool:alpha'.
+            assert titles_for({'other', 'shared', 'spool:alpha'}) == set()
 
             # The id-filter path (get_documents_batch → _filter_ids_by_closure)
-            # gates identically — an out-of-scope spool's theme id is
-            # dropped even when explicitly requested.
-            all_theme_ids = [base_theme.id, xsrc_theme.id, spool_theme.id]
+            # gates identically — an out-of-scope theme id is dropped even
+            # when explicitly requested.
+            all_theme_ids = [
+                base_theme.id, corpus_theme.id, xsrc_theme.id, spool_theme.id,
+            ]
             batch_none = scoped_for(
                 {'product', 'shared'},
             ).get_documents_batch(all_theme_ids)
             assert {d.id for d in batch_none} == {base_theme.id}
-            batch_alpha = scoped_for(
-                {'product', 'shared', 'spool:alpha'},
+            batch_beta = scoped_for(
+                {'product', 'shared', 'spool:beta'},
             ).get_documents_batch(all_theme_ids)
-            assert {d.id for d in batch_alpha} == {base_theme.id, xsrc_theme.id}
+            assert {d.id for d in batch_beta} == {
+                base_theme.id, corpus_theme.id, spool_theme.id,
+            }
