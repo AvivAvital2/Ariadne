@@ -12,6 +12,10 @@ A source-code knowledge base for LLM agents. Ariadne generates, indexes, and ser
 
 When an LLM agent works with a codebase it greps and reads files to understand it — slowly, burning context, rediscovering the same patterns every session, and never seeing the cross-cutting concerns (auth, retries, error handling) that span many files. Ariadne documents your codebase **once**, with an LLM, into a queryable knowledge base — so when an agent opens a file it already knows what the file does, what depends on it, and which theme it belongs to. Keeping that current costs only the files that actually changed.
 
+### Why not just GraphRAG?
+
+Ariadne *is* a graph-RAG — a structural graph, [Leiden](https://en.wikipedia.org/wiki/Leiden_algorithm) communities, community summaries (its *themes*) — but it builds the graph with a **compiler, not an LLM**. GraphRAG-family tools spend the bulk of indexing cost on LLM entity/relationship extraction, and re-pay it whenever the corpus changes. Ariadne extracts the graph deterministically with [SCIP](docs/scip-cross-source.md) — no LLM, no per-token cost — so the structural layer is near-free to build *and* to keep current; only the prose docs and the summaries of *changed* clusters ever cost LLM. (This holds for code and other SCIP-indexable corpora; for arbitrary prose, a graph-RAG's LLM extraction still earns its keep.)
+
 ## Features
 
 **What your agents get**
@@ -33,7 +37,7 @@ When an LLM agent works with a codebase it greps and reads files to understand i
 - **A cost evaluator before you spend a cent.** `dry-run` projects the exact LLM cost of documenting your codebase — cache and batch discounts already factored in — by running only the *free* phases, with zero API calls. No surprise bills.
 - **An interactive cost explorer.** `dry-run -i` opens a full-screen, ncdu-style file browser ranked by generation cost: drill in, see the dollars and a bar on every file, and exclude vendored or generated noise with a single keystroke while the grand total **re-prices live**. Toggle which doc types to generate and watch the price move. Apply, and your excludes persist to `ariadne.yaml` for every future run.
 - **Batch or live generation.** Generate live for immediate results, or pass `--batch` to route through Anthropic's Message Batches API for roughly **half the cost** when you're not in a hurry.
-- **Cheap to keep fresh.** A git-aware sync re-documents only the files whose content actually changed — a small diff costs only the touched files in LLM work, not the GraphRAG-style wholesale rebuild other tools force on every change.
+- **Cheap to keep fresh.** The structural graph (SCIP + Leiden) is built by a compiler, not an LLM, so it costs no tokens to rebuild; and a git-aware sync re-documents only the files whose content actually changed. Upkeep costs just the touched docs — not the GraphRAG-style wholesale LLM re-extraction other tools force on every change.
 
 ## How it works
 
