@@ -80,7 +80,9 @@ def _trim_related_documents(content: str, max_links: int = 5) -> str:
 # v7 = bidirectional lens: spool-primary composition + repo-as-lens + the
 # spool-theme repo-channel partition (routed result sets change).
 # v8 = request-verb stopwords in entity extraction (routing inputs change).
-_RETRIEVAL_CACHE_VERSION = 8
+# v9 = environment names route but never admit docs (spool-side entity
+# admissions change; the semantic tier owns name-term selection).
+_RETRIEVAL_CACHE_VERSION = 9
 
 class SearchMixin:
     """Search implementation with multi-phase ranking.
@@ -257,7 +259,7 @@ class SearchMixin:
 
     async def _lens_ranked_ids(self, route, repo_ids, retrieval_sources,
                                query, limit, weights,
-                               surface_restrict=None):
+                               surface_restrict=None, name_terms=frozenset()):
         """Regime → (ranked ids, connection labels) (design §5-§6).
         repo-only: spool silent;
         fuse: repo ranking + categorical spool contributions; expert-only:
@@ -296,8 +298,13 @@ class SearchMixin:
             # docs and themes on the ordinary embedding route); repo-primary
             # fuse keeps the spool as the capped lens.
             spool_limit = limit if flipped else max(2, limit // 2)
+            # Route-don't-admit: environment-name hits routed the question
+            # but never select documents (inside their own corpus they match
+            # READMEs/namespace markers) — the semantic fill owns those slots.
+            from library.lens_router import admissible_hits
             contributions = select_spool_docs(
-                self.library, matrix, retrieval_sources, route.crisp_spool,
+                self.library, matrix, retrieval_sources,
+                admissible_hits(route.crisp_spool, name_terms),
                 query_embedding=query_embedding, limit=spool_limit,
             )
 
@@ -501,9 +508,11 @@ class SearchMixin:
                     _logger.debug(
                         'lens: surface restriction unavailable',
                         exc_info=True)
+                from library.lens_router import environment_name_terms
                 ranked_ids, lens_connections = await self._lens_ranked_ids(
                     route, repo_ids, retrieval_sources, effective_query,
-                    limit, weights, surface_restrict=surface_restrict)
+                    limit, weights, surface_restrict=surface_restrict,
+                    name_terms=environment_name_terms(spool_resolution))
                 lens_primary = route.primary
                 if route.regime == 'honest-gap':
                     spool_doc_ids = {d.id for d in lite_docs

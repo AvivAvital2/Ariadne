@@ -368,6 +368,7 @@ def build_pack(
     taxonomy=(),
     runtime_components=None,
     surfaces=None,
+    name_aliases=None,
 ) -> SpoolManifest:
     """Build a pack zip from ``library``'s ``environment`` source.
 
@@ -478,6 +479,7 @@ def build_pack(
         taxonomy=tuple(taxonomy or ()),
         runtime_components=dict(runtime_components or {}),
         surfaces={k: list(v) for k, v in (surfaces or {}).items()},
+        name_aliases=[str(a) for a in (name_aliases or [])],
         extraction_coverage_version=EXTRACTION_COVERAGE_VERSION,
         attribution=attribution,
     )

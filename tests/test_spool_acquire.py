@@ -209,6 +209,7 @@ class TestSpoolLanguageGate:
               core: '2.5.0'
             surfaces:
               serialization: [serializ, pickle]
+            name_aliases: [fake lake]
             corpus:
               core:
                 url: {repo}
@@ -229,6 +230,7 @@ class TestSpoolLanguageGate:
         assert captured['taxonomy'] == ('serialization', 'parallelism')
         assert captured['runtime_components'] == {'core': '2.5.0'}
         assert captured['surfaces'] == {'serialization': ['serializ', 'pickle']}
+        assert captured['name_aliases'] == ['fake lake']
         # The TOFU-pinned corpus shas are the pack's provenance — the
         # manifest must record WHICH corpus the pack was built from.
         assert captured['corpus_shas'] == {'core': _sha}

@@ -267,3 +267,46 @@ class TestRouteQuestion:
             'How does Quantum Mesh handle concurrent writes?',
             subject_names=['acme-core'], repo_index=repo, spool_index=spool)
         assert r.regime == 'expert-only'
+
+
+class TestEnvironmentNameTerms:
+    def test_route_dont_admit_helpers(self):
+        # A spool's OWN names (environment id, component keys, corpus keys,
+        # recipe aliases) are excellent ROUTING signals but degenerate doc
+        # SELECTORS inside their own corpus (they match READMEs, code-of-
+        # conducts, namespace markers by construction). The name set feeds
+        # admission filtering only — derive_regime never sees it.
+        from types import SimpleNamespace
+
+        resolution = SimpleNamespace(registered={
+            'fakebricks': SimpleNamespace(manifest=SimpleNamespace(
+                environment='fakebricks',
+                runtime_components={'quantumcore': '2.0'},
+                corpus_shas={'quantumcore': 'abc', 'mesh-sdk': 'def'},
+                name_aliases=['quantum mesh'],
+            )),
+        })
+        names = lens_router.environment_name_terms(resolution)
+        assert names == frozenset(
+            {'fakebricks', 'quantumcore', 'mesh-sdk', 'quantum mesh'})
+
+        hits = [
+            _hit('Quantum Mesh', 'title', 'product'),      # alias -> dropped
+            _hit('fakebricks', 'heading', 'product'),      # env id -> dropped
+            _hit('ConflictChecker', 'symbol', 'api'),      # real entity kept
+            _hit('same table', 'symbol', 'phrase'),        # phrase kept
+        ]
+        kept = lens_router.admissible_hits(hits, names)
+        assert [h.term for h in kept] == ['ConflictChecker', 'same table']
+
+    def test_tolerant_resolution_shapes(self):
+        from types import SimpleNamespace
+
+        # dict-shaped manifest + missing fields never crash.
+        resolution = SimpleNamespace(registered={
+            'envx': {'environment': 'envx'},
+        })
+        assert lens_router.environment_name_terms(resolution) == frozenset(
+            {'envx'})
+        assert lens_router.environment_name_terms(
+            SimpleNamespace()) == frozenset()

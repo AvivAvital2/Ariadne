@@ -426,3 +426,30 @@ def test_recipe_corpus_shas_and_taxonomy_read(tmp_path):
     bad.write_text('{{{ not yaml')
     assert _recipe_corpus_shas(bad) == {}
     assert _recipe_taxonomy(bad) == ()
+
+
+def test_recipe_name_aliases_read_and_manifest_round_trip(tmp_path):
+    # Proposal 1: multi-word product forms ('delta lake') are not derivable
+    # from component keys — the recipe declares them and the manifest
+    # carries them to consumers. Tolerant read; round-trips the pack.
+    from cli.spools_cmd import _recipe_name_aliases
+    from spools import SpoolManifest
+
+    recipe = tmp_path / 'spools.yaml'
+    recipe.write_text(
+        'runtime: fake-17.3\n'
+        'name_aliases: [fake lake, Quantum Mesh]\n'
+    )
+    assert _recipe_name_aliases(recipe) == ['fake lake', 'Quantum Mesh']
+    assert _recipe_name_aliases(tmp_path / 'missing.yaml') == []
+    bad = tmp_path / 'bad.yaml'
+    bad.write_text('name_aliases: {not: a list}\n')
+    assert _recipe_name_aliases(bad) == []
+
+    manifest = SpoolManifest(
+        environment='envx', version='1.0', target_runtime='r-1',
+        certified_docs=(), checksum='sha256:x',
+        name_aliases=['fake lake'],
+    )
+    packed = SpoolManifest.from_dict(manifest.to_dict())
+    assert packed.name_aliases == ['fake lake']

@@ -662,6 +662,7 @@ def create_spool(spoolfile_path, *, dest_dir, out_path, approve: bool,
             str(k): [str(s) for s in v]
             for k, v in (data.get('surfaces') or {}).items()
             if isinstance(v, list)},
+        name_aliases=[str(a) for a in (data.get('name_aliases') or [])],
     )
     return CreateResult(accepted=True, pack_path=str(out_path))
 
@@ -729,7 +730,7 @@ def _default_phases(batch_mode=None, onboard_approve=False,
 
     def build(*, source, version, runtime, certify, source_root, out_path,
               taxonomy=(), runtime_components=None, surfaces=None,
-              corpus_shas=None):
+              corpus_shas=None, name_aliases=None):
         from config import get_config
         from library import Library
         from spool_pack import build_pack
@@ -741,6 +742,7 @@ def _default_phases(batch_mode=None, onboard_approve=False,
                 runtime_components=runtime_components,
                 surfaces=surfaces,
                 corpus_shas=corpus_shas,
+                name_aliases=name_aliases,
             )
 
     def theme(name):

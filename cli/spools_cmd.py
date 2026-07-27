@@ -269,6 +269,20 @@ def _recipe_taxonomy(recipe_path) -> tuple:
     return tuple(str(item) for item in raw)
 
 
+def _recipe_name_aliases(recipe_path) -> list:
+    """The recipe's multi-word product name forms (route-don't-admit set).
+    Tolerant — missing/malformed yields []."""
+    try:
+        import yaml
+        data = yaml.safe_load(Path(recipe_path).read_text()) or {}
+    except Exception:
+        return []
+    raw = data.get('name_aliases')
+    if not isinstance(raw, list):
+        return []
+    return [str(alias) for alias in raw]
+
+
 def _recipe_surfaces(recipe_path) -> dict:
     """The recipe's interaction-surface vocabularies. Tolerant like
     ``_recipe_runtime_components`` — missing/malformed yields {}."""
@@ -311,6 +325,7 @@ def _build(args: argparse.Namespace) -> int:
             runtime_components=_recipe_runtime_components(
                 Path.cwd() / 'spools.yaml'),
             surfaces=_recipe_surfaces(Path.cwd() / 'spools.yaml'),
+            name_aliases=_recipe_name_aliases(Path.cwd() / 'spools.yaml'),
         )
     print(f'  built  {args.out}  (environment {manifest.environment}, '
           f'runtime {manifest.target_runtime}, {manifest.checksum})')

@@ -236,3 +236,40 @@ def derive_regime(*, subject_named: bool, repo_hits, spool_hits) -> RouteResult:
         return RouteResult(regime, repo, spool, subject_named, False,
                            primary='spool')
     return RouteResult(FUSE, repo, spool, subject_named, False)
+
+
+def environment_name_terms(resolution) -> frozenset:
+    """The registered spools' OWN names, case-folded: environment id,
+    runtime-component keys, corpus repo keys, and recipe ``name_aliases``.
+
+    Excellent ROUTING signals, degenerate doc SELECTORS inside their own
+    corpus (they match READMEs / code-of-conducts / namespace markers by
+    construction) — so they feed :func:`admissible_hits` only; regime
+    derivation never sees this set. Tolerates registrations, bare
+    manifests, and dicts.
+    """
+    names: set = set()
+    for holder_name in getattr(resolution, 'registered', {}) or {}:
+        holder = resolution.registered[holder_name]
+        manifest = getattr(holder, 'manifest', holder)
+
+        def _get(field):
+            value = getattr(manifest, field, None)
+            if value is None and isinstance(manifest, dict):
+                value = manifest.get(field)
+            return value
+
+        environment = _get('environment') or holder_name
+        names.add(str(environment).casefold())
+        for mapping_field in ('runtime_components', 'corpus_shas'):
+            names.update(str(k).casefold()
+                         for k in (_get(mapping_field) or {}))
+        names.update(str(a).casefold() for a in (_get('name_aliases') or ()))
+    return frozenset(names)
+
+
+def admissible_hits(hits, name_terms) -> tuple:
+    """The crisp hits eligible to ADMIT documents — environment-name hits
+    are dropped (they routed already; selection belongs to the semantic
+    tier)."""
+    return tuple(h for h in hits if h.term.casefold() not in name_terms)

@@ -252,6 +252,9 @@ class SpoolManifest:
     # the CONSUMER matches questions against the same vocabularies — the
     # surface tier's two halves stay in lockstep.
     surfaces: dict = field(default_factory=dict)
+    # Multi-word product name forms ('delta lake') that are not derivable
+    # from component/corpus keys — the router's route-don't-admit name set.
+    name_aliases: list = field(default_factory=list)
     # The aisle's advisory lens (designs/spool-expert-aisles.md §2): the
     # concern/opportunity/gotcha dimensions this expert applies to a caller's
     # code (databricks: parallelism · serialization · autolog-patching · …).
@@ -287,6 +290,7 @@ class SpoolManifest:
             'corpus_shas': dict(self.corpus_shas),
             'runtime_components': dict(self.runtime_components),
             'surfaces': {k: list(v) for k, v in self.surfaces.items()},
+            'name_aliases': list(self.name_aliases),
             'taxonomy': list(self.taxonomy),
             'extraction_coverage_version': self.extraction_coverage_version,
             'attribution': [
@@ -331,6 +335,8 @@ class SpoolManifest:
                 surfaces={
                     str(k): [str(s) for s in (v or [])]
                     for k, v in (data.get('surfaces') or {}).items()},
+                name_aliases=[
+                    str(a) for a in (data.get('name_aliases') or [])],
                 taxonomy=tuple(data.get('taxonomy') or ()),
                 extraction_coverage_version=int(
                     data.get('extraction_coverage_version', 0) or 0),

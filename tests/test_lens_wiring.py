@@ -37,11 +37,16 @@ class _FakeEmbed:
 
 
 class _FakeResolution:
-    def __init__(self, surfaces=None):
+    def __init__(self, surfaces=None, name_aliases=None):
         self.registered = {}
-        if surfaces:
+        if surfaces or name_aliases:
             self.registered['fakebricks'] = SimpleNamespace(
-                manifest=SimpleNamespace(surfaces=surfaces))
+                manifest=SimpleNamespace(
+                    environment='fakebricks',
+                    runtime_components={},
+                    corpus_shas={},
+                    surfaces=surfaces or {},
+                    name_aliases=list(name_aliases or [])))
 
     def scope_sources(self):
         return frozenset({'spool:fakebricks'})
@@ -50,14 +55,15 @@ class _FakeResolution:
         return 'fp-lens'
 
 
-def _service(lib, monkeypatch, surfaces=None):
+def _service(lib, monkeypatch, surfaces=None, name_aliases=None):
     svc = AriadneService()
     svc._library = lib
     svc._embedding_service = _FakeEmbed()
     monkeypatch.setattr(svc, '_resolve_scope', lambda *a, **k: lib)
     monkeypatch.setattr(
         'spools.resolve_spools',
-        lambda *a, **k: _FakeResolution(surfaces=surfaces))
+        lambda *a, **k: _FakeResolution(surfaces=surfaces,
+                                        name_aliases=name_aliases))
     return svc
 
 
@@ -147,6 +153,48 @@ class TestLensWiredSearch:
             for doc in repo_docs:
                 assert resp.spool_connections[doc.id].startswith('repo('), \
                     resp.spool_connections
+        finally:
+            lib.close()
+
+    async def test_environment_names_route_but_never_admit(self, tmp_path, monkeypatch):
+        # Proposal 1 contract (replayed offline on the live store first): a
+        # spool's OWN name routes the question — regime and primary are
+        # unchanged — but admits NO docs; the semantic fill owns the window,
+        # so the name-titled junk (code-of-conduct/README class) stays out
+        # and the ground truth ranks by cosine.
+        lib = Library(tmp_path / 'lens-wiring.db')
+        try:
+            lib.add_document(
+                'explanation', 'Stage Boundary Notes', 'repo body',
+                embedding=_vec(1, 0, 0), source_name='src1',
+            )
+            junk = lib.add_document(
+                'explanation', 'Quantum Mesh Code of Conduct', 'junk body',
+                embedding=_vec(0.1, np.sqrt(1 - 0.01), 0),
+                source_name='spool:fakebricks', _allow_reserved_source=True,
+            )
+            truth = lib.add_document(
+                'explanation', 'Ledger Write Conflicts Deep Dive',
+                'ground truth body', embedding=_vec(0.9, np.sqrt(1 - 0.81), 0),
+                source_name='spool:fakebricks', _allow_reserved_source=True,
+            )
+            svc = _service(lib, monkeypatch,
+                           name_aliases=['quantum mesh'])
+            embeds = {junk.id: _vec(0.1, np.sqrt(1 - 0.01), 0),
+                      truth.id: _vec(0.9, np.sqrt(1 - 0.81), 0)}
+            matrix = EmbeddingMatrix(
+                matrix=np.stack(list(embeds.values())),
+                ids=list(embeds), dim=3, build_stamp='synthetic')
+            monkeypatch.setattr(
+                svc, '_get_embedding_matrix', lambda: matrix)
+            resp = await svc._search_uncached(
+                query='How does Quantum Mesh handle two jobs writing to the same ledger?',
+                limit=4)
+            titles = [d.title for d in resp.documents]
+            assert resp.lens_primary == 'spool'          # the name ROUTED
+            assert 'Ledger Write Conflicts Deep Dive' in titles, titles
+            assert resp.spool_connections[truth.id].startswith('semantic(')
+            assert 'Quantum Mesh Code of Conduct' not in titles, titles
         finally:
             lib.close()
 
