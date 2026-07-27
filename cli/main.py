@@ -123,6 +123,12 @@ def _configure_logging(debug: bool) -> None:
     level = logging.DEBUG if debug else logging.WARNING
     logging.basicConfig(level=level)
     logging.getLogger().setLevel(level)
+    # httpx/httpcore log every request at INFO ("HTTP Request: POST
+    # .../embeddings 200 OK"). Under --debug that per-request stream floods the
+    # console and tears up the Rich progress bar; Ariadne's own retry/backoff
+    # logs are separate, so keep these two at WARNING regardless of --debug.
+    for _noisy in ('httpx', 'httpcore'):
+        logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 
 def main() -> int:

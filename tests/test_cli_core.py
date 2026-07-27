@@ -1098,13 +1098,23 @@ def test_global_debug_flag_parses_and_configures_logging():
 
     root = logging.getLogger()
     saved = root.level
+    httpx_saved = logging.getLogger('httpx').level
+    httpcore_saved = logging.getLogger('httpcore').level
     try:
         cli_main._configure_logging(True)
         assert root.level == logging.DEBUG
+        # --debug reveals Ariadne's own retry/backoff chatter, but httpx/httpcore
+        # log every request at INFO ("HTTP Request: POST .../embeddings 200 OK"),
+        # which floods the console and tears up the Rich progress bar. They stay
+        # at WARNING regardless of --debug.
+        assert logging.getLogger('httpx').level == logging.WARNING
+        assert logging.getLogger('httpcore').level == logging.WARNING
         cli_main._configure_logging(False)
         assert root.level == logging.WARNING
     finally:
         root.setLevel(saved)
+        logging.getLogger('httpx').setLevel(httpx_saved)
+        logging.getLogger('httpcore').setLevel(httpcore_saved)
 
 
 def test_main_configures_logging_from_debug_flag(monkeypatch, capsys):
