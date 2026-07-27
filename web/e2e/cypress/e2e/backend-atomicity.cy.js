@@ -7,20 +7,22 @@
  *   (2) each test gets a clean server — state never leaks between tests.
  */
 describe('live backend — fresh + atomic per test', () => {
+  let base;
+  let sourcePath;
   beforeEach(() => cy.task('startAriadne').then((s) => {
-    Cypress.env('base', s.baseUrl);
-    Cypress.env('sourcePath', s.sourcePath);
+    base = s.baseUrl;
+    sourcePath = s.sourcePath;
   }));
   afterEach(() => cy.task('stopAriadne'));
 
-  const api = (p) => Cypress.env('base') + p;
+  const api = (p) => base + p;
 
   it('a fresh server starts with zero sources', () => {
     cy.request('POST', api('/api/sources'), {}).its('body.sources').should('have.length', 0);
   });
 
   it('source_add registers a source on THIS server; discover + estimate then work', () => {
-    const path = Cypress.env('sourcePath');
+    const path = sourcePath;
 
     cy.request('POST', api('/api/source_add'), { name: 'projA', path }).its('body').should((b) => {
       expect(b.source).to.eq('projA');

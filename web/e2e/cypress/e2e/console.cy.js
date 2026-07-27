@@ -22,7 +22,8 @@ const SEARCH = {
 };
 
 describe('Ask console', () => {
-  before(() => cy.task('startAriadne').then((s) => Cypress.env('base', s.baseUrl)));
+  let base;
+  before(() => cy.task('startAriadne').then((s) => { base = s.baseUrl; }));
   after(() => cy.task('stopAriadne'));
 
   beforeEach(() => {
@@ -30,7 +31,7 @@ describe('Ask console', () => {
     cy.intercept('POST', '/api/ask', { statusCode: 200, body: ASK }).as('ask');
     cy.intercept('POST', '/api/search', { statusCode: 200, body: SEARCH }).as('search');
     cy.intercept('POST', '/api/feedback', { statusCode: 200, body: { success: true, message: 'Hit logged.' } }).as('feedback');
-    cy.visit(Cypress.env('base') + '/static/console.html');
+    cy.visit(base + '/static/console.html');
   });
 
   it('loads with the source pill and default chips', () => {

@@ -5,10 +5,11 @@
  * full build (Connect → Start build → SSE progress → ready → console handoff).
  */
 describe('Onboarding wizard', () => {
-  before(() => cy.task('startAriadne').then((s) => Cypress.env('base', s.baseUrl)));
+  let base;
+  before(() => cy.task('startAriadne').then((s) => { base = s.baseUrl; }));
   after(() => cy.task('stopAriadne'));
 
-  const wizard = () => Cypress.env('base') + '/';
+  const wizard = () => base + '/';
 
   it('loads the wizard shell', () => {
     cy.intercept('POST', '/api/sources', { statusCode: 200, body: { default_source: null, sources: [] } });
