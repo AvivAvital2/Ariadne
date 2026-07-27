@@ -461,8 +461,24 @@ def cmd_index(
         # Invariant across this source's scopes → compute once, capture below.
         max_days = cfg.effective_scip_staleness_days(source_name)
 
+        # A cached .scip is trusted for reuse only when the PRIOR index
+        # completed (atomic .ariadne/index.ok marker) AND still matches the
+        # corpus. The .scip files are written non-atomically by the external
+        # tools, so an interrupted build can leave a torn file at the canonical
+        # path — without a completion marker we must rebuild, not reuse it.
+        from docgen.scip_index_marker import (
+            current_corpus_shas,
+            index_complete,
+            invalidate_marker,
+            write_marker,
+        )
+        ariadne_dir = source_root / '.ariadne'
+        prior_complete = index_complete(ariadne_dir, source_root)
+
         def _cached_index_fresh(out: Path) -> bool:
             if getattr(args, 'force', False) or not out.exists():
+                return False
+            if not prior_complete:            # prior index unfinished / pin moved
                 return False
             if max_days is None:              # staleness-exempt → always reuse
                 return True
@@ -672,6 +688,11 @@ def cmd_index(
 
                         run_kwargs['progress_callback'] = on_progress
 
+                    # About to (re)index this scope — the on-disk .scip set is
+                    # changing, so drop the stale completion marker first. If
+                    # this run is interrupted now, the next one finds no marker
+                    # and rebuilds rather than trusting a half-written file.
+                    invalidate_marker(ariadne_dir)
                     result = adapter.run(**run_kwargs)
 
                     # An adapter can report success yet emit no .scip (scip-java
@@ -802,6 +823,20 @@ def cmd_index(
                 console.print(
                     f'  [dim]Index - all scopes cached for {source_name}; '
                     f'reused {final.name} (pass --force to re-index)[/dim]',
+                )
+
+            # Publish the completion marker atomically once the merged index is
+            # in place and this run actually (re)indexed something. A pure-reuse
+            # run leaves the prior (still-valid) marker untouched.
+            if any_indexed and final.exists():
+                write_marker(
+                    ariadne_dir,
+                    indexer_versions={
+                        e.get('scip_path', ''): e.get('indexer_version', '')
+                        for e in manifest.get('indexers', [])
+                        if e.get('scip_path')
+                    },
+                    corpus_shas=current_corpus_shas(source_root),
                 )
 
         # Best-effort resolution: if we skipped scopes, fail only when NOTHING

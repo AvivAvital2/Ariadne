@@ -676,3 +676,94 @@ class TestMissingOutputIsFailure:
             merger=FakeMerger(),
         )
         assert rc != 0                                    # no-output → fatal
+
+
+# ---------------------------------------------------------------------------
+# Completion marker: a cached .scip is trusted for reuse ONLY when a prior
+# index COMPLETED (proven by the atomic .ariadne/index.ok marker). The .scip
+# files are written non-atomically by the external tools, so an interrupted
+# build can leave a torn file at the canonical path — reuse must not trust it.
+# ---------------------------------------------------------------------------
+
+
+class TestCompletionMarker:
+    def test_marker_written_after_successful_index(
+        self, python_source: Path, configured_for: Path,
+    ) -> None:
+        """A fully successful index publishes .ariadne/index.ok recording the
+        indexer versions."""
+        from cli.index import cmd_index
+
+        cmd_index(
+            _make_args(source='mysrc'),
+            indexer_registry={'python': FakeAdapter(version='scip-python/9.9')},
+            merger=FakeMerger(),
+        )
+        marker = python_source / '.ariadne' / 'index.ok'
+        assert marker.exists()
+        data = json.loads(marker.read_text())
+        assert data.get('indexer_versions')  # versions recorded
+
+    def test_reused_when_marker_present(
+        self, python_source: Path, configured_for: Path,
+    ) -> None:
+        """A second run with the completion marker in place reuses the cached
+        intermediate — the slow indexer is not re-run."""
+        from cli.index import cmd_index
+
+        first = FakeAdapter()
+        cmd_index(_make_args(source='mysrc'),
+                  indexer_registry={'python': first}, merger=FakeMerger())
+        assert len(first.calls) == 1
+
+        second = FakeAdapter()
+        cmd_index(_make_args(source='mysrc'),
+                  indexer_registry={'python': second}, merger=FakeMerger())
+        assert second.calls == []                       # reused, not re-run
+
+    def test_rebuild_when_marker_absent(
+        self, python_source: Path, configured_for: Path,
+    ) -> None:
+        """The guarantee: an interrupted build leaves the intermediate .scip on
+        disk but no index.ok marker. The next run must REBUILD (re-run the
+        adapter), never reuse the possibly-torn file."""
+        from cli.index import cmd_index
+
+        first = FakeAdapter()
+        cmd_index(_make_args(source='mysrc'),
+                  indexer_registry={'python': first}, merger=FakeMerger())
+        assert len(first.calls) == 1
+        intermediate = next(
+            (python_source / '.ariadne' / 'intermediate').glob('*.scip')
+        )
+        assert intermediate.exists()
+
+        # Simulate an interruption BEFORE the marker was published.
+        (python_source / '.ariadne' / 'index.ok').unlink()
+
+        second = FakeAdapter()
+        cmd_index(_make_args(source='mysrc'),
+                  indexer_registry={'python': second}, merger=FakeMerger())
+        assert len(second.calls) == 1                   # rebuilt, not reused
+
+    def test_corpus_sha_change_forces_rebuild(
+        self, python_source: Path, configured_for: Path,
+    ) -> None:
+        """When the pinned corpus sha changed since the index (the marker's
+        recorded sha no longer matches), the cache is not reused."""
+        from cli.index import cmd_index
+
+        clone = python_source / 'mypkg'  # a "clone" dir one level under the root
+        (clone / '.ariadne-corpus-sha').write_text('sha-AAAA\n', encoding='utf-8')
+
+        first = FakeAdapter()
+        cmd_index(_make_args(source='mysrc'),
+                  indexer_registry={'python': first}, merger=FakeMerger())
+        assert len(first.calls) == 1
+
+        (clone / '.ariadne-corpus-sha').write_text('sha-BBBB\n', encoding='utf-8')
+
+        second = FakeAdapter()
+        cmd_index(_make_args(source='mysrc'),
+                  indexer_registry={'python': second}, merger=FakeMerger())
+        assert len(second.calls) == 1                   # sha moved → rebuild
