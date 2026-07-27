@@ -91,6 +91,32 @@ class TestVersionFactsStore:
                 n = conn.execute(
                     'SELECT COUNT(*) FROM version_facts').fetchone()[0]
                 assert n == 3  # dedupe held across the double upsert
+            with lib._conn_provider.acquire() as conn:
+                # Bare @Deprecated facts carry version=None, and SQLite's
+                # UNIQUE constraint treats NULLs as DISTINCT — without the
+                # NULL-safe index every re-extraction/install pass multiplies
+                # them (observed live: 8 facts -> x4 after build + install).
+                bare = version_facts.VersionFactRow(
+                    source_name='env1', qualified_name='pkg.Legacy',
+                    fact='deprecated', version=None,
+                    evidence='@Deprecated', doc_id='d3')
+                version_facts.upsert_version_facts(conn, [bare, bare])
+                version_facts.upsert_version_facts(conn, [bare])
+                n = conn.execute(
+                    'SELECT COUNT(*) FROM version_facts').fetchone()[0]
+                assert n == 4
+                # A store that pre-dates the NULL-safe index self-heals on
+                # init: legacy duplicates collapse to the oldest row.
+                conn.execute('DROP INDEX idx_version_facts_dedupe')
+                conn.execute(
+                    "INSERT INTO version_facts (source_name, qualified_name,"
+                    " fact, version, evidence, doc_id, component)"
+                    " VALUES ('env1', 'pkg.Legacy', 'deprecated', NULL,"
+                    " '@Deprecated', 'd3', '')")
+                version_facts.init_version_facts_schema(conn)
+                n = conn.execute(
+                    'SELECT COUNT(*) FROM version_facts').fetchone()[0]
+                assert n == 4
 
 
 class TestExtractForSource:

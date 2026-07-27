@@ -97,6 +97,19 @@ def init_version_facts_schema(conn) -> None:
         conn.execute(
             "ALTER TABLE version_facts ADD COLUMN component TEXT NOT NULL "
             "DEFAULT ''")
+    # Bare @Deprecated facts carry version=NULL, and the table's UNIQUE
+    # constraint treats NULLs as DISTINCT — every re-extraction/install pass
+    # multiplied them. Self-heal legacy duplicates (keep the oldest row),
+    # then enforce NULL-safe idempotency with a COALESCE unique index
+    # (INSERT OR IGNORE respects unique indexes too).
+    conn.execute(
+        'DELETE FROM version_facts WHERE id NOT IN ('
+        ' SELECT MIN(id) FROM version_facts'
+        " GROUP BY source_name, qualified_name, fact, COALESCE(version, ''))")
+    conn.execute(
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_version_facts_dedupe '
+        'ON version_facts('
+        "source_name, qualified_name, fact, COALESCE(version, ''))")
 
 
 def upsert_version_facts(conn, rows) -> None:

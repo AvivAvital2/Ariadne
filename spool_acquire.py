@@ -624,6 +624,7 @@ def create_spool(spoolfile_path, *, dest_dir, out_path, approve: bool,
         source=name, version=version, runtime=packfile.runtime,
         certify=packfile.certify, source_root=dest_dir, out_path=out_path,
         taxonomy=tuple(data.get('taxonomy') or ()),
+        corpus_shas={n: e.sha for n, e in packfile.corpus.items()},
         runtime_components=dict(data.get('runtime_components') or {}),
         surfaces={
             str(k): [str(s) for s in v]
@@ -688,7 +689,8 @@ def _default_phases(batch_mode=None, onboard_approve=False,
         _run_cli('onboard', '--source', name, *extra)
 
     def build(*, source, version, runtime, certify, source_root, out_path,
-              taxonomy=(), runtime_components=None, surfaces=None):
+              taxonomy=(), runtime_components=None, surfaces=None,
+              corpus_shas=None):
         from config import get_config
         from library import Library
         from spool_pack import build_pack
@@ -699,6 +701,7 @@ def _default_phases(batch_mode=None, onboard_approve=False,
                 source_root=source_root, out_path=out_path, taxonomy=taxonomy,
                 runtime_components=runtime_components,
                 surfaces=surfaces,
+                corpus_shas=corpus_shas,
             )
 
     def theme(name):

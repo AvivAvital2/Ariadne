@@ -777,6 +777,45 @@ class TestSpoolPack:
             titles = {d.title for d in without_spool.list_documents_lite()}
             assert 'Mesh Compaction Patterns' not in titles
 
+    def test_rebuild_from_an_installed_store(self, tmp_path):
+        # After install the spool's docs live ONLY under the reserved
+        # 'spool:<env>' id (CRIT-9) — the builder source is gone. Rebuilding
+        # a pack from such a store (side tables changed, corpus unchanged)
+        # must read the installed copy yet emit a CANONICAL pack — docs under
+        # the PLAIN environment name — so install/rebuild stay symmetric
+        # inverses and a rebuilt pack is indistinguishable from a fresh one.
+        import sqlite3
+
+        root = tmp_path / 'corpus'
+        root.mkdir()
+        with Library(tmp_path / 'installed.db') as store:
+            doc = store.add_document(
+                'explanation', 'Mesh Tuning Guide', 'body',
+                source_name='spool:fakebricks', _allow_reserved_source=True,
+            )
+            manifest = build_pack(
+                store, environment='fakebricks', version='1.1',
+                target_runtime='fake-17.3', certified_docs=(),
+                source_root=root, out_path=tmp_path / 'rebuilt.zip',
+            )
+        assert manifest.environment == 'fakebricks'
+        with zipfile.ZipFile(tmp_path / 'rebuilt.zip') as zf:
+            zf.extract('pack.db', tmp_path / 'unpacked')
+        conn = sqlite3.connect(tmp_path / 'unpacked' / 'pack.db')
+        try:
+            rows = conn.execute(
+                'SELECT source_name, title FROM documents').fetchall()
+        finally:
+            conn.close()
+        assert rows == [('fakebricks', 'Mesh Tuning Guide')]
+
+        with Library(tmp_path / 'consumer.db') as consumer:
+            install_pack(consumer, tmp_path / 'rebuilt.zip',
+                         cache_dir=tmp_path / 'cache')
+            metas = [m for m in consumer.list_documents_lite()
+                     if m.source_name == 'spool:fakebricks']
+            assert [m.id for m in metas] == [doc.id]
+
     def test_surface_tags_travel_with_pack(self, tmp_path):
         # Slice 3: build tags the corpus's doc-grade docs from the recipe's
         # surface vocabularies, the manifest carries the vocabularies (the

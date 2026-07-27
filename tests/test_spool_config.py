@@ -397,3 +397,32 @@ def test_recipe_runtime_components_read(tmp_path):
     not_map = tmp_path / 'notmap.yaml'
     not_map.write_text('runtime_components: [a, b]\n')
     assert _recipe_runtime_components(not_map) == {}
+
+
+def test_recipe_corpus_shas_and_taxonomy_read(tmp_path):
+    # Slice 3 rebuild fidelity: a manually rebuilt pack must carry the same
+    # provenance a create-built pack does — the recipe's TOFU-pinned corpus
+    # shas and its advisory taxonomy. Missing/malformed reads stay tolerant
+    # (empty), never a crash.
+    from cli.spools_cmd import _recipe_corpus_shas, _recipe_taxonomy
+    recipe = tmp_path / 'spools.yaml'
+    recipe.write_text(
+        'runtime: fake-17.3\n'
+        'taxonomy: [serialization, parallelism]\n'
+        'corpus:\n'
+        '  core:\n'
+        '    url: https://example.invalid/core\n'
+        '    tag: v1.0\n'
+        '    sha: abc123\n'
+        '  pinless:\n'
+        '    url: https://example.invalid/pinless\n'
+        '    tag: v2.0\n'
+    )
+    assert _recipe_corpus_shas(recipe) == {'core': 'abc123'}
+    assert _recipe_taxonomy(recipe) == ('serialization', 'parallelism')
+    assert _recipe_corpus_shas(tmp_path / 'missing.yaml') == {}
+    assert _recipe_taxonomy(tmp_path / 'missing.yaml') == ()
+    bad = tmp_path / 'bad.yaml'
+    bad.write_text('{{{ not yaml')
+    assert _recipe_corpus_shas(bad) == {}
+    assert _recipe_taxonomy(bad) == ()

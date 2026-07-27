@@ -226,6 +226,9 @@ class TestSpoolLanguageGate:
         assert captured['taxonomy'] == ('serialization', 'parallelism')
         assert captured['runtime_components'] == {'core': '2.5.0'}
         assert captured['surfaces'] == {'serialization': ['serializ', 'pickle']}
+        # The TOFU-pinned corpus shas are the pack's provenance — the
+        # manifest must record WHICH corpus the pack was built from.
+        assert captured['corpus_shas'] == {'core': _sha}
 
     def test_allow_ungrounded_bypasses_language_gate(
         self, tmp_path, fixture_repo,

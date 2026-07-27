@@ -195,6 +195,37 @@ def _recipe_runtime_components(recipe_path) -> dict:
     return {str(key): str(value) for key, value in raw.items()}
 
 
+def _recipe_corpus_shas(recipe_path) -> dict:
+    """The recipe's TOFU-pinned corpus shas (provenance: which corpus the
+    pack was built from). Tolerant — missing/malformed/pinless yields {}."""
+    try:
+        import yaml
+        data = yaml.safe_load(Path(recipe_path).read_text()) or {}
+    except Exception:
+        return {}
+    corpus = data.get('corpus')
+    if not isinstance(corpus, dict):
+        return {}
+    return {
+        str(name): str(entry['sha'])
+        for name, entry in corpus.items()
+        if isinstance(entry, dict) and entry.get('sha')
+    }
+
+
+def _recipe_taxonomy(recipe_path) -> tuple:
+    """The recipe's advisory taxonomy. Tolerant — missing/malformed = ()."""
+    try:
+        import yaml
+        data = yaml.safe_load(Path(recipe_path).read_text()) or {}
+    except Exception:
+        return ()
+    raw = data.get('taxonomy')
+    if not isinstance(raw, list):
+        return ()
+    return tuple(str(item) for item in raw)
+
+
 def _recipe_surfaces(recipe_path) -> dict:
     """The recipe's interaction-surface vocabularies. Tolerant like
     ``_recipe_runtime_components`` — missing/malformed yields {}."""
@@ -232,6 +263,8 @@ def _build(args: argparse.Namespace) -> int:
             certified_docs=tuple(args.certify),
             source_root=source_root,
             out_path=args.out,
+            taxonomy=_recipe_taxonomy(Path.cwd() / 'spools.yaml'),
+            corpus_shas=_recipe_corpus_shas(Path.cwd() / 'spools.yaml'),
             runtime_components=_recipe_runtime_components(
                 Path.cwd() / 'spools.yaml'),
             surfaces=_recipe_surfaces(Path.cwd() / 'spools.yaml'),

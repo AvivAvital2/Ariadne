@@ -383,13 +383,20 @@ def build_pack(
     # ``list_documents()`` (which materializes every source's content +
     # embeddings into memory; fatal on a real multi-GB store). Lite metas
     # are light; full docs are fetched in bounded batches for our ids only.
-    ids = [
-        meta.id for meta in library.list_documents_lite()
-        if meta.source_name == environment
-    ]
+    metas = list(library.list_documents_lite())
+    read_source = environment
+    ids = [meta.id for meta in metas if meta.source_name == environment]
+    if not ids:
+        # Rebuild-from-installed: after install the docs live ONLY under the
+        # reserved 'spool:<env>' id (CRIT-9) — read that copy, and write the
+        # pack under the PLAIN name below, so install/rebuild stay symmetric
+        # inverses and a rebuilt pack is canonical.
+        read_source = spool_source_id(environment)
+        ids = [meta.id for meta in metas if meta.source_name == read_source]
     if not ids:
         raise SpoolError(
-            f'no documents for source {environment!r} — nothing to pack',
+            f'no documents for source {environment!r} (or installed '
+            f'{spool_source_id(environment)!r}) — nothing to pack',
         )
     source_root = Path(source_root).resolve()
     # Certification is judged on the ORIGINAL absolute paths below; every
@@ -402,14 +409,14 @@ def build_pack(
     # consumer never needs the corpus files. Idempotent.
     from library.version_facts import extract_facts_for_source
     extract_facts_for_source(
-        library, outer_sources=[environment], corpus_source=environment,
+        library, outer_sources=[read_source], corpus_source=environment,
         source_root=source_root)
     if surfaces:
         # Slice 3: tag the corpus's doc-grade docs from the recipe's
         # surface vocabularies (deterministic, offline). Idempotent.
         from library.surface_tags import tag_surfaces_for_source
         tag_surfaces_for_source(
-            library, outer_sources=[environment], corpus_source=environment,
+            library, outer_sources=[read_source], corpus_source=environment,
             surfaces=surfaces)
 
     import numpy as np
@@ -439,7 +446,7 @@ def build_pack(
                     _copy_doc_with_sections(
                         pack, shipped, embedding=doc.embedding,
                         metadata=metadata,
-                        source_name=doc.source_name,
+                        source_name=environment,
                         sections=sections.get(doc.id),  # HIGH-2: sections travel
                     )
             _copy_source_scip(library, pack, environment,
