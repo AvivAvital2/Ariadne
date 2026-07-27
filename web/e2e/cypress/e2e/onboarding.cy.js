@@ -1,21 +1,24 @@
 /// <reference types="cypress" />
 /*
- * E2E for the onboarding wizard (web/static/onboarding.html) — served at `/`.
- * Every /api/* call is stubbed (cy.intercept), including the Step-5 build's SSE
- * stream (/api/onboard/events), so the full flow runs with only `ariadne serve`
- * up — no LLM, keys, or real source needed.
+ * E2E for the onboarding wizard (web/static/onboarding.html, served at /).
+ * /api/* stubbed → ONE fresh server per spec. Covers the shell load and the
+ * full build (Connect → Start build → SSE progress → ready → console handoff).
  */
 describe('Onboarding wizard', () => {
+  before(() => cy.task('startAriadne').then((s) => Cypress.env('base', s.baseUrl)));
+  after(() => cy.task('stopAriadne'));
+
+  const wizard = () => Cypress.env('base') + '/';
+
   it('loads the wizard shell', () => {
     cy.intercept('POST', '/api/sources', { statusCode: 200, body: { default_source: null, sources: [] } });
-    cy.visit('/');
-    cy.get('#nextBtn').should('be.visible'); // the Continue button on step 1
+    cy.visit(wizard());
+    cy.get('#nextBtn').should('be.visible');
   });
 
   it('ready screen is wired to hand off into the Ask console (Phase 3)', () => {
     cy.intercept('POST', '/api/sources', { statusCode: 200, body: { default_source: null, sources: [] } });
-    cy.visit('/');
-    // static wiring check (the panel is hidden until a build completes)
+    cy.visit(wizard());
     cy.get('#gen-ready a[href="/static/console.html"]').should('exist').and('contain', 'Ask');
   });
 
@@ -53,7 +56,7 @@ describe('Onboarding wizard', () => {
         'data: {"type":"done","result":{"files_indexed":2,"docs_written":7,"themes_found":3,"coverage_percent":80}}\n\n',
     }).as('events');
 
-    cy.visit('/');
+    cy.visit(wizard());
 
     // Step 1 — Connect: name + path → source_add
     cy.get('#srcName').type('proj');

@@ -1,11 +1,9 @@
 /// <reference types="cypress" />
 /*
- * E2E for the Ask console (web/static/console.html).
- *
- * All /api/* calls are stubbed with cy.intercept, so this exercises the real
- * page in a real browser without needing an LLM, embeddings, API keys, or an
- * onboarded source — only `ariadne serve` running (to serve the static page).
- * Canned shapes match ariadne_mcp/models.py (AskResponse / SearchResponse).
+ * E2E for the Ask console (web/static/console.html). Every /api/* is stubbed
+ * (cy.intercept) — the page never touches server state — so ONE fresh server
+ * per spec is enough. (Per-test atomicity lives in backend-atomicity.cy.js.)
+ * Shapes match ariadne_mcp/models.py (AskResponse / SearchResponse).
  */
 const ASK = {
   answer: 'Retries live in **http/resilience.py** via the `@retryable` decorator.',
@@ -24,12 +22,15 @@ const SEARCH = {
 };
 
 describe('Ask console', () => {
+  before(() => cy.task('startAriadne').then((s) => Cypress.env('base', s.baseUrl)));
+  after(() => cy.task('stopAriadne'));
+
   beforeEach(() => {
     cy.intercept('POST', '/api/sources', { statusCode: 200, body: { default_source: 'proj', sources: [{ name: 'proj' }] } }).as('sources');
     cy.intercept('POST', '/api/ask', { statusCode: 200, body: ASK }).as('ask');
     cy.intercept('POST', '/api/search', { statusCode: 200, body: SEARCH }).as('search');
     cy.intercept('POST', '/api/feedback', { statusCode: 200, body: { success: true, message: 'Hit logged.' } }).as('feedback');
-    cy.visit('/static/console.html');
+    cy.visit(Cypress.env('base') + '/static/console.html');
   });
 
   it('loads with the source pill and default chips', () => {
@@ -41,16 +42,13 @@ describe('Ask console', () => {
   it('ask: posts ask + search, renders answer, ranked rail, chips', () => {
     cy.get('#q').type('how are retries handled?');
     cy.get('#askBtn').click();
-
     cy.wait('@ask').its('request.body').should('deep.equal', { question: 'how are retries handled?', role: 'developer' });
     cy.wait('@search').its('request.body').should('deep.equal', { query: 'how are retries handled?', role: 'developer' });
-
     cy.get('#answerGrid').should('be.visible');
     cy.get('#answerCard').should('contain', 'http/resilience.py');
     cy.get('#answerCard .badge').first().should('contain', 'high confidence');
     cy.get('#answerCard').should('contain', 'explanation').and('contain', 'gotcha');
-    cy.get('#rail').should('contain', 'The @retryable decorator')
-      .and('contain', '0.94').and('contain', 'http/resilience.py');
+    cy.get('#rail').should('contain', 'The @retryable decorator').and('contain', '0.94').and('contain', 'http/resilience.py');
     cy.get('#chips .chip').should('contain', 'What breaks if I change RetryPolicy?');
   });
 

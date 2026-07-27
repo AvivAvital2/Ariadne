@@ -1,14 +1,9 @@
-// Every test gets its own fresh, isolated Ariadne server — a new temp config
-// dir (empty DB + empty cache) on a unique port — started before the test and
-// torn down after. So tests are atomic: no cache or residual data carries over.
-// The startAriadne task hands back the baseUrl + a synthetic source path.
-beforeEach(() => {
-  cy.task('startAriadne').then(({ baseUrl, sourcePath }) => {
-    Cypress.config('baseUrl', baseUrl);
-    Cypress.env('sourcePath', sourcePath);
-  });
-});
-
-afterEach(() => {
-  cy.task('stopAriadne');
-});
+// Server lifecycle is chosen per spec (not globally), because freshness only
+// matters where server state is actually touched:
+//   • console.cy.js / onboarding.cy.js — stub every /api/*, so the server only
+//     serves static pages and its state never matters → ONE fresh server per
+//     spec (before/after). Booting a fresh server per test there is pure cost.
+//   • backend-atomicity.cy.js — hits the REAL backend → a fresh server per
+//     TEST (beforeEach/afterEach) for genuine atomicity.
+// Each spec sets Cypress.env('base') from the startAriadne task and uses
+// absolute URLs, so there is no runtime-baseUrl dependency.
