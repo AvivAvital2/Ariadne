@@ -431,3 +431,46 @@ class TestRunBatchResume:
             # (the strategy borrows + records into it), not on the strategy.
             # Regression guard for the provider→strategy rename.
             assert result.cache_stats is not None
+
+
+class TestRunBatchPostProcessProgress:
+    @pytest.mark.asyncio
+    async def test_batch_forwards_crossref_progress_to_post_process(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The batch fork must thread ``crossref_progress`` into
+        ``_post_process`` — otherwise themes summarization (the slow post-gen
+        LLM phase) reports no progress and the bar freezes at N/N."""
+        monkeypatch.setattr(
+            docgen.orchestrator, 'BATCH_DISPATCH_IMPLEMENTED', True,
+        )
+        source = _make_source_tree(tmp_path)
+        config = _make_config(tmp_path, source)
+
+        post = AsyncMock()
+
+        def _crossref(msg: str, cur: int, tot: int) -> None:
+            pass
+
+        async with DocGenOrchestrator(config) as orch:
+            with (
+                patch.object(
+                    AnthropicBatchStrategy, 'submit_batch',
+                    new=AsyncMock(return_value=BatchSubmission(batch_id='b')),
+                ),
+                patch.object(
+                    AnthropicBatchStrategy, 'poll_batch',
+                    new=AsyncMock(return_value=BatchStatus(
+                        batch_id='b', processing_status='ended',
+                        processing=0, succeeded=2, errored=0)),
+                ),
+                patch.object(
+                    AnthropicBatchStrategy, 'fetch_batch_results',
+                    new=AsyncMock(return_value={'0': _VALID_DOC, '1': _VALID_DOC}),
+                ),
+                patch.object(DocGenOrchestrator, '_post_process', new=post),
+            ):
+                await orch.run(crossref_progress=_crossref)
+
+        assert post.await_count == 1
+        assert post.await_args.kwargs.get('crossref_progress') is _crossref

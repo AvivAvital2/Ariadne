@@ -595,7 +595,10 @@ class DocGenOrchestrator:
         )
         if batch_resolved:
             _logger.info('Batch dispatch resolved: %s', batch_reason)
-            return await self._run_batch(files_to_process, files_skipped)
+            return await self._run_batch(
+                files_to_process, files_skipped,
+                crossref_progress=crossref_progress,
+            )
         _logger.info('Sync dispatch resolved: %s', batch_reason)
 
         if files_to_process:
@@ -1482,6 +1485,7 @@ class DocGenOrchestrator:
         self,
         files_to_process: list[Path],
         files_skipped: int,
+        crossref_progress: ProgressCallback | None = None,
     ) -> PipelineResult:
         """Batch dispatch fork. Build → dispatch → assemble → post-process."""
         if not self._library or not self._generator or not self._staleness:
@@ -1499,7 +1503,7 @@ class DocGenOrchestrator:
                 pending.batch_id,
             )
             return await self._resume_from_pending(
-                pending, files_skipped,
+                pending, files_skipped, crossref_progress=crossref_progress,
             )
 
         # Phase 2: First-run prompt for the up-to-24h SLA.
@@ -1565,7 +1569,7 @@ class DocGenOrchestrator:
             'Generation complete; running post-processing...',
             len(files_to_process), len(files_to_process),
         )
-        await self._post_process(results)
+        await self._post_process(results, crossref_progress=crossref_progress)
 
         # Compute summary.
         docs_created = sum(r.docs_generated for r in results)
@@ -1600,6 +1604,7 @@ class DocGenOrchestrator:
         self,
         pending,  # type: PendingBatch
         files_skipped: int,
+        crossref_progress: ProgressCallback | None = None,
     ) -> PipelineResult:
         """Fetch + assemble an in-flight batch the previous run
         submitted but didn't finish.
@@ -1689,7 +1694,7 @@ class DocGenOrchestrator:
         )
 
         # Post-processing (same as fresh batch run).
-        await self._post_process(results)
+        await self._post_process(results, crossref_progress=crossref_progress)
 
         docs_created = sum(r.docs_generated for r in results)
         docs_failed = sum(r.docs_failed for r in results)
@@ -1802,6 +1807,10 @@ class DocGenOrchestrator:
                 summarize_kwargs={
                     'on_progress': _theme_progress,
                     'concurrency': self.config.concurrency,
+                    # Theme summarization is generation — use the RUN's model
+                    # (e.g. a spool build's spools_model), not the global
+                    # default it would otherwise fall back to.
+                    'model': self.config.model,
                 },
             )
             if crossref_progress is not None and themes_summary:

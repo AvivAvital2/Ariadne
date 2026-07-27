@@ -154,6 +154,9 @@ async def cmd_themes_build(args: argparse.Namespace) -> int:
 
                 summarize_kwargs = {'on_progress': on_progress}
                 summarize_kwargs['concurrency'] = getattr(args, 'concurrency', 3)
+                # Honor the run's model (a spool build passes spools_model);
+                # fall back to the configured global model otherwise.
+                summarize_kwargs['model'] = getattr(args, 'model', None) or cfg.model
                 if batch_strategy is not None:
                     summarize_kwargs['on_stage'] = on_stage
 

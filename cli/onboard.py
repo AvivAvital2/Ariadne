@@ -232,6 +232,7 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
     )
     themes_args = _ns(
         source=source_name, themes_action='build',
+        model=model,
         quiet=not verbose,
     )
 
