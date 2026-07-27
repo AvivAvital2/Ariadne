@@ -683,7 +683,7 @@ def _default_phases(batch_mode=None, onboard_approve=False,
         _run_cli('onboard', '--source', name, *extra)
 
     def build(*, source, version, runtime, certify, source_root, out_path,
-              taxonomy=()):
+              taxonomy=(), runtime_components=None):
         from config import get_config
         from library import Library
         from spool_pack import build_pack
@@ -692,6 +692,7 @@ def _default_phases(batch_mode=None, onboard_approve=False,
                 library, environment=source, version=version,
                 target_runtime=runtime, certified_docs=certify,
                 source_root=source_root, out_path=out_path, taxonomy=taxonomy,
+                runtime_components=runtime_components,
             )
 
     def theme(name):

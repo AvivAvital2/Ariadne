@@ -4,6 +4,15 @@ version: 1.0.0
 languages:
 - python
 - scala
+# The runtime edition's component versions (confirmed 2026-07-27) — the
+# corpus pins below were chosen to match the runtime, so these ARE the
+# runtime's components by construction. Keys = corpus repo dirs (how
+# version facts attribute their component); rides the pack manifest as
+# runtime_components and powers the deterministic availability join.
+runtime_components:
+  spark: '4.0.0'
+  delta: '4.0.0'
+  databricks-sdk-py: '0.121.0'
 corpus:
   spark:
     url: https://github.com/apache/spark

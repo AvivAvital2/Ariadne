@@ -242,6 +242,11 @@ class SpoolManifest:
     # D5 delta substrate: the per-repo commit shas this pack was built from,
     # so a later `create` can reuse unchanged repos instead of rebuilding.
     corpus_shas: dict = field(default_factory=dict)
+    # Slice 2: the runtime pin's component-version map (corpus source →
+    # component version, recipe-authored from the runtime's release notes) —
+    # the right-hand side of the version_facts availability join, so
+    # "is X available on MY runtime" resolves from the pin.
+    runtime_components: dict = field(default_factory=dict)
     # The aisle's advisory lens (designs/spool-expert-aisles.md §2): the
     # concern/opportunity/gotcha dimensions this expert applies to a caller's
     # code (databricks: parallelism · serialization · autolog-patching · …).
@@ -275,6 +280,7 @@ class SpoolManifest:
             'embedding_model': self.embedding_model,
             'embedding_dim': self.embedding_dim,
             'corpus_shas': dict(self.corpus_shas),
+            'runtime_components': dict(self.runtime_components),
             'taxonomy': list(self.taxonomy),
             'extraction_coverage_version': self.extraction_coverage_version,
             'attribution': [
@@ -314,6 +320,8 @@ class SpoolManifest:
                 embedding_model=data.get('embedding_model'),
                 embedding_dim=int(emb_dim) if emb_dim is not None else None,
                 corpus_shas=dict(data.get('corpus_shas') or {}),
+                runtime_components=dict(
+                    data.get('runtime_components') or {}),
                 taxonomy=tuple(data.get('taxonomy') or ()),
                 extraction_coverage_version=int(
                     data.get('extraction_coverage_version', 0) or 0),

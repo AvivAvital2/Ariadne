@@ -223,6 +223,20 @@ def _copy_source_scip(src, dest, source_name, *, dest_source_name=None,
         dconn.commit()
 
 
+def _copy_version_facts(src, dest, source_name):
+    """Copy the corpus's version_facts (Slice 2). Facts are keyed by the
+    CORPUS source name end-to-end (the entity indexes key symbols the same
+    way), so install copies without renaming."""
+    from library.version_facts import init_version_facts_schema
+    with src._conn_provider.acquire() as sconn, \
+            dest._conn_provider.acquire() as dconn:
+        init_version_facts_schema(sconn)
+        init_version_facts_schema(dconn)
+        _copy_source_scoped_table(
+            sconn, dconn, 'version_facts', source_name, source_name)
+        dconn.commit()
+
+
 def _gather_attribution(source_root):
     """Scan corpus clones under ``source_root`` (each marked with the fetch's
     ``.ariadne-corpus-sha``) for their top-level LICENSE/NOTICE files, so the
@@ -304,6 +318,7 @@ def build_pack(
     out_path,
     corpus_shas=None,
     taxonomy=(),
+    runtime_components=None,
 ) -> SpoolManifest:
     """Build a pack zip from ``library``'s ``environment`` source.
 
@@ -331,6 +346,15 @@ def build_pack(
     # Certification is judged on the ORIGINAL absolute paths below; every
     # written row is then rewritten corpus-relative (_strip_builder_paths).
     root_prefix = str(source_root) + '/'
+
+    # Slice 2: extract the corpus's version markers (from the LOCATED source
+    # lines — stored signatures are truncated at the annotation) into
+    # version_facts on the builder store; the pack ships the FACTS so a
+    # consumer never needs the corpus files. Idempotent.
+    from library.version_facts import extract_facts_for_source
+    extract_facts_for_source(
+        library, outer_sources=[environment], corpus_source=environment,
+        source_root=source_root)
 
     import numpy as np
 
@@ -364,6 +388,7 @@ def build_pack(
                     )
             _copy_source_scip(library, pack, environment,
                               strip_path_prefix=root_prefix)
+            _copy_version_facts(library, pack, environment)
         _checkpoint(db_path)
         db_blob = db_path.read_bytes()
 
@@ -386,6 +411,7 @@ def build_pack(
         embedding_dim=embedding_dim,
         corpus_shas=dict(corpus_shas or {}),
         taxonomy=tuple(taxonomy or ()),
+        runtime_components=dict(runtime_components or {}),
         extraction_coverage_version=EXTRACTION_COVERAGE_VERSION,
         attribution=attribution,
     )
@@ -571,6 +597,7 @@ def install_pack(library, pack_path, *, cache_dir,
                     pack, library, manifest.environment,
                     dest_source_name=install_source,
                 )
+                _copy_version_facts(pack, library, manifest.environment)
         except Exception:
             for doc_id in newly_inserted:
                 library.delete_document(doc_id)

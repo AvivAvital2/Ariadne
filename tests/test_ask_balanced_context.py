@@ -57,6 +57,31 @@ def _cdoc(doc_id, source_name, content='body text'):
         id=doc_id, title=doc_id, source_name=source_name, content=content)
 
 
+class TestEnvironmentLabel:
+    """The CONSIDERING header's '<env> (runtime <pin>)' label. The pin lives
+    on registration.manifest.target_runtime — reading it off the
+    registration object silently dropped the pin (regression)."""
+
+    def test_reads_pin_through_registration(self):
+        from ariadne_mcp.service_analysis import _environment_label
+        registration = SimpleNamespace(
+            manifest=SimpleNamespace(target_runtime='fake-17.3'))
+        resolution = SimpleNamespace(registered={'env1': registration})
+        assert _environment_label(resolution) == 'env1 (runtime fake-17.3)'
+
+    def test_bare_manifest_and_missing_pin(self):
+        from ariadne_mcp.service_analysis import _environment_label
+        resolution = SimpleNamespace(registered={
+            'a': SimpleNamespace(target_runtime='r1'),
+            'b': SimpleNamespace(),
+        })
+        assert _environment_label(resolution) == 'a (runtime r1), b'
+
+    def test_none_when_nothing_registered(self):
+        from ariadne_mcp.service_analysis import _environment_label
+        assert _environment_label(SimpleNamespace(registered={})) is None
+
+
 class TestLabeledAssembly:
     """The design-§7 labeled synthesis context: two attributed streams —
     'GIVEN' (the project's own docs) and 'CONSIDERING' (the environment

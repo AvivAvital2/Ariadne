@@ -373,3 +373,27 @@ def test_enabled_spools_validates_its_input():
         enabled_spools(_StubConfig({'spools': ['fakebricks']}))   # not a mapping
     with pytest.raises(SpoolError):
         enabled_spools(_StubConfig({'spools': {'fakebricks': 5}}))  # bad value
+
+
+def test_recipe_runtime_components_read(tmp_path):
+    # Slice 3: the recipe's runtime→component map feeds the pack build; a
+    # missing/malformed recipe yields {} (availability stays honest-None,
+    # never a crash or a guessed version). YAML scalars coerce to str
+    # (4.0 would otherwise parse as a float).
+    from cli.spools_cmd import _recipe_runtime_components
+    recipe = tmp_path / 'spools.yaml'
+    recipe.write_text(
+        'runtime: fake-17.3\n'
+        'runtime_components:\n'
+        '  spark: 4.0.0\n'
+        '  sdk: 0.121.0\n'
+    )
+    assert _recipe_runtime_components(recipe) == {
+        'spark': '4.0.0', 'sdk': '0.121.0'}
+    assert _recipe_runtime_components(tmp_path / 'missing.yaml') == {}
+    bad = tmp_path / 'bad.yaml'
+    bad.write_text('{{{ not yaml')
+    assert _recipe_runtime_components(bad) == {}
+    not_map = tmp_path / 'notmap.yaml'
+    not_map.write_text('runtime_components: [a, b]\n')
+    assert _recipe_runtime_components(not_map) == {}

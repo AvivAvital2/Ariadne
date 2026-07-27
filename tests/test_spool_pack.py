@@ -720,6 +720,64 @@ class TestSpoolPack:
                 ).fetchall()
         assert ('spark.sql.shuffle.partitions', '200', doc_source) in cfg
 
+    def test_version_facts_travel_with_pack(self, tmp_path):
+        # Slice 2: build extracts the corpus's version markers from the
+        # LOCATED source lines into version_facts, the pack ships them, and
+        # install lands them corpus-keyed on the consumer — who never needs
+        # the corpus files. The manifest carries the runtime→component map
+        # (the availability join's right-hand side).
+        import sqlite3
+
+        from library.version_facts import (
+            query_version_facts,
+            runtime_availability,
+        )
+
+        root = tmp_path / 'corpus'
+        (root / 'pkg').mkdir(parents=True)
+        src = root / 'pkg' / 'frob.scala'
+        src.write_text('package pkg\n\n@Since("3.1.0")\nobject Frobnicator')
+        with Library(tmp_path / 'builder.db') as builder:
+            builder.add_document(
+                'catalog', 'pkg.Frobnicator',
+                f'scala_object pkg.Frobnicator [scala] {src}:3-3 :: @Since',
+                source_files=[str(src)],
+                metadata={'kind': 'element', 'source_name': 'fakebricks',
+                          'qualified_name': 'pkg.Frobnicator',
+                          'subtype': 'scala_object',
+                          'location': {'line_start': 3, 'line_end': 3}},
+                source_name='fakebricks',
+            )
+            manifest = build_pack(
+                builder, environment='fakebricks', version='1.0',
+                target_runtime='fake-17.3', certified_docs=(),
+                source_root=root, out_path=tmp_path / 'pack.zip',
+                runtime_components={'fakebricks': '3.5.0'},
+            )
+        assert manifest.runtime_components == {'fakebricks': '3.5.0'}
+        with zipfile.ZipFile(tmp_path / 'pack.zip') as zf:
+            packed = SpoolManifest.from_dict(
+                yaml.safe_load(zf.read('manifest.yaml')))
+            (tmp_path / 'packed.db').write_bytes(zf.read('pack.db'))
+        assert packed.runtime_components == {'fakebricks': '3.5.0'}
+        conn = sqlite3.connect(tmp_path / 'packed.db')
+        assert conn.execute(
+            'SELECT COUNT(*) FROM version_facts').fetchone()[0] == 1
+        conn.close()
+
+        with Library(tmp_path / 'consumer.db') as consumer:
+            install_pack(consumer, tmp_path / 'pack.zip',
+                         cache_dir=tmp_path / 'c')
+            with consumer._conn_provider.acquire() as conn:
+                facts = query_version_facts(
+                    conn, ['fakebricks'], 'pkg.Frobnicator')
+                assert [(f.fact, f.version) for f in facts] == [
+                    ('since', '3.1.0')]
+                avail = runtime_availability(
+                    conn, ['fakebricks'], 'pkg.Frobnicator',
+                    packed.runtime_components)
+                assert avail['available'] is True
+
     def test_pack_carries_no_builder_absolute_paths(self, tmp_path):
         # A real pack shipped the builder's machine-local absolute paths in
         # 100% of its docs (content + source_files) and in every

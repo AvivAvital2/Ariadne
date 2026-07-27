@@ -199,18 +199,10 @@ class AnalysisMixin:
         top_docs = _balanced_ask_docs(
             search_result.documents, _spool_resolution.scope_sources(),
         )
-        _env_bits = []
-        for _name in sorted(_spool_resolution.registered):
-            _manifest = _spool_resolution.registered[_name]
-            _pin = getattr(_manifest, 'target_runtime', None)
-            if _pin is None and isinstance(_manifest, dict):
-                _pin = _manifest.get('target_runtime')
-            _env_bits.append(
-                f'{_name} (runtime {_pin})' if _pin else str(_name))
         context = _assemble_ask_context(
             top_docs, _spool_resolution.scope_sources(),
             connections=getattr(search_result, 'spool_connections', None),
-            environment_label=', '.join(_env_bits) or None,
+            environment_label=_environment_label(_spool_resolution),
         )
         sources = [doc.title for doc in top_docs]
 
@@ -881,6 +873,22 @@ def _balanced_ask_docs(documents, spool_sources, *, anchor_n=4, ground_n=4):
         bucket = ground if getattr(doc, 'source_name', None) in spool_sources else anchor
         bucket.append(doc)
     return anchor[:anchor_n] + ground[:ground_n]
+
+
+def _environment_label(resolution):
+    """'<env> (runtime <pin>), ...' for the CONSIDERING header. The pin
+    lives on ``registration.manifest.target_runtime`` — reading it off the
+    registration object silently dropped it (regression). Tolerates bare
+    manifests and dicts; None when nothing is registered."""
+    bits = []
+    for name in sorted(getattr(resolution, 'registered', {}) or {}):
+        holder = resolution.registered[name]
+        manifest = getattr(holder, 'manifest', holder)
+        pin = getattr(manifest, 'target_runtime', None)
+        if pin is None and isinstance(manifest, dict):
+            pin = manifest.get('target_runtime')
+        bits.append(f'{name} (runtime {pin})' if pin else str(name))
+    return ', '.join(bits) or None
 
 
 def _doc_only_badge(docs):

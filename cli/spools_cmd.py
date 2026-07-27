@@ -179,6 +179,22 @@ def _status(args: argparse.Namespace) -> int:
     return 1 if resolution.gaps else 0
 
 
+def _recipe_runtime_components(recipe_path) -> dict:
+    """The recipe's runtime→component-version map (the availability join's
+    right-hand side; values pinned BY the recipe to match the runtime
+    edition). Tolerant: a missing or malformed recipe yields {} —
+    availability stays honest-None, never a crash or a guessed version."""
+    try:
+        import yaml
+        data = yaml.safe_load(Path(recipe_path).read_text()) or {}
+    except Exception:
+        return {}
+    raw = data.get('runtime_components')
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): str(value) for key, value in raw.items()}
+
+
 def _build(args: argparse.Namespace) -> int:
     """Package ``--source`` into a pack zip (fails loud on misconfig)."""
     from library import Library
@@ -199,6 +215,8 @@ def _build(args: argparse.Namespace) -> int:
             certified_docs=tuple(args.certify),
             source_root=source_root,
             out_path=args.out,
+            runtime_components=_recipe_runtime_components(
+                Path.cwd() / 'spools.yaml'),
         )
     print(f'  built  {args.out}  (environment {manifest.environment}, '
           f'runtime {manifest.target_runtime}, {manifest.checksum})')

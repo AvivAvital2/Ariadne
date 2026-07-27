@@ -79,9 +79,11 @@ async def test_onboard_tool_over_session_streams_progress(tmp_path, monkeypatch)
     (src / 'pkg' / 'a.py').write_text('def a():\n    return 1\n')
 
     # Stub the paid pipeline (no LLM): fire one progress event, return counts.
+    # Signature mirrors run_onboard_pipeline (incl. include_free_phases —
+    # the tool sets it; test_mcp_onboard.py's fake carries it the same way).
     async def fake_pipeline(source, model, doc_types, *, mode='live',
                             concurrency=None, progress=None, db_path=None,
-                            verbose=False):
+                            verbose=False, include_free_phases=False):
         if progress is not None:
             await progress('Generating documentation', 2, 3)
         return OnboardResult(docs_written=5, themes_found=2, themes_ok=True)
