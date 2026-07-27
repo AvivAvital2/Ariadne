@@ -115,9 +115,11 @@ class TestSetupRecipeIntegration:
         assert data['runtime']
 
     def test_terraform_recipe_single_repo_version_is_runtime(self, tmp_path) -> None:
-        # The shipped terraform recipe is single-repo with no `runtime:` — the
-        # picked version becomes the edition, and no "Runtime edition" prompt is
-        # shown (nothing meaningful to type). Uses the real recipe; fakes tags.
+        # The shipped terraform recipe is single-repo with no `runtime:` — its
+        # corpus is opentofu (the MPL/open-source Terraform impl, not BUSL
+        # hashicorp/terraform). The picked version becomes the edition, and no
+        # "Runtime edition" prompt is shown (nothing meaningful to type). Uses
+        # the real recipe; fakes tags.
         out = tmp_path / 'tf.yaml'
         prompts = []
 
@@ -129,11 +131,11 @@ class TestSetupRecipeIntegration:
             'terraform', out_path=out, prompt=_prompt,
             tags_fn=lambda url: ['v1.13.0', 'v1.12.0'],
             compat_fn=lambda *a, **k: {},
-            order_fn=lambda *a, **k: ['terraform'],
+            order_fn=lambda *a, **k: ['opentofu'],
         )
         data = yaml.safe_load(out.read_text())
-        assert 'hashicorp/terraform' in data['corpus']['terraform']['url']
-        assert data['corpus']['terraform']['tag'] == 'v1.13.0'
+        assert 'opentofu/opentofu' in data['corpus']['opentofu']['url']
+        assert data['corpus']['opentofu']['tag'] == 'v1.13.0'
         assert data['languages'] == ['go']
         assert data['runtime'] == 'v1.13.0'      # version became the edition
         assert not any('runtime edition' in p.lower() for p in prompts)

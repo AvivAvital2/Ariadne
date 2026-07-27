@@ -25,7 +25,7 @@ from pathlib import Path
 import yaml
 
 from spools import (SpoolError, is_scip_eligible, load_yaml_mapping,
-                    unsupported_corpus_language)
+                    nonfree_corpora, unsupported_corpus_language)
 
 
 @dataclass(frozen=True)
@@ -510,6 +510,7 @@ def _resolve_sha(url: str, tag: str) -> str:
 def create_spool(spoolfile_path, *, dest_dir, out_path, approve: bool,
                  confirm=input, phases: dict | None = None,
                  allow_ungrounded: bool = False,
+                 allow_nonfree: bool = False,
                  batch_mode: str | None = None,
                  resume: bool = False) -> CreateResult:
     """``spools create``: the whole build behind one consent + one cost gate.
@@ -585,6 +586,25 @@ def create_spool(spoolfile_path, *, dest_dir, out_path, approve: bool,
                 f'spool {name!r}: the fetched corpus is {ungrounded}, which '
                 f'Ariadne cannot SCIP-index — refusing to build an '
                 f'ungrounded pack. Pass --allow-ungrounded to override.',
+            )
+
+    # License-admission gate (§18.1): a spool ships DERIVED docs + a SCIP index
+    # from its corpus, so the corpus must be under a license that permits
+    # redistributing derived work. Source-available / proprietary / unrecognized
+    # corpora are refused (fail-closed) unless the builder opts into a
+    # local-only pack with --allow-nonfree.
+    if not allow_nonfree:
+        nonfree = nonfree_corpora(dest_dir)
+        if nonfree:
+            listed = ', '.join(
+                f"{repo} ({lic or 'no recognized open-source license'})"
+                for repo, _cat, lic in nonfree)
+            raise SpoolError(
+                f'spool {name!r}: corpus {listed} is not redistribution-safe '
+                f'under an open-source license — a spool pack is meant to be '
+                f'shared. Use an open-source upstream (e.g. OpenTofu instead of '
+                f'BUSL Terraform), or pass --allow-nonfree for a local-only '
+                f'build.',
             )
 
     from config import get_config

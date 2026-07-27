@@ -42,6 +42,9 @@ def fixture_repo(tmp_path):
     repo.mkdir()
     _git(repo, 'init', '-q')
     (repo / 'engine.py').write_text('VERSION = 1\n')
+    # A permissive LICENSE, like every real corpus — so the license-admission
+    # gate (§18.1) admits it as redistribution-safe.
+    (repo / 'LICENSE').write_text('Apache License\nVersion 2.0, January 2004\n')
     _git(repo, 'add', '.')
     _git(repo, 'commit', '-q', '-m', 'v1')
     pinned_sha = _git(repo, 'rev-parse', 'HEAD')
@@ -833,10 +836,12 @@ class TestSpoolAcquire:
         seen = {}
 
         def fake_create(spoolfile, *, dest_dir, out_path, approve,
-                        allow_ungrounded=False, batch_mode=None, resume=False):
+                        allow_ungrounded=False, allow_nonfree=False,
+                        batch_mode=None, resume=False):
             seen.update(spoolfile=str(spoolfile), dest=str(dest_dir),
                         out=str(out_path), approve=approve,
-                        allow_ungrounded=allow_ungrounded, batch_mode=batch_mode,
+                        allow_ungrounded=allow_ungrounded,
+                        allow_nonfree=allow_nonfree, batch_mode=batch_mode,
                         resume=resume)
             return CreateResult(accepted=True, pack_path=str(out_path))
 
@@ -857,6 +862,7 @@ class TestSpoolAcquire:
         assert seen['batch_mode'] == 'batch'
         assert seen['approve'] is False
         assert seen['allow_ungrounded'] is False
+        assert seen['allow_nonfree'] is False
 
         # `--yes` on the now-existing recipe skips setup and approves; a mode
         # flag makes it fully unattended.

@@ -94,6 +94,11 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help="Build even when the corpus language has no SCIP indexer "
              "(e.g. Go) — a docs-only pack with no code-tier grounding. "
              "Default False: create REFUSES an ungrounded corpus.")
+    create_parser.add_argument('--allow-nonfree', action='store_true',
+        default=False,
+        help="Build even when a corpus is under a non-open-source license "
+             "(BUSL/SSPL/Elastic/proprietary) — a LOCAL-only pack, not for "
+             "redistribution. Default False: create REFUSES a non-free corpus.")
 
     enable_parser = spools_sub.add_parser(
         'enable',
@@ -257,7 +262,8 @@ def _create(args: argparse.Namespace) -> int:
     out = args.out or f"{name}-{data['runtime']}.zip"
     result = create_spool(
         spoolfile, dest_dir=args.dest, out_path=out, approve=args.yes,
-        allow_ungrounded=args.allow_ungrounded, batch_mode=args.batch_mode,
+        allow_ungrounded=args.allow_ungrounded,
+        allow_nonfree=args.allow_nonfree, batch_mode=args.batch_mode,
         resume=resume,
     )
     if not result.accepted:

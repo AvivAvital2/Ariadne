@@ -35,7 +35,10 @@ _PACK_BATCH = 500
 _INSTALL_CHUNK = 1024 * 1024                 # 1 MB streaming chunk
 _DEFAULT_MAX_PACK_BYTES = 32 * 1024 ** 3     # 32 GB — generous vs a real corpus
 _DEFAULT_MAX_MANIFEST_BYTES = 1024 * 1024    # 1 MB — manifests are tiny
-_MAX_ZIP_MEMBERS = 16                        # a healthy pack has exactly 2
+_MAX_ZIP_MEMBERS = 256                       # manifest + pack.db + license members
+_MAX_LICENSE_BYTES = 1024 * 1024             # 1 MB — license/notice files are tiny
+# Top-level filenames captured for upstream attribution (§18.1).
+_ATTRIBUTION_FILENAMES = ('license', 'licence', 'copying', 'notice')
 
 
 def _sha256(blob: bytes) -> str:
@@ -186,6 +189,76 @@ def _copy_source_scip(src, dest, source_name, *, dest_source_name=None):
         dconn.commit()
 
 
+def _gather_attribution(source_root):
+    """Scan corpus clones under ``source_root`` (each marked with the fetch's
+    ``.ariadne-corpus-sha``) for their top-level LICENSE/NOTICE files, so the
+    pack ships upstream attribution (§18.1). Returns ``(records, blobs)``:
+    ``records`` is the manifest form — a tuple of
+    ``{repo, sha, files: ({name, sha256}, ...)}`` — and ``blobs`` maps each
+    ``licenses/<repo>/<file>`` arcname to its bytes for the zip. No corpus
+    clones (or none carrying a license) → empty, so a hand-built pack simply
+    carries no attribution."""
+    from spool_acquire import _CORPUS_SHA_MARKER
+    source_root = Path(source_root)
+    records = []
+    blobs = {}
+    for marker in sorted(source_root.glob(f'*/{_CORPUS_SHA_MARKER}')):
+        repo_dir = marker.parent
+        repo = repo_dir.name
+        sha = marker.read_text(encoding='utf-8').strip()
+        files = []
+        for entry in sorted(repo_dir.iterdir()):
+            low = entry.name.lower()
+            if not entry.is_file() or not any(
+                    low == n or low.startswith(n + '.') or low.startswith(n + '-')
+                    for n in _ATTRIBUTION_FILENAMES):
+                continue
+            data = entry.read_bytes()
+            blobs[f'licenses/{repo}/{entry.name}'] = data
+            files.append({'name': entry.name, 'sha256': _sha256(data)})
+        if files:
+            records.append({'repo': repo, 'sha': sha, 'files': tuple(files)})
+    return tuple(records), blobs
+
+
+def _stage_attribution_licenses(pack_path, attribution):
+    """Read + integrity-check each license member declared in ``attribution``,
+    returning ``{(repo, name): bytes}``. Each is verified against its recorded
+    sha256 BEFORE the caller writes anything to the store/cache (fail-closed).
+    Only members DECLARED in the manifest are read (the zip's own member list is
+    untrusted); a missing or mismatched member is refused loudly.
+
+    As with the pack.db checksum (§19.2) this proves INTEGRITY, not
+    AUTHENTICITY: an attacker who rewrites pack.db can also rewrite a license
+    and its recorded sha. Acceptable only for the v1 local-install path — a
+    remote fetch needs signature verification first."""
+    staged = {}
+    if not attribution:
+        return staged
+    with zipfile.ZipFile(pack_path) as zf:
+        present = set(zf.namelist())
+        for record in attribution:
+            repo = record['repo']
+            for entry in record.get('files', ()):
+                name = entry['name']
+                arc = f'licenses/{repo}/{name}'
+                if arc not in present:
+                    raise SpoolError(
+                        f'pack {pack_path}: attribution declares license {arc} '
+                        f'but the member is missing — refusing',
+                    )
+                blob = _read_capped(zf, arc, _MAX_LICENSE_BYTES)
+                digest = _sha256(blob)
+                if digest != entry['sha256']:
+                    raise SpoolError(
+                        f'pack {pack_path}: license {arc} failed integrity '
+                        f'check (declared {entry["sha256"]}, got {digest}) — '
+                        f'refusing',
+                    )
+                staged[(repo, name)] = blob
+    return staged
+
+
 def build_pack(
     library,
     *,
@@ -260,6 +333,8 @@ def build_pack(
     import embedding as _embedding
     embedding_model = _embedding.DEFAULT_MODEL if embedding_dim is not None else None
 
+    attribution, license_blobs = _gather_attribution(source_root)
+
     manifest = SpoolManifest(
         environment=environment,
         version=str(version),
@@ -272,11 +347,14 @@ def build_pack(
         corpus_shas=dict(corpus_shas or {}),
         taxonomy=tuple(taxonomy or ()),
         extraction_coverage_version=EXTRACTION_COVERAGE_VERSION,
+        attribution=attribution,
     )
     manifest_yaml = yaml.safe_dump(manifest.to_dict(), sort_keys=False)
     with zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr('manifest.yaml', manifest_yaml)
         zf.writestr('pack.db', db_blob)
+        for arcname, blob in license_blobs.items():
+            zf.writestr(arcname, blob)
     return manifest
 
 
@@ -370,6 +448,13 @@ def install_pack(library, pack_path, *, cache_dir,
                 f'refusing to install',
             )
 
+        # Attribution (§18.1): verify each declared license member against its
+        # recorded sha256 BEFORE any store/cache write (fail-closed), staged for
+        # the cache write below.
+        staged_licenses = _stage_attribution_licenses(
+            pack_path, manifest.attribution,
+        )
+
         # CRIT-10 (match-or-re-embed): the pack's vectors are only meaningful
         # under the model that produced them. If the consumer's embedding
         # model MATCHES, use the shipped vectors verbatim (the perf win). If
@@ -455,6 +540,10 @@ def install_pack(library, pack_path, *, cache_dir,
         dest.mkdir(parents=True, exist_ok=True)
         (dest / 'manifest.yaml').write_bytes(manifest_bytes)
         shutil.copyfile(staged_db, dest / 'pack.db')
+        for (repo, name), blob in staged_licenses.items():
+            lic_dir = dest / 'licenses' / repo
+            lic_dir.mkdir(parents=True, exist_ok=True)
+            (lic_dir / name).write_bytes(blob)
     return manifest
 
 

@@ -41,6 +41,15 @@ class TestSpoolPack:
 
         source_root = tmp_path / 'fakebricks-repo'
         (source_root / 'docs').mkdir(parents=True)
+        # A corpus clone under the build root, marked like a real fetch, so the
+        # pack captures its upstream LICENSE/NOTICE for attribution (Demand 5).
+        corpus_repo = source_root / 'corpuslib'
+        corpus_repo.mkdir()
+        (corpus_repo / '.ariadne-corpus-sha').write_text('abc123def456\n')
+        (corpus_repo / 'LICENSE').write_text(
+            'Mozilla Public License Version 2.0\n\n1. Definitions\n...\n')
+        (corpus_repo / 'NOTICE').write_text(
+            'corpuslib\nCopyright (c) 2026 The corpuslib Authors\n')
 
         with Library(tmp_path / 'builder.db') as builder:
             engine_doc = builder.add_document(
@@ -89,7 +98,10 @@ class TestSpoolPack:
             )
             assert pack_path.exists()
             with zipfile.ZipFile(pack_path) as zf:
-                assert set(zf.namelist()) == {'manifest.yaml', 'pack.db'}
+                assert set(zf.namelist()) == {
+                    'manifest.yaml', 'pack.db',
+                    'licenses/corpuslib/LICENSE', 'licenses/corpuslib/NOTICE',
+                }
                 db_blob = zf.read('pack.db')
                 packed_manifest = SpoolManifest.from_dict(
                     yaml.safe_load(zf.read('manifest.yaml')),
@@ -97,6 +109,21 @@ class TestSpoolPack:
             assert packed_manifest == manifest
             assert manifest.checksum == (
                 'sha256:' + hashlib.sha256(db_blob).hexdigest()
+            )
+
+            # Demand 5 — attribution: the corpus clone's LICENSE/NOTICE are
+            # bundled and recorded with a per-file sha256, so open-source
+            # provenance travels with the pack.
+            assert len(manifest.attribution) == 1
+            attr = manifest.attribution[0]
+            assert attr['repo'] == 'corpuslib'
+            assert attr['sha'] == 'abc123def456'
+            with zipfile.ZipFile(pack_path) as zf:
+                lic_bytes = zf.read('licenses/corpuslib/LICENSE')
+            recorded = {f['name']: f['sha256'] for f in attr['files']}
+            assert set(recorded) == {'LICENSE', 'NOTICE'}
+            assert recorded['LICENSE'] == (
+                'sha256:' + hashlib.sha256(lic_bytes).hexdigest()
             )
 
             extracted_db = tmp_path / 'extracted-pack.db'
@@ -147,6 +174,12 @@ class TestSpoolPack:
                 docs[guide_doc.id].embedding, guide_doc.embedding,
             )
             assert docs[guide_doc.id].metadata['provenance'] == 'official'
+
+            # Demand 5 (install) — attribution files travel to the cache dir,
+            # under the same per-environment folder as manifest.yaml/pack.db.
+            lic_cache = cache_dir / 'fakebricks' / 'licenses' / 'corpuslib'
+            assert (lic_cache / 'LICENSE').exists()
+            assert (lic_cache / 'NOTICE').exists()
 
             cfg = _config(install_root, '''
                 spools:
@@ -204,6 +237,24 @@ class TestSpoolPack:
             assert [s.heading for s in target.get_sections(guide_doc.id)] == [
                 'Overview',
             ]
+
+        # Demand 5 (integrity) — a tampered LICENSE member is refused by its
+        # recorded per-file sha256, BEFORE any store/cache write (fail-closed,
+        # the same guarantee the pack.db checksum gives).
+        tampered_lic = tmp_path / 'tampered-lic.zip'
+        with zipfile.ZipFile(pack_path) as zf:
+            members = {n: zf.read(n) for n in zf.namelist()}
+        members['licenses/corpuslib/LICENSE'] = b'FORGED'
+        with zipfile.ZipFile(tampered_lic, 'w') as zf:
+            for name, blob in members.items():
+                zf.writestr(name, blob)
+        lic_victim_cache = tmp_path / 'lic-victim-cache'
+        with Library(tmp_path / 'lic-victim.db') as victim:
+            with pytest.raises(SpoolError) as excinfo:
+                install_pack(victim, tampered_lic, cache_dir=lic_victim_cache)
+            assert 'license' in str(excinfo.value).lower()
+            assert victim.list_documents() == []
+        assert not lic_victim_cache.exists()
 
     def test_install_namespaces_spool_docs_no_collision(self, tmp_path):
         # CRIT-9 — a spool whose name collides with a real source must NOT

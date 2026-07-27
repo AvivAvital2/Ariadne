@@ -125,6 +125,100 @@ def unsupported_corpus_language(root) -> str | None:
     return _UNSUPPORTED_CODE_EXT_NAMES[dominant]
 
 
+# --------------------------------------------------------------------------
+# License-admission gate (§18.1 redistribution safety). A spool ships DERIVED
+# docs + a SCIP index built from its corpus, so the corpus must be under a
+# license that permits redistributing derived work. Source-available /
+# proprietary licenses (BUSL, SSPL, Elastic, PolyForm, Commons Clause, or an
+# unrecognized/absent license) are NOT redistribution-safe for an open-source
+# pack; the gate refuses them at build unless the builder opts into a
+# local-only pack with --allow-nonfree.
+# --------------------------------------------------------------------------
+
+# Non-free markers are checked BEFORE open ones, so a restrictive rider (e.g.
+# a Commons Clause over MIT, or BUSL over an otherwise-open base) dominates.
+_NONFREE_LICENSE_MARKERS = (
+    ('BUSL', ('business source license', 'busl-1', 'bsl-1')),
+    ('SSPL', ('server side public license', 'sspl')),
+    ('Elastic', ('elastic license',)),
+    ('PolyForm', ('polyform',)),
+    ('Commons Clause', ('commons clause',)),
+)
+_OPEN_LICENSE_MARKERS = (
+    ('permissive', 'Apache-2.0', ('apache license',)),
+    ('weak-copyleft', 'MPL-2.0', ('mozilla public license',)),
+    ('permissive', 'MIT', ('permission is hereby granted, free of charge',)),
+    ('permissive', 'BSD',
+     ('redistribution and use in source and binary forms',)),
+    ('permissive', 'ISC',
+     ('permission to use, copy, modify, and/or distribute',)),
+    ('copyleft', 'AGPL', ('gnu affero general public license',)),
+    ('copyleft', 'LGPL', ('gnu lesser general public license',)),
+    ('copyleft', 'GPL', ('gnu general public license',)),
+)
+# Categories a pack may be built from AND redistributed.
+_REDISTRIBUTABLE_CATEGORIES = frozenset(
+    {'permissive', 'weak-copyleft', 'copyleft'})
+_LICENSE_FILE_STEMS = ('license', 'licence', 'copying')
+
+
+def classify_license(text) -> tuple[str, str | None]:
+    """Classify license ``text`` into ``(category, name)``.
+
+    ``permissive`` / ``weak-copyleft`` / ``copyleft`` are redistribution-safe;
+    ``source-available`` is not; ``unknown`` (unrecognized or empty) fails
+    CLOSED — treated as not-safe by the gate. A non-free marker always wins over
+    an open one (a Commons-Clause/BUSL rider makes an otherwise open grant
+    non-free).
+    """
+    low = (text or '').lower()
+    if not low.strip():
+        return ('unknown', None)
+    for name, markers in _NONFREE_LICENSE_MARKERS:
+        if any(mk in low for mk in markers):
+            return ('source-available', name)
+    for category, name, markers in _OPEN_LICENSE_MARKERS:
+        if any(mk in low for mk in markers):
+            return (category, name)
+    return ('unknown', None)
+
+
+def detect_corpus_license(clone_dir) -> tuple[str, str | None]:
+    """Classify a corpus clone's top-level license file. A directory with no
+    recognizable license file → ``('unknown', None)`` (fail-closed)."""
+    clone_dir = Path(clone_dir)
+    if not clone_dir.is_dir():
+        return ('unknown', None)
+    for entry in sorted(clone_dir.iterdir()):
+        low = entry.name.lower()
+        if entry.is_file() and any(
+                low == s or low.startswith(s + '.') or low.startswith(s + '-')
+                for s in _LICENSE_FILE_STEMS):
+            try:
+                text = entry.read_text(encoding='utf-8', errors='replace')
+            except OSError:
+                return ('unknown', None)
+            return classify_license(text)
+    return ('unknown', None)
+
+
+def nonfree_corpora(dest_dir) -> list:
+    """Scan corpus clones under ``dest_dir`` (each marked with the fetch's
+    ``.ariadne-corpus-sha``) and return ``[(repo, category, name)]`` for those
+    NOT redistribution-safe under an open-source license. Empty when every
+    corpus is open source — or when none were fetched (the mocked-build case,
+    where there is simply nothing on disk to classify)."""
+    from spool_acquire import _CORPUS_SHA_MARKER
+    dest_dir = Path(dest_dir)
+    bad = []
+    for marker in sorted(dest_dir.glob(f'*/{_CORPUS_SHA_MARKER}')):
+        repo_dir = marker.parent
+        category, name = detect_corpus_license(repo_dir)
+        if category not in _REDISTRIBUTABLE_CATEGORIES:
+            bad.append((repo_dir.name, category, name))
+    return bad
+
+
 @dataclass(frozen=True)
 class SpoolManifest:
     """A Spool pack's manifest (§9): identity, edition pin, certification.
@@ -159,6 +253,12 @@ class SpoolManifest:
     # create`), since the corpus isn't shipped for a local re-index. See
     # docgen.extraction_coverage.
     extraction_coverage_version: int = 0
+    # Upstream attribution (§18.1): per corpus repo, the LICENSE/NOTICE files
+    # bundled under ``licenses/<repo>/`` in the pack, each with a sha256 so
+    # install can integrity-check them. A tuple of
+    # ``{repo, sha, files: ({name, sha256}, ...)}`` records. Empty for a pack
+    # built from no fetched corpus (e.g. a hand-built test pack).
+    attribution: tuple = field(default_factory=tuple)
 
     def to_dict(self) -> dict:
         """The manifest as a plain dict for YAML serialization — the inverse of
@@ -177,6 +277,11 @@ class SpoolManifest:
             'corpus_shas': dict(self.corpus_shas),
             'taxonomy': list(self.taxonomy),
             'extraction_coverage_version': self.extraction_coverage_version,
+            'attribution': [
+                {'repo': r['repo'], 'sha': r['sha'],
+                 'files': [dict(f) for f in r['files']]}
+                for r in self.attribution
+            ],
         }
 
     @classmethod
@@ -212,6 +317,14 @@ class SpoolManifest:
                 taxonomy=tuple(data.get('taxonomy') or ()),
                 extraction_coverage_version=int(
                     data.get('extraction_coverage_version', 0) or 0),
+                attribution=tuple(
+                    {'repo': str(r.get('repo', '')),
+                     'sha': str(r.get('sha', '')),
+                     'files': tuple(
+                         {'name': str(f.get('name', '')),
+                          'sha256': str(f.get('sha256', ''))}
+                         for f in (r.get('files') or ()))}
+                    for r in (data.get('attribution') or ())),
             )
         except (ValueError, TypeError) as exc:
             # CRIT-3c: a type-invalid field (non-numeric pack_format/
