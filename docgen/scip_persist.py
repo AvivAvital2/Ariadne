@@ -79,8 +79,10 @@ def persist_all_sources(
 
     if not loaded_pairs:
         return 0
-
-    graph.materialize()
+    from spools import is_spool_source
+    _spool_srcs = frozenset(
+        name for name, _ in loaded_pairs if is_spool_source(name))
+    graph.materialize(resolve_external_to=_spool_srcs or None)
 
     library = Library(db_path)
     try:

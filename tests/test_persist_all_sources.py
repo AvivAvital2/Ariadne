@@ -51,6 +51,92 @@ def _synthetic_python_index_with_one_class(repo: str = 'svc'):
     return ScipIndex(documents=(doc,))
 
 
+def _spool_index_defining_spark():
+    """A spool ScipIndex defining ``pyspark.sql.SparkSession``."""
+    from docgen.scip_extractor import (
+        ScipIndex, _ScipDoc, _ScipOccurrence, _ScipSymbol,
+    )
+
+    d = 'scip-python python pyspark 0.1 `pyspark.sql`/SparkSession#'
+    doc = _ScipDoc(
+        relative_path='pyspark/sql/session.py',
+        occurrences=(
+            _ScipOccurrence(symbol=d, range=(0, 0, 5, 0), is_definition=True),
+        ),
+        symbols=(_ScipSymbol(symbol=d, kind='Class',
+                             display_name='SparkSession'),),
+    )
+    return ScipIndex(documents=(doc,))
+
+
+def _user_index_calling_spark():
+    """A user ScipIndex whose ``run()`` references SparkSession via a
+    different-version moniker (the canonical-id-mismatch wall)."""
+    from docgen.scip_extractor import (
+        ScipIndex, _ScipDoc, _ScipOccurrence, _ScipSymbol,
+    )
+
+    run = 'scip-python python userrepo 0.1 `app.main`/run().'
+    ref = 'scip-python python pyspark 3.5 `pyspark.sql`/SparkSession#'
+    doc = _ScipDoc(
+        relative_path='app/main.py',
+        occurrences=(
+            _ScipOccurrence(symbol=run, range=(10, 0, 20, 0),
+                            is_definition=True),
+            _ScipOccurrence(symbol=ref, range=(12, 4, 12, 30),
+                            is_definition=False),
+        ),
+        symbols=(_ScipSymbol(symbol=run, kind='Function',
+                             display_name='run'),),
+    )
+    return ScipIndex(documents=(doc,))
+
+
+def test_persist_resolves_user_ref_into_enabled_spool(tmp_path: Path) -> None:
+    """When a spool source is among those persisted, a user reference to the
+    spool's API (dropped by decision #4 today) is resolved by qualified name
+    and lands in ``scip_edges`` as a ``confidence='resolved'`` cross-source
+    edge — the removed wall. Non-spool corpora are unaffected (no spool loaded
+    => no resolution)."""
+    from docgen.scip_persist import persist_all_sources
+
+    db_path = tmp_path / 'ariadne.db'
+    user_root = tmp_path / 'userrepo'
+    user_root.mkdir()
+    spool_root = tmp_path / 'spool'
+    spool_root.mkdir()
+    for root in (user_root, spool_root):
+        _write_manifest(root, [{
+            'kind': 'python',
+            'scip_path': 'intermediate/index-python.scip',
+        }])
+
+    def _factory(scip_path, *, repo, max_staleness_days):
+        if repo == 'spool:databricks':
+            return _spool_index_defining_spark()
+        return _user_index_calling_spark()
+
+    persist_all_sources(
+        db_path,
+        [('userrepo', user_root), ('spool:databricks', spool_root)],
+        index_factory=_factory,
+    )
+
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            'SELECT caller_canonical_id, callee_canonical_id, confidence '
+            "FROM scip_edges WHERE confidence = 'resolved'",
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert len(rows) == 1, f'expected one resolved cross-source edge, got {rows}'
+    caller, callee, conf = rows[0]
+    assert 'run' in caller and 'SparkSession' in callee
+    assert conf == 'resolved'
+
+
 def test_persist_all_sources_no_manifests_returns_zero(tmp_path: Path) -> None:
     """Sources with no ``.ariadne/manifest.json`` get silently skipped.
 

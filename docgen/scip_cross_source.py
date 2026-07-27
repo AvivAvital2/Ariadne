@@ -218,6 +218,8 @@ class CrossSourceGraph:
         # Dirty by default: a graph built by assigning _edges directly (e.g.
         # catalog_enrich) must still rebuild the index on the first query.
         self._edge_index_dirty: bool = True
+        self._resolve_external_to: frozenset = frozenset()
+        self._qn_index: dict = {}
 
     # -- registration -----------------------------------------------------
 
@@ -248,9 +250,7 @@ class CrossSourceGraph:
         from the DB via ``load_from``."""
         return source_name in self._known_source_names
 
-    # -- materialization --------------------------------------------------
-
-    def materialize(self) -> None:
+    def materialize(self, resolve_external_to=None) -> None:
         """Rebuild the symbol index and edge list from registered sources.
 
         Two passes:
@@ -260,12 +260,19 @@ class CrossSourceGraph:
            symbol, resolve the caller (tightest enclosing definition in
            the same document) and emit one CrossSourceEdge.
 
-        References whose target is not in the registered set are
-        silently dropped (the target lives in an unindexed source — per
-        decision #4, no fallback edge is generated).
+        References whose target is not in the registered set are dropped
+        (the target lives in an unindexed source — decision #4), UNLESS
+        ``resolve_external_to`` names sources to resolve into: such a
+        reference is then matched by qualified name to a unique definition
+        in one of those sources and emitted as a ``confidence='resolved'``
+        cross-source edge. This removes the cross-store "wall" for a repo
+        that calls a spool's API directly (its moniker and the spool's
+        definition differ only in package/version, so the canonical-id
+        lookup misses but the qualified name matches).
         """
         self._symbols = {}
         self._edges = []
+        self._resolve_external_to = frozenset(resolve_external_to or ())
 
         # Pass 1: collect definitions across every registered indexer
         # (a polyglot source has multiple entries under one name).
@@ -273,6 +280,15 @@ class CrossSourceGraph:
             for entry in entries:
                 for doc in entry.index.documents:
                     self._collect_definitions(doc, entry)
+
+        # Build the qualified-name index over the resolvable (spool) sources so
+        # external references can be bridged to a unique definition there.
+        self._qn_index = {}
+        if self._resolve_external_to:
+            for sym in self._symbols.values():
+                if sym.source_name in self._resolve_external_to:
+                    self._qn_index.setdefault(
+                        sym.qualified_name, []).append(sym)
 
         # Pass 2: emit reference edges
         for entries in self._sources.values():
@@ -327,15 +343,11 @@ class CrossSourceGraph:
                 parent_qualified_name=parent_qn,
             )
 
-    def _collect_edges(
-        self, doc: '_ScipDoc', entry: _SourceEntry,
-    ) -> None:
+    def _collect_edges(self, doc, entry) -> None:
         """For each non-definition occurrence in ``doc``, find the
         callee (lookup in self._symbols) and the caller (tightest
         enclosing definition in this doc)."""
-        # Pre-compute per-doc list of (line_start, line_end, symbol) for
-        # caller resolution.
-        defs_in_doc: list[tuple[int, int, str]] = []
+        defs_in_doc = []
         for occ in doc.occurrences:
             if occ.is_definition:
                 ls, le = _occ_line_range_1indexed(occ)
@@ -345,9 +357,15 @@ class CrossSourceGraph:
             if occ.is_definition:
                 continue
             callee = self._symbols.get(occ.symbol)
+            resolved = False
             if callee is None:
-                # Target lives in an unindexed source — drop per decision #4
-                continue
+                # Not defined in the corpus. Try to resolve it (by qualified
+                # name) to a definition in a resolvable source; else drop it
+                # (decision #4 — the target lives in an unindexed source).
+                callee = self._resolve_external(occ.symbol, entry.language)
+                if callee is None:
+                    continue
+                resolved = True
 
             ref_line = _occ_line_start_1indexed(occ)
             caller_id = _tightest_enclosing(defs_in_doc, ref_line)
@@ -373,7 +391,26 @@ class CrossSourceGraph:
                 edge_type='call',
                 file=doc.relative_path,
                 line=ref_line,
+                confidence='resolved' if resolved else 'exact',
             ))
+
+    def _resolve_external(self, symbol, language):
+        """Resolve an external-reference moniker to a UNIQUE definition in the
+        resolvable sources, matched by qualified name. Returns the
+        CrossSourceSymbol or None (resolution disabled / no qn / no match /
+        ambiguous). Matching by qualified name rather than canonical id is what
+        bridges a repo's package- and version-specific moniker to the spool's
+        definition of the same symbol; the unique-match guard keeps unrelated
+        same-named symbols from inventing an edge."""
+        if not self._resolve_external_to:
+            return None
+        qn, _parent = _qualified_name_from_symbol(symbol, language)
+        if not qn:
+            return None
+        candidates = self._qn_index.get(qn)
+        if candidates and len(candidates) == 1:
+            return candidates[0]
+        return None
 
     # -- queries ----------------------------------------------------------
 
