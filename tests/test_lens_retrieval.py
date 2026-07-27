@@ -238,3 +238,20 @@ class TestFallbackSpoolDocs:
         matrix = _matrix({'d-close': (1.0, 0.0)})
         assert lens_retrieval.fallback_spool_docs(
             lib, matrix, ['spool:env1'], [], limit=3) == []
+
+
+class TestLensShare:
+    def test_derived_share_keeps_the_primary_in_majority(self):
+        # #3 of the compromise ladder: the lens side's window share was a
+        # chosen constant (2) — at limit=3 the lens outnumbered the PRIMARY.
+        # The derived rule: the lens gets ~a third of the window (floor 1),
+        # so the primary strictly outweighs the lens at every limit >= 3
+        # (a 2-window can only tie), and the share scales with the window
+        # instead of freezing at 2. One rule for BOTH lens directions and
+        # the no-crisp fallback.
+        assert [lens_retrieval.lens_share(n)
+                for n in (2, 3, 4, 5, 6, 8, 10, 20)] == [1, 1, 1, 2, 2, 3, 3, 7]
+        for limit in range(3, 40):
+            share = lens_retrieval.lens_share(limit)
+            assert limit - share > share, limit   # primary strict majority
+        assert lens_retrieval.lens_share(2) == 1  # best a 2-window can do

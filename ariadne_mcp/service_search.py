@@ -82,7 +82,9 @@ def _trim_related_documents(content: str, max_links: int = 5) -> str:
 # v8 = request-verb stopwords in entity extraction (routing inputs change).
 # v9 = environment names route but never admit docs (spool-side entity
 # admissions change; the semantic tier owns name-term selection).
-_RETRIEVAL_CACHE_VERSION = 9
+# v10 = derived lens_share replaces the fixed lens caps (composition
+# changes at window sizes other than 5).
+_RETRIEVAL_CACHE_VERSION = 10
 
 class SearchMixin:
     """Search implementation with multi-phase ranking.
@@ -269,6 +271,7 @@ class SearchMixin:
         + the gated semantic fallback when enabled."""
         from library.lens_retrieval import (
             fallback_spool_docs,
+            lens_share,
             select_spool_docs,
         )
 
@@ -296,8 +299,8 @@ class SearchMixin:
                     exc_info=True)
             # Spool-primary questions give the spool the FULL window (its
             # docs and themes on the ordinary embedding route); repo-primary
-            # fuse keeps the spool as the capped lens.
-            spool_limit = limit if flipped else max(2, limit // 2)
+            # fuse keeps the spool as the lens at the derived share.
+            spool_limit = limit if flipped else lens_share(limit)
             # Route-don't-admit: environment-name hits routed the question
             # but never select documents (inside their own corpus they match
             # READMEs/namespace markers) — the semantic fill owns those slots.
@@ -315,11 +318,10 @@ class SearchMixin:
             # labeled inclusion beats expert-only's old silent drop.
             # Degrades to the repo ranking when the environment resolves no
             # docs (never empty for structural reasons).
-            _LENS_CAP = 2
             repo_pairs = (await _repo_ranked()) if repo_ids else []
             spool_ordered = [c.doc_id for c in contributions]
             if spool_ordered:
-                lens_pairs = repo_pairs[:_LENS_CAP]
+                lens_pairs = repo_pairs[:lens_share(limit)]
                 keep = max(1, limit - len(lens_pairs)) if lens_pairs else limit
                 head = spool_ordered[:keep]
                 seen = set(head)
@@ -335,7 +337,7 @@ class SearchMixin:
             elif route.fallback_enabled:
                 contributions = fallback_spool_docs(
                     self.library, matrix, retrieval_sources,
-                    repo_ranked[:3], limit=2,
+                    repo_ranked[:3], limit=lens_share(limit),
                     restrict_to=surface_restrict)
             else:
                 contributions = []

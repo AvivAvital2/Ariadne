@@ -117,6 +117,15 @@ def docs_for_entity_hits(library, sources, hits, *, per_hit=3) -> dict:
     return out
 
 
+def lens_share(limit: int) -> int:
+    """The LENS side's window share on a routed question — derived, not
+    chosen: roughly a third of the window (floor 1), so the PRIMARY side
+    strictly outweighs the lens at every limit >= 3 (a 2-window can only
+    tie) and the share scales with the window instead of freezing at a
+    constant. Used by both lens directions and the no-crisp fallback."""
+    return max(1, (limit + 1) // 3)
+
+
 def select_spool_docs(library, matrix, sources, hits, *, query_embedding=None,
                       limit=8, gate=SPOOL_FALLBACK_GATE) -> list:
     """The fuse/expert-only spool path: categorical entity admissions plus
