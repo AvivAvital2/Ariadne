@@ -167,6 +167,46 @@ class TestRegimeDerivation:
         assert r.regime == 'fuse'
         assert r.primary == 'repo'        # phrase never decides dominance
 
+    def test_name_blind_dominance(self):
+        # Peripheral-archetype finding: a consumer whose catalog is full of
+        # the environment's NAME satisfied _strong(repo) with environment
+        # vocabulary and flipped seam questions repo-primary. Environment
+        # names count toward NEITHER side's dominance strength (they mark
+        # the seam, not the subject); non-name evidence decides.
+        names = frozenset({'fakebricks', 'quantum mesh'})
+        r = lens_router.derive_regime(
+            subject_named=True,
+            repo_hits=[_hit('fakebricks', 'title', 'product')],
+            spool_hits=[_hit('Python', 'symbol', 'api'),
+                        _hit('quantum mesh', 'title', 'product')],
+            name_terms=names,
+        )
+        assert r.regime == 'fuse'
+        assert r.primary == 'spool'        # repo's only strength was a name
+
+        # All-name spool evidence: structure cannot decide the primary —
+        # stays repo-primary at ROUTING time (composition may flip it on
+        # measured evidence), and the spool remains a participant (fuse).
+        r = lens_router.derive_regime(
+            subject_named=False,
+            repo_hits=[],
+            spool_hits=[_hit('quantum mesh', 'title', 'product')],
+            name_terms=names,
+        )
+        assert r.regime == 'fuse'
+        assert r.primary == 'repo'
+
+    def test_possessive_anchors_the_subject(self):
+        # 'our spark job' in a repo-scoped question names the repo's own
+        # artifact even without the source name — the saturated-control
+        # class ('How does our spark job schedule the nightly aggregation')
+        # is repo-anchored.
+        assert lens_router.is_subject_named(
+            'How does our spark job schedule the nightly aggregation?',
+            ['somesource'])
+        assert not lens_router.is_subject_named(
+            'How does Delta Lake handle concurrent writes?', ['somesource'])
+
     def test_result_carries_the_evidence(self):
         repo = [_hit('combinatorial pruning', 'title', 'phrase')]
         spool = [_hit('Quantum Mesh', 'title', 'product')]

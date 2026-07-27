@@ -166,7 +166,7 @@ class TestLensWiredSearch:
         try:
             lib.add_document(
                 'explanation', 'Stage Boundary Notes', 'repo body',
-                embedding=_vec(1, 0, 0), source_name='src1',
+                embedding=_vec(0.3, np.sqrt(1 - 0.09), 0), source_name='src1',
             )
             junk = lib.add_document(
                 'explanation', 'Quantum Mesh Code of Conduct', 'junk body',
@@ -249,7 +249,7 @@ class TestLensWiredSearch:
         try:
             repo_doc = lib.add_document(
                 'explanation', 'Stage Boundary Notes', 'repo body',
-                embedding=_vec(1, 0, 0), source_name='src1',
+                embedding=_vec(0.3, np.sqrt(1 - 0.09), 0), source_name='src1',
             )
             tagged = lib.add_document(
                 'explanation', 'Wire Format Deep Dive', 'spool body',
@@ -270,7 +270,7 @@ class TestLensWiredSearch:
             # The gated fallback ranks against the embedding matrix; a fresh
             # store has none built, so hand the service a synthetic one over
             # the fixture docs (the fallback is a no-op without it).
-            embeds = {repo_doc.id: _vec(1, 0, 0),
+            embeds = {repo_doc.id: _vec(0.3, np.sqrt(1 - 0.09), 0),
                       tagged.id: _vec(0.8, 0.6, 0),
                       off.id: _vec(1, 0, 0)}
             matrix = EmbeddingMatrix(

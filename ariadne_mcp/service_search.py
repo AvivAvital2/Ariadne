@@ -85,7 +85,10 @@ def _trim_related_documents(content: str, max_links: int = 5) -> str:
 # v10 = derived lens_share replaces the fixed lens caps (composition
 # changes at window sizes other than 5).
 # v11 = mid-gram stopwords reject candidate terms (routing inputs change).
-_RETRIEVAL_CACHE_VERSION = 11
+# v12 = the package: name-blind dominance + breadth-with-floor participation
+# (two-hop fallback + 0.52 fill gate retired; undecided primaries flip on
+# measured evidence).
+_RETRIEVAL_CACHE_VERSION = 12
 
 class SearchMixin:
     """Search implementation with multi-phase ranking.
@@ -227,7 +230,8 @@ class SearchMixin:
 
         return result
 
-    def _lens_route(self, query, lite_docs, spool_sources, spool_fp):
+    def _lens_route(self, query, lite_docs, spool_sources, spool_fp,
+                    name_terms=frozenset()):
         """Deterministic lens routing (designs/spool-lens-router.md §3-§4):
         build/cache the two entity indexes for this (fingerprint, sources)
         pair and derive the regime. No LLM, no embeddings — routing must
@@ -258,6 +262,7 @@ class SearchMixin:
         return route_question(
             query, subject_names=repo_sources,
             repo_index=repo_index, spool_index=spool_index,
+            name_terms=name_terms,
         )
 
     async def _lens_ranked_ids(self, route, repo_ids, retrieval_sources,
@@ -271,7 +276,10 @@ class SearchMixin:
         never empty for structural reasons); no-crisp regimes: repo ranking
         + the gated semantic fallback when enabled."""
         from library.lens_retrieval import (
-            fallback_spool_docs,
+            JUNK_FLOOR,
+            SpoolContribution,
+            breadth_speaks,
+            doc_grade_spool_candidates,
             lens_share,
             select_spool_docs,
         )
@@ -289,28 +297,64 @@ class SearchMixin:
                 repo_ids, query, limit, weights)
 
         contributions = []
-        flipped = route.primary == 'spool'
-        if route.regime in ('fuse', 'expert-only'):
-            query_embedding = None
+        query_embedding = None
+        if route.regime in ('fuse', 'expert-only') or route.fallback_enabled:
             try:
                 query_embedding = await self.embedding_service.embed(query)
             except Exception:
                 _logger.debug(
                     'lens: query embed failed — entity admissions only',
                     exc_info=True)
-            # Spool-primary questions give the spool the FULL window (its
-            # docs and themes on the ordinary embedding route); repo-primary
-            # fuse keeps the spool as the lens at the derived share.
-            spool_limit = limit if flipped else lens_share(limit)
+
+        # Measured evidence: the spool's ranked query-cosines vs the repo's
+        # best doc. Decides participation for NON-ENTITY evidence (the
+        # breadth criterion — the two-hop fallback and the 0.52 fill gate
+        # are RETIRED: every score-magnitude constant rotted; the
+        # corroboration COUNT separates on both archetype batteries) and,
+        # on structurally UNDECIDED routes (name-only evidence), the
+        # effective primary — names mark the seam, evidence decides the
+        # voice.
+        ranked_env: list = []
+        repo_pairs_all: list = []
+        if query_embedding is not None and matrix is not None:
+            env_candidates = [
+                doc_id for doc_id in doc_grade_spool_candidates(
+                    self.library, retrieval_sources)
+                if doc_id in matrix.id_to_row
+                and (surface_restrict is None or doc_id in surface_restrict)
+            ]
+            if env_candidates:
+                ranked_env = matrix.rank(query_embedding, env_candidates, 50)
+            if repo_ids:
+                repo_pairs_all = await _repo_ranked()
+        repo_top = max((s for _, s in repo_pairs_all), default=0.0)
+        evidence_speaks = breadth_speaks([s for _, s in ranked_env], repo_top)
+        # Undecided routes flip on evidence ONLY when the subject anchor
+        # does not claim the question for the repo ('our spark job...' stays
+        # repo-primary however loud the environment's vocabulary is).
+        flipped = route.primary == 'spool' or (
+            route.undecided and not route.subject_named and evidence_speaks)
+
+        if route.regime in ('fuse', 'expert-only'):
             # Route-don't-admit: environment-name hits routed the question
             # but never select documents (inside their own corpus they match
-            # READMEs/namespace markers) — the semantic fill owns those slots.
+            # READMEs/namespace markers) — the semantic fill owns those
+            # slots, and it runs only when the breadth criterion says the
+            # spool's evidence beats the repo's.
             from library.lens_router import admissible_hits
+            spool_limit = limit if flipped else lens_share(limit)
             contributions = select_spool_docs(
                 self.library, matrix, retrieval_sources,
                 admissible_hits(route.crisp_spool, name_terms),
                 query_embedding=query_embedding, limit=spool_limit,
+                fill_allowed=evidence_speaks,
             )
+        elif route.fallback_enabled and evidence_speaks:
+            contributions = [
+                SpoolContribution(doc_id, 'semantic', f'{score:.2f}')
+                for doc_id, score in ranked_env[:lens_share(limit)]
+                if score >= JUNK_FLOOR
+            ]
 
         lens_pairs: list = []
         if flipped:
@@ -319,7 +363,8 @@ class SearchMixin:
             # labeled inclusion beats expert-only's old silent drop.
             # Degrades to the repo ranking when the environment resolves no
             # docs (never empty for structural reasons).
-            repo_pairs = (await _repo_ranked()) if repo_ids else []
+            repo_pairs = repo_pairs_all or (
+                (await _repo_ranked()) if repo_ids else [])
             spool_ordered = [c.doc_id for c in contributions]
             if spool_ordered:
                 lens_pairs = repo_pairs[:lens_share(limit)]
@@ -332,16 +377,8 @@ class SearchMixin:
             else:
                 ordered = [d for d, _ in repo_pairs][:limit]
         else:
-            repo_ranked = [d for d, _ in await _repo_ranked()]
-            if route.regime == 'fuse':
-                pass                          # contributions already selected
-            elif route.fallback_enabled:
-                contributions = fallback_spool_docs(
-                    self.library, matrix, retrieval_sources,
-                    repo_ranked[:3], limit=lens_share(limit),
-                    restrict_to=surface_restrict)
-            else:
-                contributions = []
+            repo_ranked = [d for d, _ in (repo_pairs_all or
+                                          await _repo_ranked())]
             extra = [c.doc_id for c in contributions]
             keep = max(1, limit - len(extra)) if extra else limit
             seen = set(repo_ranked[:keep])
@@ -361,7 +398,7 @@ class SearchMixin:
         n = len(ordered)
         scored = [(did, (n - i) / n if n else 0.0)
                   for i, did in enumerate(ordered)]
-        return scored, connections
+        return scored, connections, 'spool' if flipped else 'repo'
 
     async def _search_uncached(
         self,
@@ -476,8 +513,10 @@ class SearchMixin:
                 # order is encoded as descending scores exactly like the
                 # branch it replaces.
                 from spools import is_spool_source, spool_gap_hint
+                from library.lens_router import environment_name_terms
                 route = self._lens_route(
-                    effective_query, lite_docs, spool_sources, spool_fp)
+                    effective_query, lite_docs, spool_sources, spool_fp,
+                    name_terms=environment_name_terms(spool_resolution))
                 # Bidirectional lens partition: the spool's OWN theme docs
                 # are null-source but spool-SIDE content — they must never
                 # compete in the repo channel (measured live: three giant
@@ -512,11 +551,11 @@ class SearchMixin:
                         'lens: surface restriction unavailable',
                         exc_info=True)
                 from library.lens_router import environment_name_terms
-                ranked_ids, lens_connections = await self._lens_ranked_ids(
+                (ranked_ids, lens_connections,
+                 lens_primary) = await self._lens_ranked_ids(
                     route, repo_ids, retrieval_sources, effective_query,
                     limit, weights, surface_restrict=surface_restrict,
                     name_terms=environment_name_terms(spool_resolution))
-                lens_primary = route.primary
                 if route.regime == 'honest-gap':
                     spool_doc_ids = {d.id for d in lite_docs
                                      if is_spool_source(d.source_name)}

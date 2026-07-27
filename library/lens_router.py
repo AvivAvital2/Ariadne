@@ -44,6 +44,11 @@ class RouteResult:
     # Bidirectional lens (ratified): which side gets the FULL embedding
     # ranking; the other side rides as the capped, labeled lens.
     primary: str = 'repo'
+    # True when structure could NOT decide the primary (no non-name strong
+    # evidence on either side): composition may flip the primary on
+    # MEASURED evidence (breadth) — names mark the seam, evidence decides
+    # the voice.
+    undecided: bool = False
 
 
 def is_distinctive(term: str) -> bool:
@@ -153,6 +158,11 @@ def is_subject_named(question: str, subject_names) -> bool:
     """Rule 2's trigger: the question literally names the scoped source (or
     an alias) as a word — 'acme-core' matches, 'acme-corex' does not."""
     q = question.lower()
+    # Possessive phrasing names the repo's own artifact implicitly in a
+    # repo-scoped question ('our spark job', 'my pipeline') — the
+    # saturated-control class is repo-anchored.
+    if re.search(r'\b(our|my|we)\b', q):
+        return True
     return any(
         re.search(
             r'(?<![a-z0-9])' + re.escape(name.lower()) + r'(?![a-z0-9])', q)
@@ -161,7 +171,7 @@ def is_subject_named(question: str, subject_names) -> bool:
 
 
 def route_question(question: str, *, subject_names, repo_index,
-                   spool_index) -> 'RouteResult':
+                   spool_index, name_terms=frozenset()) -> 'RouteResult':
     """Extract → resolve both sides → derive the regime. Indexes are
     duck-typed (``resolve(term) -> hits``); hits deduplicate by
     (term, layer) so overlapping n-grams can't inflate the evidence."""
@@ -179,7 +189,8 @@ def route_question(question: str, *, subject_names, repo_index,
     repo_hits = _drop_subsumed(repo_hits, repo_hits + spool_hits)
     spool_hits = _drop_subsumed(spool_hits, repo_hits + spool_hits)
     return derive_regime(
-        subject_named=named, repo_hits=repo_hits, spool_hits=spool_hits)
+        subject_named=named, repo_hits=repo_hits, spool_hits=spool_hits,
+        name_terms=name_terms)
 
 
 def _drop_subsumed(hits, all_hits):
@@ -203,7 +214,8 @@ def _strong(hits) -> bool:
     return any(h.entity_class in _STRONG_CLASSES for h in hits)
 
 
-def derive_regime(*, subject_named: bool, repo_hits, spool_hits) -> RouteResult:
+def derive_regime(*, subject_named: bool, repo_hits, spool_hits,
+                  name_terms=frozenset()) -> RouteResult:
     """§3 regime derivation — total over its inputs.
 
     The repo path always runs (hop one, in the caller's scope); this
@@ -222,10 +234,20 @@ def derive_regime(*, subject_named: bool, repo_hits, spool_hits) -> RouteResult:
     spool = tuple(spool_hits)
     if not repo and not spool:
         regime = REPO_ONLY if subject_named else HONEST_GAP
-        return RouteResult(regime, (), (), subject_named, True)
+        return RouteResult(regime, (), (), subject_named, True,
+                           undecided=True)
     if not spool:
         return RouteResult(REPO_ONLY, repo, (), subject_named, False)
-    if _strong(spool) and not _strong(repo):
+    # Name-blind dominance (peripheral-archetype finding): a consumer whose
+    # catalog is saturated with the environment's NAME satisfied
+    # _strong(repo) with environment vocabulary and flipped seam questions
+    # repo-primary. Names mark the SEAM (participation), never the subject —
+    # they count toward neither side's strength.
+    repo_evidence = tuple(h for h in repo
+                          if h.term.casefold() not in name_terms)
+    spool_evidence = tuple(h for h in spool
+                           if h.term.casefold() not in name_terms)
+    if _strong(spool_evidence) and not _strong(repo_evidence):
         # DOMINANCE (ratified): the environment owns the question's strong
         # (api/product) entities and the repo has none — the spool becomes
         # the PRIMARY ranked channel (its docs AND its themes rank on the
@@ -236,7 +258,9 @@ def derive_regime(*, subject_named: bool, repo_hits, spool_hits) -> RouteResult:
         regime = FUSE if subject_named else EXPERT_ONLY
         return RouteResult(regime, repo, spool, subject_named, False,
                            primary='spool')
-    return RouteResult(FUSE, repo, spool, subject_named, False)
+    undecided = not _strong(repo_evidence) and not _strong(spool_evidence)
+    return RouteResult(FUSE, repo, spool, subject_named, False,
+                       undecided=undecided)
 
 
 def environment_name_terms(resolution) -> frozenset:
