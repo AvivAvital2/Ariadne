@@ -1,0 +1,30 @@
+# Databricks concern taxonomy (Spool content, §9 #2) — the dimensions the
+# reasoning decomposes along for this environment. Probes reuse the e1
+# structural signal DSL; guardrails attach via their `spans`.
+environment: databricks
+concerns:
+  - name: engine-coupling
+    description: how tightly the code binds its compute engine (the
+      swap-vs-scale-around decision hinges here)
+    probes:
+      - kind: signature_scan
+        prefix: agentune.api.
+        needle: Duckdb
+        subtypes: [function, method, class]
+  - name: parallelism
+    description: what work units exist and how they can spread across a cluster
+    probes:
+      - kind: symbol_exists
+        pattern: agentune.analyze.feature.compute.base.FeatureComputer
+  - name: distribution
+    description: how the chosen work units are scattered and coordinated
+  - name: identity
+    description: how rows keep a stable identity across copies and nodes
+    probes:
+      - kind: body_contains
+        symbol: agentune.analyze.run.ingest.sampling.split_duckdb_table
+        needle: identifier_col_name
+  - name: gather
+    description: how distributed results recombine correctly
+  - name: serialization
+    description: what crosses process/node boundaries and how

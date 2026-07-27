@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 from attrs import frozen
 
-from docgen.graph_builder import load_hybrid_graph
+from docgen.graph_builder import _scoped_view, load_hybrid_graph
 from library.themes import ClusterMapping
 from schema import generate_deterministic_id
 
@@ -65,6 +65,53 @@ def _stable_hash(members: set[str]) -> str:
         h.update(mid.encode('utf-8'))
         h.update(b'\x00')
     return h.hexdigest()
+
+
+def _association_key(scope) -> str:
+    """Partition key for a clustering pass.
+
+    The base global pass (scope=None) owns the '' partition, so existing
+    themes — which migrate to association='' — keep reconciling against it
+    unchanged. A scoped pass over an opted-in {project(s) + spool} set owns a
+    partition keyed by its sorted source names, independent of every other
+    pass.
+    """
+    if scope is None:
+        return ''
+    return '|'.join(sorted(scope))
+
+
+def _mint_cluster_id(association: str, members: set[str]) -> str:
+    """Fresh stable id for a cluster with no prior match in its partition.
+
+    Namespaced by association so identical member sets in different passes
+    (e.g. a pure-project cluster that recurs in both the base pass and a spool
+    pass) don't collide on the global themes.cluster_id PK. The base pass
+    (association='') keeps the bare hash, so existing ids are unchanged.
+    """
+    digest = _stable_hash(members)
+    return f'{association}#{digest}' if association else digest
+
+
+def _cross_source_clusters(
+    scoped, clusters: dict[int, set[str]],
+) -> dict[int, set[str]]:
+    """Keep only clusters that span a spool source AND a non-spool source.
+
+    A scoped spool pass clusters the whole {project ∪ spool} graph; a
+    pure-project cluster merely duplicates a base theme and a pure-spool
+    cluster is spool-internal, so neither is a cross-source theme worth
+    persisting. ``scoped`` is the pass's ScopedLibrary view.
+    """
+    from spools import is_spool_source
+    spool_ids = {
+        d.id for d in scoped.list_documents_lite(content_type='catalog')
+        if is_spool_source(d.source_name)
+    }
+    return {
+        cid: members for cid, members in clusters.items()
+        if (members & spool_ids) and (members - spool_ids)
+    }
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:
@@ -154,6 +201,7 @@ def _stabilize_cluster_ids(
     new_clusters: dict[int, set[str]],
     prior_clusters: dict[str, set[str]],
     threshold: float,
+    association: str = '',
 ) -> dict[int, str]:
     """Greedy Jaccard match: new int id -> stable string id.
 
@@ -178,7 +226,7 @@ def _stabilize_cluster_ids(
             mapping[new_id] = best_prior
             used_prior.add(best_prior)
         else:
-            mapping[new_id] = _stable_hash(new_members)
+            mapping[new_id] = _mint_cluster_id(association, new_members)
     return mapping
 
 
@@ -195,6 +243,7 @@ def cluster_themes(
     min_cluster_size: int = 3,
     stability_threshold: float = 0.5,
     source: str | None = None,
+    scope=None,
     semantic_edge_scale: float = 0.5,
 ) -> ClusterRun:
     """Run Leiden over the hybrid graph and persist stable theme assignments.
@@ -205,6 +254,7 @@ def cluster_themes(
     """
     g, node_ids = load_hybrid_graph(
         library, semantic_edge_scale=semantic_edge_scale, source=source,
+        scope=scope,
     )
     run_id = (library.latest_cluster_run() or 0) + 1
 
@@ -227,7 +277,16 @@ def cluster_themes(
         if len(members) >= min_cluster_size
     }
 
-    prior_themes = library.list_themes(coherent_only=False, source=source)
+    association = _association_key(scope)
+    if scope is not None:
+        # A scoped spool pass keeps only genuinely cross-source clusters
+        # (spanning the spool AND a project); pure clusters are dropped
+        # before stabilization so they never consume a prior id or persist.
+        scoped_view = _scoped_view(library, source, scope=scope)
+        new_clusters_int = _cross_source_clusters(scoped_view, new_clusters_int)
+    prior_themes = library.list_themes(
+        coherent_only=False, association=association,
+    )
     prior_clusters: dict[str, set[str]] = {
         t.cluster_id: {eid for eid, _ in library.get_theme_members(t.cluster_id)}
         for t in prior_themes
@@ -235,7 +294,7 @@ def cluster_themes(
     prior_doc_ids: dict[str, str] = {t.cluster_id: t.doc_id for t in prior_themes}
 
     int_to_stable = _stabilize_cluster_ids(
-        new_clusters_int, prior_clusters, stability_threshold,
+        new_clusters_int, prior_clusters, stability_threshold, association,
     )
     new_clusters: dict[str, set[str]] = {
         int_to_stable[c]: members for c, members in new_clusters_int.items()
@@ -284,6 +343,7 @@ def cluster_themes(
                 summary_hash='',  # Phase 4 fills this when it summarizes.
                 coherent=True,
                 dirty=True,
+                association=association,
             )
         else:
             # Existing theme: refresh member count + last_built_at; mark dirty

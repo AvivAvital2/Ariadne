@@ -442,7 +442,41 @@ class Config:
                             f"Source '{source_name}': 'ignore_staleness' globs "
                             f'must be strings; got {type(pat).__name__}.'
                         )
+        # CRIT-9 / HIGH-2: the ``spool:`` source namespace is reserved for
+        # installed packs; a configured source may not claim it (else
+        # uninstall would delete the user's own docs and the origin fence
+        # would hide them). Fail loud at load, where the user can act.
+        from spools import is_spool_source
+        _configured_sources = self._config.get('sources')
+        if isinstance(_configured_sources, dict):
+            for _src_name in _configured_sources:
+                if is_spool_source(_src_name):
+                    raise ConfigError(
+                        f"source {_src_name!r}: the 'spool:' prefix is reserved for "
+                        f'installed spool packs and cannot be a configured source '
+                        f'name.'
+                    )
 
+        # Spool enablement shape: a mapping of name -> true/false or a
+        # settings dict. The natural typo (a list) must fail HERE,
+        # actionably — not crash later on the query path that spool
+        # resolution runs on.
+        spools = self._config.get('spools')
+        if spools is not None:
+            if not isinstance(spools, dict):
+                raise ConfigError(
+                    "'spools' must be a mapping of spool name to true/false or "
+                    'a settings mapping (e.g. ``spools: {databricks: true}``), '
+                    f'got {type(spools).__name__}.'
+                )
+            for spool_name, spool_value in spools.items():
+                if spool_value is not None and not isinstance(
+                    spool_value, (bool, dict),
+                ):
+                    raise ConfigError(
+                        f"spools.{spool_name}: expected true/false or a settings "
+                        f'mapping, got {type(spool_value).__name__}.'
+                    )
         # Read-boundary floor (§3a) must be a known confidence level — a typo
         # fails loud rather than silently falling back ("don't mask errors").
         floor = self.sql_assert_min_confidence
@@ -821,6 +855,23 @@ class Config:
 
         return self._mutate_config(mutate)
 
+    def set_spool_projects(self, spool_name: str, projects: list[str]) -> bool:
+        """Persist ``spools.<name>.projects`` to ariadne.yaml, then reload.
+
+        Promotes a bare ``true`` (or absent) entry to a settings mapping;
+        enablement is preserved (a dict with no ``enabled: false`` stays
+        enabled). Returns False if there is no config path.
+        """
+        def mutate(data):
+            spools = data.setdefault('spools', {})
+            entry = spools.get(spool_name)
+            if not isinstance(entry, dict):
+                entry = {}
+                spools[spool_name] = entry
+            entry['projects'] = list(projects)
+
+        return self._mutate_config(mutate)
+
     def set_source_config(
         self,
         source_name: str,
@@ -853,6 +904,14 @@ class Config:
         Returns:
             True if successfully saved, False otherwise.
         """
+        # HIGH-2: reject the reserved spool: namespace at the write chokepoint
+        # (source add + programmatic) — only install_pack may create these.
+        from spools import is_spool_source
+        if is_spool_source(source_name):
+            raise ConfigError(
+                f"source {source_name!r}: the 'spool:' prefix is reserved for "
+                f'installed spool packs and cannot be a configured source name.'
+            )
         def mutate(data):
             sources = data.setdefault('sources', {})
             current = sources.get(source_name, {})
@@ -1335,6 +1394,7 @@ def ignore_staleness_matches(value, rel_path) -> bool:
 
 
 HUMAN_DOC_PROVENANCE = 'human-doc'
+OFFICIAL_DOC_PROVENANCE = 'official'
 CODE_PROVENANCE = 'code-derived'
 
 

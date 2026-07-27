@@ -41,6 +41,7 @@ if __name__ != '__main__':
     from library.search import SearchMixin
     from library.themes import (
         _CLUSTER_HISTORY_SCHEMA,
+        _SPOOL_ASSOC_SYNC_SCHEMA,
         _THEME_MEMBERS_SCHEMA,
         _THEMES_SCHEMA,
         ThemesMixin, _THEME_SYNCED_HASHES_SCHEMA)
@@ -281,12 +282,19 @@ class Library(
             conn.executescript(_THEME_MEMBERS_SCHEMA)
             conn.executescript(_CLUSTER_HISTORY_SCHEMA)
             conn.executescript(_THEME_SYNCED_HASHES_SCHEMA)
+            conn.execute(_SPOOL_ASSOC_SYNC_SCHEMA)
             init_scip_schema(conn)
             
             # Migration: add string_literals.kind (plain|fstring) if missing
             lit_cols = {row[1] for row in conn.execute('PRAGMA table_info(string_literals)')}
             if 'kind' not in lit_cols:
                 conn.execute("ALTER TABLE string_literals ADD COLUMN kind TEXT NOT NULL DEFAULT 'plain'")
+            # Migration: add themes.association (the owning clustering pass) if
+            # missing. Existing themes default to '' (the base global pass), so
+            # they keep their ids and reconcile unchanged — no regeneration.
+            theme_cols = {row[1] for row in conn.execute('PRAGMA table_info(themes)')}
+            if 'association' not in theme_cols:
+                conn.execute("ALTER TABLE themes ADD COLUMN association TEXT NOT NULL DEFAULT ''")
             # Migration: add returned_document_ids column if missing
             cols = {row[1] for row in conn.execute('PRAGMA table_info(usage_events)')}
             if 'returned_document_ids' not in cols:
@@ -398,6 +406,16 @@ class ScopedLibrary:
         # _filter_ids_by_closure call is just wasted work.
         self._closure_params: tuple[str, ...] = tuple(sorted(closure))
         self._scip_graph: object | None = None
+
+    @property
+    def closure(self) -> 'frozenset[str]':
+        """The source-name closure this scoped view admits (read-only).
+
+        Exposed so a caller that must read through the raw library (e.g.
+        the PM audience-cache lookup, which needs ``list_documents``) can
+        still source-scope its own filtering to exactly this set.
+        """
+        return self._closure
 
     def _scip(self):
         """Lazily load the SCIP graph from the underlying library DB.

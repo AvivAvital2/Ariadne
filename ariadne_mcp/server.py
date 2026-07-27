@@ -335,45 +335,9 @@ def ariadne_expand(
     """                                                                                                                                                                 
     from ariadne_mcp.service import AriadneService
 
-    svc = AriadneService.get()
-    event = svc.library.get_usage_event(event_id)                                                                                                                       
-    if event is None:
-        return {'error': f'event_id {event_id} not found', 'event_id': event_id}                                                                                        
-    doc_ids = event.get('returned_document_ids') or []                                                                                                                  
-    if not doc_ids:
-        return {                                                                                                                                                        
-            'event_id': event_id,
-            'original_query': event.get('query'),
-            'documents': [],
-            'note': 'original search returned no documents',                                                                                                            
-        }
-                                                                                                                                                                        
-    documents: list[dict] = []
-    missing: list[str] = []
-    for doc_id in doc_ids:
-        doc = svc.library.get_document(doc_id)
-        if doc is None:                                                                                                                                                 
-            missing.append(doc_id)
-            continue                                                                                                                                                    
-        if hasattr(doc, 'model_dump'):
-            documents.append(doc.model_dump())
-        else:                                                                                                                                                           
-            documents.append({
-                'id': getattr(doc, 'id', doc_id),                                                                                                                       
-                'title': getattr(doc, 'title', None),
-                'content': getattr(doc, 'content', None),
-                'content_type': getattr(doc, 'content_type', None),                                                                                                     
-                'source_files': getattr(doc, 'source_files', []),
-            })                                                                                                                                                          
-                
-    result: dict = {
-        'event_id': event_id,
-        'original_query': event.get('query'),                                                                                                                           
-        'documents': documents,
-    }                                                                                                                                                                   
-    if missing: 
-        result['missing_document_ids'] = missing
-    return result
+    # Delegates to the service so the spool-scope gate (CRIT-12) lives
+    # in one place: a disabled spool's docs are not re-surfaced by id.
+    return AriadneService.get().expand(event_id)
 
 
 # ---------------------------------------------------------------------------

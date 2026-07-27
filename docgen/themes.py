@@ -464,13 +464,22 @@ async def generate_themes_batched(
 # Internal helpers below; use refresh_themes from outside this module.
 
 
-def _latest_cluster_run_time(library: "Library") -> str | None:
-    """Return the ISO timestamp of the most recent cluster_history row, or None."""
+def _base_never_clustered(library: "Library") -> bool:
+    """True iff the base (global) themes pass has never produced a theme.
+
+    Keys on themes in the base partition (association=''), NOT on
+    cluster_history: a spool reconcile writes cluster_history for its own
+    scoped runs, so a history-based check would mistake that for a completed
+    base build and skip the first-build global semantic-edge rebuild — leaving
+    base themes empty. A base cluster run ⟺ a base theme exists ⟺ (on a
+    pre-`association` DB) the old cluster_history was non-empty, so this
+    preserves the pre-hash-migration and incremental paths unchanged.
+    """
     with library._conn_provider.acquire() as conn:
         row = conn.execute(
-            'SELECT MAX(created_at) FROM cluster_history'
+            "SELECT 1 FROM themes WHERE association = '' LIMIT 1"
         ).fetchone()
-    return row[0] if row and row[0] is not None else None
+    return row is None
 
 
 def _empty_summary(path: str) -> dict:
@@ -643,7 +652,7 @@ async def refresh_themes(
         update_semantic_edges_for,
     )
 
-    first_build = _latest_cluster_run_time(library) is None
+    first_build = _base_never_clustered(library)
     if first_build:
         build_semantic_edges(library)
         _record_theme_synced_hashes(library)

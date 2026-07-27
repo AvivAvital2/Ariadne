@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from library import Library
+from library.themes import ClusterMapping
 from writer import LibraryWriter
 
 
@@ -319,6 +320,35 @@ class TestRefreshThemes:
         assert summary['recluster_full'] is True
         # Two clusters of 3 should have been built and summarized.
         assert summary['summarized'] == 2
+
+    @pytest.mark.asyncio
+    async def test_initial_build_not_fooled_by_prior_spool_cluster_run(
+        self, library: Library, mocked_chat_coherent, mocked_embedding,
+    ) -> None:
+        # HIGH-B: a spool reconcile writes cluster_history for its own scoped
+        # run but no BASE (association='') theme. A base refresh must STILL be
+        # an initial build (full global edge build) — else the incremental
+        # path adopts an empty baseline, never builds edges, and base themes
+        # come back empty.
+        from docgen import themes
+
+        _populate_two_clusters(library)          # base catalog; NO edges yet
+        # Simulate a prior spool cluster run: a cluster_history row exists, but
+        # there is no base theme.
+        library.record_cluster_history(
+            run_id=1,
+            mappings=[ClusterMapping(
+                cluster_id='spool:x|proj#deadbeef',
+                prev_cluster_id=None, overlap_ratio=None,
+            )],
+        )
+
+        async with LibraryWriter(library) as writer:
+            summary = await themes.refresh_themes(library, writer)
+
+        assert summary['path'] == 'initial_build'   # not fooled by the spool run
+        assert summary['recluster_full'] is True
+        assert summary['summarized'] == 2            # base themes actually built
 
     @pytest.mark.asyncio
     async def test_idempotent_when_nothing_changed(

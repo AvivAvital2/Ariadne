@@ -31,6 +31,7 @@ class DocumentResult(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
     score: float | None = None  # Similarity score (0-1) when ranked by embedding
     sections: list[SectionResult] | None = None  # Populated in sections_only mode
+    source_name: str | None = None  # Origin source (spool vs user) — CRIT-6 framing
 
 
 class SearchResponse(BaseModel):

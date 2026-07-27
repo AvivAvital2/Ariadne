@@ -41,6 +41,7 @@ class CoreMixin:
         metadata: dict[str, object] | None = None,
         doc_id: str | None = None,
         source_name: str | None = None,
+        _allow_reserved_source: bool = False,
     ) -> Document:
         """Add a new document to the library.
 
@@ -65,6 +66,18 @@ class CoreMixin:
         from schema import CONTENT_TYPES
         if content_type not in CONTENT_TYPES:
             raise ValueError(f'Invalid content_type: {content_type}. Must be one of {CONTENT_TYPES}')
+
+        # The reserved spool: namespace may be written ONLY by a verified spool
+        # install (which passes _allow_reserved_source). Every other path —
+        # `ariadne import`, direct callers — is refused here, so the config-only
+        # HIGH-2 guard can't be sidestepped to forge unsigned spool content.
+        if source_name is not None and not _allow_reserved_source:
+            from spools import is_spool_source
+            if is_spool_source(source_name):
+                raise ValueError(
+                    f'source_name {source_name!r} is reserved for verified '
+                    f'spool installs and cannot be written via this path',
+                )
 
         # If doc_id provided and document exists, update it instead
         if doc_id is not None:

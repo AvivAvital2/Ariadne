@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS themes (
     summary_hash TEXT NOT NULL,
     coherent INTEGER NOT NULL DEFAULT 1,
     dirty INTEGER NOT NULL DEFAULT 0,
+    association TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
 )
 '''
@@ -109,6 +110,17 @@ CREATE TABLE IF NOT EXISTS theme_synced_hashes (
 )
 '''
 
+# Per spool cross-check association (project × spool): the content signature of
+# its last reconcile, so reconcile can SKIP re-clustering an unchanged
+# association instead of rebuilding the (large) spool semantic index once per
+# opted-in project (HIGH-A).
+_SPOOL_ASSOC_SYNC_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS spool_assoc_sync (
+    association TEXT PRIMARY KEY,
+    content_hash TEXT NOT NULL
+)
+'''
+
 
 # ---------------------------------------------------------------------------
 # Mixin
@@ -134,11 +146,17 @@ class ThemesMixin:
         summary_hash: str,
         coherent: bool = True,
         dirty: bool = True,
+        association: str = '',
     ) -> None:
         """Insert a new theme row.
 
         Defaults to dirty=True since newly created themes typically need a
         summarization pass; pass dirty=False for themes already synced.
+
+        association names the clustering pass that owns this theme (''
+        for the base global pass, a canonical scope key for a scoped
+        spool pass); reconcile diffs stay within one association so
+        independent passes don't delete each other's themes.
         """
         now = _now_iso()
         with self._conn_provider.acquire() as conn:
@@ -146,12 +164,12 @@ class ThemesMixin:
                 '''INSERT INTO themes
                    (cluster_id, doc_id, member_count, resolution,
                     last_built_at, last_summarized_at, summary_hash,
-                    coherent, dirty)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                    coherent, dirty, association)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (
                     cluster_id, doc_id, member_count, resolution,
                     now, now, summary_hash,
-                    int(coherent), int(dirty),
+                    int(coherent), int(dirty), association,
                 ),
             )
 
@@ -172,6 +190,7 @@ class ThemesMixin:
         coherent_only: bool = True,
         source: str | None = None,
         source_names: tuple[str, ...] | None = None,
+        association: str | None = None,
     ) -> list[Theme]:
         """List themes ordered by cluster_id.
 
@@ -181,6 +200,10 @@ class ThemesMixin:
         wrapper — restrict themes whose summary doc has a source_name
         in the given tuple. source and source_names are mutually
         exclusive at the call site.
+        association restricts to themes owned by one clustering pass
+        (the reconcile partition; '' is the base global pass). It reads
+        the themes.association column directly, so it needs no join and
+        composes with the other filters.
         """
         needs_join = source is not None or source_names is not None
         sql = '''SELECT t.cluster_id, t.doc_id, t.member_count, t.resolution,
@@ -210,6 +233,9 @@ class ThemesMixin:
                 f'(d.source_name IS NULL OR d.source_name IN ({placeholders}))',
             )
             params.extend(source_names)
+        if association is not None:
+            conditions.append('t.association = ?')
+            params.append(association)
         if conditions:
             sql += ' WHERE ' + ' AND '.join(conditions)
         sql += ' ORDER BY t.cluster_id'
@@ -231,6 +257,53 @@ class ThemesMixin:
         """Delete a theme. Cascades to theme_members via FK."""
         with self._conn_provider.acquire() as conn:
             conn.execute('DELETE FROM themes WHERE cluster_id = ?', (cluster_id,))
+
+    def distinct_theme_associations(self) -> list[str]:
+        """Distinct non-empty association keys — the scoped-pass partitions.
+
+        The base global pass owns association='' and is excluded; each
+        remaining value identifies one spool cross-check partition.
+        """
+        with self._conn_provider.acquire() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT association FROM themes WHERE association != '' "
+                'ORDER BY association',
+            ).fetchall()
+        return [str(r[0]) for r in rows]
+
+    def delete_themes_for_association(self, association: str) -> None:
+        """Delete every theme in a partition, summary docs included.
+
+        Deletes through each summary document so the cascade (documents →
+        themes → theme_members) clears the theme rows and their members too.
+        Also clears the reconcile sync signature so a later re-add rebuilds.
+        """
+        for theme in self.list_themes(coherent_only=False, association=association):
+            self.delete_document(theme.doc_id)
+        with self._conn_provider.acquire() as conn:
+            conn.execute(
+                'DELETE FROM spool_assoc_sync WHERE association = ?',
+                (association,),
+            )
+
+    def get_spool_assoc_hash(self, association: str) -> str | None:
+        """The content signature of a spool association's last reconcile, or
+        None. Lets reconcile SKIP re-clustering an unchanged association
+        (HIGH-A) rather than rebuild the spool index per project."""
+        with self._conn_provider.acquire() as conn:
+            row = conn.execute(
+                'SELECT content_hash FROM spool_assoc_sync WHERE association = ?',
+                (association,),
+            ).fetchone()
+        return None if row is None else str(row[0])
+
+    def set_spool_assoc_hash(self, association: str, content_hash: str) -> None:
+        with self._conn_provider.acquire() as conn:
+            conn.execute(
+                'INSERT OR REPLACE INTO spool_assoc_sync '
+                '(association, content_hash) VALUES (?, ?)',
+                (association, content_hash),
+            )
 
     # -- Membership --------------------------------------------------------
 

@@ -133,4 +133,8 @@ def make_scoped_library(
             f'Misconfigured source graph: {e}. Fix the cycle in '
             'ariadne.yaml depends_on.',
         ) from e
-    return ScopedLibrary(library, closure)
+    # Registered spools join the query scope (enabled + cached + pin OK —
+    # designs/spool-environment-plugin.md §18.6.4); an unresolvable spool is
+    # simply absent here, its gap surfaces via `ariadne spools` / honest-gap.
+    from spools import active_spool_sources
+    return ScopedLibrary(library, closure | active_spool_sources(config))

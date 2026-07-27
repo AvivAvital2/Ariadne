@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-from config import HUMAN_DOC_PROVENANCE
+from config import HUMAN_DOC_PROVENANCE, OFFICIAL_DOC_PROVENANCE
 
 from schema import Chunk, ContentType, Document, SearchResult
 
@@ -22,6 +22,7 @@ _logger = logging.getLogger(__name__)
 _HUMAN_DOC_RANK_WEIGHT = 0.8
 
 _STALE_DOC_RANK_WEIGHT = 0.6
+_OFFICIAL_DOC_RANK_WEIGHT = 0.9
 
 
 def provenance_weight(metadata):
@@ -32,6 +33,8 @@ def provenance_weight(metadata):
     weight = 1.0
     if metadata.get('provenance') == HUMAN_DOC_PROVENANCE:
         weight *= _HUMAN_DOC_RANK_WEIGHT
+    if metadata.get('provenance') == OFFICIAL_DOC_PROVENANCE:
+        weight *= _OFFICIAL_DOC_RANK_WEIGHT
     if metadata.get('stale_autodoc'):
         weight *= _STALE_DOC_RANK_WEIGHT
     return weight

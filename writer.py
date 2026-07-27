@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 from attrs import frozen
 
 from diagram_format import fence_dot
-from embedding import EmbeddingConfig, EmbeddingService
+from embedding import EmbeddingConfig, EmbeddingService, doc_embedding_text
 from library import Library
 from schema import CATALOG_KIND_FILE_INDEX, Chunk, ContentType, Document, Section
 
@@ -248,7 +248,7 @@ class LibraryWriter:
 
         # Generate embedding for the full document
         # Use title + first part of content for the document-level embedding
-        doc_text = f'{title}\n\n{content[:2000]}'
+        doc_text = doc_embedding_text(title, content)
         doc_embedding = await service.embed(doc_text)
 
         # Create the document
@@ -439,7 +439,7 @@ class LibraryWriter:
             return None
 
         service = await self._get_embedding_service()
-        doc_text = f'{doc.title}\n\n{doc.content[:2000]}'
+        doc_text = doc_embedding_text(doc.title, doc.content)
         new_embedding = await service.embed(doc_text)
 
         return self.library.update_document(doc_id, embedding=new_embedding)
@@ -472,7 +472,7 @@ class LibraryWriter:
         docs = [d for d in docs if d.metadata.get('kind') != CATALOG_KIND_FILE_INDEX]
         service = await self._get_embedding_service()
 
-        doc_texts = [f'{d.title}\n\n{d.content[:2000]}' for d in docs]
+        doc_texts = [doc_embedding_text(d.title, d.content) for d in docs]
         batches = []
         for i in range(0, len(docs), EMBED_BATCH_SIZE):
             batches.append((docs[i:i + EMBED_BATCH_SIZE], doc_texts[i:i + EMBED_BATCH_SIZE]))
@@ -540,7 +540,7 @@ class LibraryWriter:
             doc_groups.append(group)
             requests.append(EmbeddingBatchRequest(
                 custom_id=f'doc:{len(doc_groups) - 1}',
-                texts=[f'{d.title}\n\n{d.content[:2000]}' for d in group],
+                texts=[doc_embedding_text(d.title, d.content) for d in group],
             ))
         chunked: dict[str, list[str]] = {}
         for d in docs:

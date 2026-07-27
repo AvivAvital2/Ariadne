@@ -76,6 +76,60 @@ class SearchMixin:
         )
         return hashlib.sha256(raw.encode()).hexdigest()
 
+    def expand(self, event_id: int) -> dict:
+        """Return full content for the docs of a prior search event.
+
+        CRIT-12: re-fetching by id must honor the CURRENT spool scope. A
+        doc whose source is a spool that is no longer registered (disabled
+        or updated away) is dropped to ``missing_document_ids`` — otherwise
+        a stale ``event_id`` would leak a disabled/malicious spool's full
+        content, bypassing the disable-remediation. Non-spool docs are
+        unaffected.
+        """
+        from spools import active_spool_sources, is_spool_source
+
+        event = self.library.get_usage_event(event_id)
+        if event is None:
+            return {'error': f'event_id {event_id} not found', 'event_id': event_id}
+        doc_ids = event.get('returned_document_ids') or []
+        if not doc_ids:
+            return {
+                'event_id': event_id,
+                'original_query': event.get('query'),
+                'documents': [],
+                'note': 'original search returned no documents',
+            }
+
+        active_spools = active_spool_sources(self.config)
+        found = {d.id: d for d in self.library.get_documents_batch(doc_ids)}
+
+        documents: list[dict] = []
+        missing: list[str] = []
+        for doc_id in doc_ids:
+            doc = found.get(doc_id)
+            src = getattr(doc, 'source_name', None) if doc else None
+            # Missing, or a spool no longer in scope (disabled/updated) — a
+            # stale event_id must not resurface a disabled spool's content.
+            if doc is None or (is_spool_source(src) and src not in active_spools):
+                missing.append(doc_id)
+                continue
+            documents.append({
+                'id': getattr(doc, 'id', doc_id),
+                'title': getattr(doc, 'title', None),
+                'content': getattr(doc, 'content', None),
+                'content_type': getattr(doc, 'content_type', None),
+                'source_files': getattr(doc, 'source_files', []),
+            })
+
+        result: dict = {
+            'event_id': event_id,
+            'original_query': event.get('query'),
+            'documents': documents,
+        }
+        if missing:
+            result['missing_document_ids'] = missing
+        return result
+
     async def search(
         self,
         query: str | None = None,
@@ -106,13 +160,18 @@ class SearchMixin:
         # ``source`` is part of the cache keys so a query asked from
         # product's scope and the same query from extension's scope
         # don't collide (their closures differ, so their result sets
-        # legitimately differ).
-        key = self._cache_key('search', query, feature, branch, status, limit, context_file, sections_only, role, source)
+        # legitimately differ). CRIT-11: the enabled-spool fingerprint is
+        # in the key too, so enabling/disabling/updating a spool shifts the
+        # key → a stale cached result can't outlive the spool that shaped
+        # it (in particular, disabling a bad spool evicts its content).
+        from spools import resolve_spools
+        spool_fp = resolve_spools(self.config).fingerprint()
+        key = self._cache_key('search', query, feature, branch, status, limit, context_file, sections_only, role, source, spool_fp)
         if key in self._query_cache:
             return self._query_cache[key]
 
         # Persistent cache (cross-session, branch-aware, 30-day TTL)
-        p_key = self._persistent_cache_key('search', branch, query, feature, status, limit, context_file, sections_only, role, source)
+        p_key = self._persistent_cache_key('search', branch, query, feature, status, limit, context_file, sections_only, role, source, spool_fp)
         cached_json = self.library.cache_get(p_key)
         if cached_json is not None:
             try:
@@ -150,6 +209,14 @@ class SearchMixin:
         # below cannot leak rows from outside the closure.
         scoped = self._resolve_scope(source)
 
+        # Resolve the enabled-spool set ONCE for this request; the fingerprint
+        # (PM audience gate) and the source ids (tier-2 partition) both come
+        # off this single resolution instead of re-reading manifests per use.
+        from spools import resolve_spools
+        spool_resolution = resolve_spools(self.config)
+        spool_sources = spool_resolution.scope_sources()
+        spool_fp = spool_resolution.fingerprint()
+
         # Phase 1: Filter using lightweight metadata (no content/embeddings loaded)
         lite_docs = scoped.list_documents_lite()
 
@@ -167,11 +234,19 @@ class SearchMixin:
                 if d.content_type != 'audience_response'
             ]
         else:
+            # CRIT-11 (PM-search gap): an audience_response row also carries
+            # the spool fingerprint it was synthesized under. Include it only
+            # when that fingerprint matches the CURRENT enabled-spool set —
+            # otherwise a PM answer shaped by a now-disabled spool would leak
+            # through search (the disable-remediation must hold here too, not
+            # just in the ask cache lookup). Legacy/no-spool rows carry '' and
+            # match when no spool is active.
+            from ariadne_mcp.service_analysis import audience_row_matches
             lite_docs = [
                 d for d in lite_docs
                 if (
                     d.content_type != 'audience_response'
-                    or (d.metadata or {}).get('audience') == role
+                    or audience_row_matches(d.metadata, role, spool_fp)
                 )
             ]
 
@@ -186,7 +261,12 @@ class SearchMixin:
 
         # Phase 2: For embedding ranking, load just the IDs that pass filters
         # Full document content is loaded only for the final top-k results
-        candidate_ids = [d.id for d in lite_docs]
+        from spools import partition_tier2
+        # HIGH-1: gate on BOTH axes — only spool-origin official docs are
+        # held back as tier-2; a user's own 'official' doc stays tier-1.
+        tier1_docs, tier2_docs = partition_tier2(lite_docs, spool_sources)
+        candidate_ids = [d.id for d in tier1_docs]
+        tier2_ids = [d.id for d in tier2_docs]
         from library.search import provenance_weight
         weights = {d.id: provenance_weight(d.metadata) for d in lite_docs}
 
@@ -205,9 +285,26 @@ class SearchMixin:
 
         # Score and rank by query (treat empty/whitespace as no query)
         effective_query = query.strip() if query else ''
+        spool_gap_hint_text = None
         if effective_query:
             # Phase 3: Load only embeddings for ranking (no content loaded yet)
-            ranked_ids = await self._rank_ids_by_embedding(candidate_ids, effective_query, limit * 2, weights)
+            from spools import _GATE_MIN_STRONG_HITS, rank_with_scarcity_gate
+            
+            async def _rank(ids):
+                # HIGH-3: the scarcity check needs at least
+                # _GATE_MIN_STRONG_HITS candidates to judge "is code scarce";
+                # floor the window so a small caller limit (e.g. 1) can't
+                # shrink it below that and force the gate open.
+                return await self._rank_ids_by_embedding(ids, effective_query, max(limit * 2, _GATE_MIN_STRONG_HITS), weights)
+            
+            gated = await rank_with_scarcity_gate(_rank, candidate_ids, tier2_ids)
+            ranked_ids = gated.ranked
+            from spools import spool_gap_hint
+            spool_gap_hint_text = spool_gap_hint(
+                gate_opened=gated.gate_opened,
+                tier2_present=bool(tier2_ids),
+                spools_registered=bool(spool_sources),
+            )
 
             # Apply context boost
             if context_boost_ids:
@@ -273,19 +370,21 @@ class SearchMixin:
                     id=d.id, title=d.title, content_type=d.content_type,
                     content=assembled, source_files=d.source_files,
                     metadata=d.metadata, score=score, sections=secs,
+                    source_name=d.source_name,
                 ))
             else:
                 documents.append(DocumentResult(
                     id=d.id, title=d.title, content_type=d.content_type,
                     content=_trim_related_documents(d.content),
                     source_files=d.source_files, metadata=d.metadata, score=score,
+                    source_name=d.source_name,
                 ))
 
         return SearchResponse(
             documents=documents,
             event_id=event_id,
             suggested_queries=self._suggest_queries(effective_query, scored_docs) if effective_query else None,
-            improvement_hint=self._improvement_hint(scored_docs, effective_query),
+            improvement_hint=spool_gap_hint_text or self._improvement_hint(scored_docs, effective_query),
             truncated=truncated,                                                                                                                                        
         )
 

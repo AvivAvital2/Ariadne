@@ -5,6 +5,7 @@ tiny-cluster filtering, history recording, and persistence.
 """
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import igraph as ig
@@ -13,6 +14,7 @@ import numpy as np
 import pytest
 
 from docgen.cluster import _run_leiden
+from docgen.graph_builder import _catalog_doc_ids, build_semantic_edges
 from library import Library
 
 
@@ -201,6 +203,104 @@ class TestClusterThemes:
         assert run.clusters == {}
         assert run.new_cluster_ids == set()
         assert run.deleted_cluster_ids == set()
+
+    def test_clustering_passes_own_independent_partitions(
+        self, library: Library,
+    ) -> None:
+        # Base and per-(project, spool) passes each own an independent theme
+        # partition keyed by their scope. Running one pass must neither delete
+        # nor id-collide with another's themes, even when member sets coincide;
+        # and the base id-space stays the bare member-hash, so an existing DB
+        # migrates without churn (no regeneration, no re-summarization).
+        from docgen.cluster import cluster_themes
+        from docgen.graph_builder import build_semantic_edges
+
+        v1 = [1.0, 0.05, 0, 0, 0, 0, 0, 0]
+        v2 = [0, 0, 1.0, 0.05, 0, 0, 0, 0]
+        # Each scoped pass needs a genuinely cross-source cluster to survive the
+        # member-span filter, so spool docs sit near BOTH project vectors: the
+        # v1 spool group cross-links with src1, the v2 group with src2.
+        for i in range(3):
+            _add_catalog(library, f's1_{i}', v1, source_name='src1')
+            _add_catalog(library, f's2_{i}', v2, source_name='src2')
+            _add_catalog(library, f'sp1_{i}', v1, source_name='spool:env')
+            _add_catalog(library, f'sp2_{i}', v2, source_name='spool:env')
+        # Base edges (configured sources), then each pass's cross-source edges.
+        build_semantic_edges(library, k=5, min_sim=0.6)
+        build_semantic_edges(
+            library, scope=frozenset({'src1', 'spool:env'}), k=5, min_sim=0.6,
+        )
+        build_semantic_edges(
+            library, scope=frozenset({'src2', 'spool:env'}), k=5, min_sim=0.6,
+        )
+
+        base = cluster_themes(library, min_cluster_size=3)          # scope=None
+        pass_a = cluster_themes(
+            library, scope=frozenset({'src1', 'spool:env'}), min_cluster_size=3,
+        )
+        pass_b = cluster_themes(
+            library, scope=frozenset({'src2', 'spool:env'}), min_cluster_size=3,
+        )
+        base_ids = set(base.clusters)
+        a_ids = set(pass_a.clusters)
+        b_ids = set(pass_b.clusters)
+
+        # Every pass produced themes, and no two passes share an id — the
+        # association-namespaced id keeps independent passes apart (defending
+        # the global themes.cluster_id PK against coinciding member sets).
+        assert base_ids and a_ids and b_ids
+        assert base_ids.isdisjoint(a_ids)
+        assert base_ids.isdisjoint(b_ids)
+        assert a_ids.isdisjoint(b_ids)
+
+        # No pass cross-deleted another's themes.
+        live = {t.cluster_id for t in library.list_themes(coherent_only=False)}
+        assert (base_ids | a_ids | b_ids) <= live
+
+        # Base ids stay bare (unchanged id-space); scoped ids are namespaced.
+        assert all('#' not in cid for cid in base_ids)
+        assert all('#' in cid for cid in a_ids | b_ids)
+
+        # Re-running the base pass is stable and leaves scoped themes intact.
+        base2 = cluster_themes(library, min_cluster_size=3)
+        assert set(base2.clusters) == base_ids
+        live2 = {t.cluster_id for t in library.list_themes(coherent_only=False)}
+        assert (base_ids | a_ids | b_ids) <= live2
+
+    def test_scoped_pass_keeps_only_cross_source_clusters(
+        self, library: Library,
+    ) -> None:
+        # A scoped spool pass clusters the whole {project ∪ spool} graph but
+        # must persist only genuinely cross-source clusters: a pure-project
+        # cluster duplicates a base theme, a pure-spool cluster is
+        # spool-internal — only a cluster spanning both is worth keeping.
+        from docgen.cluster import cluster_themes
+        from docgen.graph_builder import build_semantic_edges
+
+        v_mixed = [1.0, 0.05, 0, 0, 0, 0, 0, 0]
+        v_proj = [0, 0, 1.0, 0.05, 0, 0, 0, 0]
+        v_spool = [0, 0, 0, 0, 1.0, 0.05, 0, 0]
+        # cross-source cluster (2 project + 2 spool docs)
+        _add_catalog(library, 'mix_p0', v_mixed, source_name='src1')
+        _add_catalog(library, 'mix_p1', v_mixed, source_name='src1')
+        _add_catalog(library, 'mix_s0', v_mixed, source_name='spool:env')
+        _add_catalog(library, 'mix_s1', v_mixed, source_name='spool:env')
+        # pure-project cluster (3 docs) and pure-spool cluster (3 docs)
+        for i in range(3):
+            _add_catalog(library, f'pp_{i}', v_proj, source_name='src1')
+            _add_catalog(library, f'ps_{i}', v_spool, source_name='spool:env')
+        build_semantic_edges(
+            library, scope=frozenset({'src1', 'spool:env'}), k=5, min_sim=0.6,
+        )
+
+        run = cluster_themes(
+            library, scope=frozenset({'src1', 'spool:env'}), min_cluster_size=3,
+        )
+        # Only the cross-source cluster survives (pure-project + pure-spool,
+        # both large enough to pass the size filter, are dropped).
+        assert len(run.clusters) == 1
+        members = next(iter(run.clusters.values()))
+        assert members == {'mix_p0', 'mix_p1', 'mix_s0', 'mix_s1'}
 
 
 # ---------------------------------------------------------------------------
@@ -547,3 +647,86 @@ class TestRunLeidenBoundedIterations:
             'run-to-convergence (-1); -1 ~2x slower for noise-level gain'
         )
         assert membership == [0, 1]  # still returns the partition membership
+
+
+def test_catalog_doc_ids_honors_explicit_scope(tmp_path):
+    # Selective spool cross-check needs clustering scoped to an arbitrary
+    # opted-in set {project(s) + spool}. _catalog_doc_ids must accept an
+    # explicit `scope` closure and admit exactly those sources — including a
+    # spool: source — bypassing the global/single-source config path.
+    lib = Library(tmp_path / 'scope.db')
+    try:
+        _add_catalog(lib, 'x', [1, 0, 0, 0, 0, 0, 0, 0], source_name='src1')
+        _add_catalog(lib, 'y', [0, 1, 0, 0, 0, 0, 0, 0],
+                     source_name='spool:databricks')
+        _add_catalog(lib, 'z', [0, 0, 1, 0, 0, 0, 0, 0], source_name='src2')
+        ids = set(_catalog_doc_ids(
+            lib, scope=frozenset({'src1', 'spool:databricks'}),
+        ))
+        assert ids == {'x', 'y'}          # src2 excluded; spool: admitted
+    finally:
+        lib.close()
+
+
+def test_association_migration_preserves_existing_themes(tmp_path):
+    # A pre-association database (themes table without the column) must migrate
+    # on open WITHOUT touching existing themes: identical cluster_id, member
+    # count, summary_hash, and dirty flag; association defaulted to '' (the base
+    # partition). This is the evidence that upgrading needs no regeneration and
+    # no re-summarization — a clean (dirty=0) theme stays clean, so the paid
+    # summarizer (which only processes dirty themes) never re-runs on it.
+    db = tmp_path / 'legacy.db'
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        '''
+        CREATE TABLE themes (
+            cluster_id TEXT PRIMARY KEY,
+            doc_id TEXT NOT NULL UNIQUE,
+            member_count INTEGER NOT NULL,
+            resolution REAL NOT NULL,
+            last_built_at TEXT NOT NULL,
+            last_summarized_at TEXT NOT NULL,
+            summary_hash TEXT NOT NULL,
+            coherent INTEGER NOT NULL DEFAULT 1,
+            dirty INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO themes
+            (cluster_id, doc_id, member_count, resolution, last_built_at,
+             last_summarized_at, summary_hash, coherent, dirty)
+        VALUES
+            ('legacy_cluster', 'legacy_doc', 7, 1.0, '2020-01-01',
+             '2020-01-01', 'deadbeef', 1, 0);
+        '''
+    )
+    conn.commit()
+    conn.close()
+
+    lib = Library(db)   # opening runs the idempotent ADD COLUMN migration
+    try:
+        with lib._conn_provider.acquire() as c:
+            cols = {r[1] for r in c.execute('PRAGMA table_info(themes)')}
+            assert 'association' in cols
+            row = c.execute(
+                'SELECT cluster_id, member_count, summary_hash, dirty, '
+                'association FROM themes WHERE cluster_id = ?',
+                ('legacy_cluster',),
+            ).fetchone()
+        # Byte-for-byte intact; association defaulted to the base partition.
+        # Nothing deleted, re-hashed, or re-dirtied.
+        assert row == ('legacy_cluster', 7, 'deadbeef', 0, '')
+    finally:
+        lib.close()
+
+
+def test_scoped_semantic_build_on_empty_scope_is_noop(tmp_path):
+    # A scoped cross-source build over a scope with no catalog docs is a safe
+    # no-op: it clears nothing (empty within-scope delete) and returns 0,
+    # rather than crashing or wiping global edges.
+    lib = Library(tmp_path / 'empty.db')
+    try:
+        n = build_semantic_edges(
+            lib, scope=frozenset({'nope', 'spool:absent'}), k=5, min_sim=0.6,
+        )
+        assert n == 0
+    finally:
+        lib.close()

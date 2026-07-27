@@ -1,0 +1,63 @@
+# Seed guardrail catalog (slice e1) — hand-authored, ao-core-validated.
+# Repo-agnostic prose + structural code-signals (design §6); these three
+# are the Option-C load-bearing facts (§11), probe-verified 2026-07-08.
+guardrails:
+  - name: engine-coupling-public-api
+    kind: antipattern
+    recommendation: >-
+      Treat engine replacement as re-engineering, not configuration: the
+      library's public API exposes engine-native types, so a swap
+      (e.g. Option B "refactor onto Spark") rewrites the API surface and
+      must re-prove its correctness guarantees.
+    rationale: >-
+      When engine types appear in public signatures, every consumer is
+      coupled to the engine; distributed designs should keep the engine
+      and scale around it (distribute features, not rows).
+    citation: designs/ao-core-databricks-exec-summary.md §2/§7
+    signal_type: structural
+    signal:
+      kind: signature_scan
+      prefix: agentune.api.
+      needle: Duckdb
+      subtypes: [function, method, class]
+    requires: []
+    provides: [engine-coupling-known]
+    spans: [engine-coupling]
+
+  - name: shared-canonical-read-only
+    kind: method
+    recommendation: >-
+      Open the shared canonical dataset read-only on every worker; the
+      engine supports many concurrent readers iff all connections open
+      read-only.
+    rationale: >-
+      The scatter phase is safe exactly because no worker can mutate the
+      canonical; the read-only open is the mechanism that enforces it.
+    citation: designs/ao-core-duckdb-decoupling.md (Option C topology)
+    signal_type: structural
+    signal:
+      kind: body_contains
+      symbol: agentune.core.database.DuckdbManager.on_disk
+      needle: read_only
+    requires: [shared-canonical-published]
+    provides: [concurrent-readers-safe]
+    spans: [distribution]
+
+  - name: gather-on-stable-identifier
+    kind: method
+    recommendation: >-
+      Gather distributed results on a stamped identifier column, never
+      the engine's physical rowid; the split/gather machinery accepts an
+      identifier_col_name for exactly this.
+    rationale: >-
+      rowid is a physical position, unstable across copies/reloads — the
+      distributed scenario precisely; keying on it silently misaligns rows.
+    citation: designs/spool-environment-plugin.md §12.2
+    signal_type: structural
+    signal:
+      kind: body_contains
+      symbol: agentune.analyze.run.ingest.sampling.split_duckdb_table
+      needle: identifier_col_name
+    requires: [stable-identifier-stamped]
+    provides: [stable-identity-gather]
+    spans: [identity, gather]

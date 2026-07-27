@@ -1,0 +1,26 @@
+# Built-in corpus recipe for `ariadne spools init databricks`.
+# Curation per design §18.1 (admit iff real code corpus AND SCIP-translatable),
+# pins blessed by the user 2026-07-08; missing shas are resolved from the tags
+# at `spools create` time, shown in the consent prompt, and pinned back into
+# the generated spools.yaml (TOFU).
+name: databricks
+runtime: dbr17.3-lts
+version: 1.0.0
+# Corpus languages — each must have a registered SCIP indexer or `create`
+# refuses up front (a Spool needs code-tier grounding; §18.1). python + scala
+# (pyspark interface + Spark's Scala implementation) are both SCIP-indexable.
+languages: [python, scala]
+corpus:
+  spark:
+    url: https://github.com/apache/spark
+    tag: v4.0.0
+  databricks-sdk-py:
+    url: https://github.com/databricks/databricks-sdk-py
+    tag: main            # EDIT ME: pin to the sdk version bundled with DBR 17.3
+  delta:
+    url: https://github.com/delta-io/delta
+    tag: master          # EDIT ME: pin to the Spark-4.0-compatible Delta release
+certify:
+  - spark/docs/
+  - databricks-sdk-py/docs/
+  - delta/docs/

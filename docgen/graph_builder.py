@@ -29,14 +29,19 @@ if TYPE_CHECKING:
 _STRUCTURAL_EDGE_TYPES = ('imports', 'documents', 'topic_member', 'theme_member')
 
 
-def _scoped_view(library: "Library", source: str | None):
+def _scoped_view(library: "Library", source: str | None, *, scope=None):
     """Build a ScopedLibrary appropriate for this graph operation.
 
-    With ``source`` given, scope to that source's closure; without it,
-    use a global view (every configured source). Reads go through this
-    wrapper; the chokepoint enforces that the underlying ``library``
-    isn't called for data directly.
+    An explicit ``scope`` (a closure of source names) is used verbatim —
+    for clustering over an arbitrary opted-in set, e.g. {project(s) + spool}.
+    Otherwise, with ``source`` given, scope to that source's closure; without
+    either, a global view (every configured source). Reads go through this
+    wrapper; the chokepoint enforces the underlying ``library`` isn't read
+    directly.
     """
+    if scope is not None:
+        from library import ScopedLibrary
+        return ScopedLibrary(library, frozenset(scope))
     from config import get_config
     from scope_resolution import (
         make_global_scoped_library, make_scoped_library,
@@ -48,17 +53,21 @@ def _scoped_view(library: "Library", source: str | None):
     return make_scoped_library(cfg, library, source)
 
 
-def _catalog_doc_ids(library: "Library", source: str | None = None) -> list[str]:
-    """Return doc_ids of catalog elements (optionally filtered by source_name).
+def _catalog_doc_ids(
+    library: "Library", source: str | None = None, *, scope=None,
+) -> list[str]:
+    """Return doc_ids of catalog elements, scoped.
 
-    Reads via a closure-scoped view; the additional ``source_name ==
-    source`` filter preserves the pre-migration "single-source only"
-    semantics for semantic edges (the closure brings in dependency docs
-    too, which semantic-edge code explicitly didn't want to mix).
+    An explicit ``scope`` closure admits exactly those sources (a
+    ``ScopedLibrary`` on that set already filters to them, so no re-narrowing
+    is needed) — used for a spool's cross-source pass over an opted-in set.
+    Otherwise the legacy ``source`` filter narrows a single-source closure
+    back to that source (the closure also brings in dependency docs, which
+    semantic-edge code didn't want to mix).
     """
-    scoped = _scoped_view(library, source)
+    scoped = _scoped_view(library, source, scope=scope)
     docs = scoped.list_documents_lite(content_type='catalog')
-    if source is not None:
+    if scope is None and source is not None:
         docs = [d for d in docs if d.source_name == source]
     return sorted(d.id for d in docs)
 
@@ -93,12 +102,47 @@ def _delete_semantic_for_ids(conn, ids: list[str]) -> None:
     )
 
 
+def _delete_semantic_within_ids(conn, ids: list[str]) -> None:
+    """Delete semantic_neighbor edges where BOTH endpoints are in `ids`.
+
+    Used for a scoped (cross-source spool) rebuild: it clears only the
+    within-scope edges it is about to recompute, so an edge from an in-scope
+    element to an out-of-scope one — e.g. a base project↔project edge — is
+    left intact. (Contrast ``_delete_semantic_for_ids``, which clears any edge
+    touching an id and is right for a single-source refresh.)
+    """
+    if not ids:
+        return
+    placeholders = ','.join('?' * len(ids))
+    conn.execute(
+        f"DELETE FROM doc_graph WHERE edge_type = 'semantic_neighbor' "
+        f"AND source_id IN ({placeholders}) AND target_id IN ({placeholders})",
+        ids + ids,
+    )
+
+
+def _clear_prior_semantic(conn, source, scope, ids: list[str]) -> None:
+    """Clear the semantic edges a (re)build is about to replace.
+
+    Global (no source, no scope): all of them. Scoped (a spool cross-source
+    pass): only edges within the scope's ids, preserving cross-scope edges.
+    Single-source: any edge touching one of its ids.
+    """
+    if source is None and scope is None:
+        conn.execute("DELETE FROM doc_graph WHERE edge_type = 'semantic_neighbor'")
+    elif scope is not None:
+        _delete_semantic_within_ids(conn, ids)
+    else:
+        _delete_semantic_for_ids(conn, ids)
+
+
 def build_semantic_edges(
     library: "Library",
     *,
     k: int = 5,
     min_sim: float = 0.6,
     source: str | None = None,
+    scope=None,
 ) -> int:
     """Build/refresh all semantic_neighbor edges in doc_graph.
 
@@ -112,32 +156,26 @@ def build_semantic_edges(
         source: optional source_name filter; only catalog elements from this
             source are indexed and the existing semantic edges among them are
             replaced. Edges outside this scope are untouched.
+        scope: optional closure of source names (e.g. {project, spool}) to
+            index together — builds cross-source edges among exactly those
+            sources, replacing only within-scope edges (see
+            ``_delete_semantic_within_ids``). Used by the spool cross-check.
 
     Returns:
         Number of edges inserted.
     """
-    doc_ids = _catalog_doc_ids(library, source)
+    doc_ids = _catalog_doc_ids(library, source, scope=scope)
     if len(doc_ids) < 2:
         with library._conn_provider.acquire() as conn:
-            if source is None:
-                conn.execute(
-                    "DELETE FROM doc_graph WHERE edge_type = 'semantic_neighbor'"
-                )
-            else:
-                _delete_semantic_for_ids(conn, doc_ids)
+            _clear_prior_semantic(conn, source, scope, doc_ids)
         return 0
 
-    scoped = _scoped_view(library, source)
+    scoped = _scoped_view(library, source, scope=scope)
     embeddings = scoped.get_embeddings_for_ids(doc_ids)
     valid_ids = [did for did in doc_ids if did in embeddings]
     if len(valid_ids) < 2:
         with library._conn_provider.acquire() as conn:
-            if source is None:
-                conn.execute(
-                    "DELETE FROM doc_graph WHERE edge_type = 'semantic_neighbor'"
-                )
-            else:
-                _delete_semantic_for_ids(conn, valid_ids)
+            _clear_prior_semantic(conn, source, scope, valid_ids)
         return 0
 
     matrix = np.stack([embeddings[did] for did in valid_ids])
@@ -163,12 +201,7 @@ def build_semantic_edges(
                 edge_weights[(a, b)] = sim
 
     with library._conn_provider.acquire() as conn:
-        if source is None:
-            conn.execute(
-                "DELETE FROM doc_graph WHERE edge_type = 'semantic_neighbor'"
-            )
-        else:
-            _delete_semantic_for_ids(conn, valid_ids)
+        _clear_prior_semantic(conn, source, scope, valid_ids)
         if edge_weights:
             conn.executemany(
                 "INSERT OR REPLACE INTO doc_graph "
@@ -260,6 +293,7 @@ def load_hybrid_graph(
     *,
     semantic_edge_scale: float = 0.5,
     source: str | None = None,
+    scope=None,
 ) -> tuple['ig.Graph', list[str]]:
     """Load the merged weighted graph from doc_graph for clustering.
 
@@ -274,7 +308,7 @@ def load_hybrid_graph(
     """
     import igraph as ig
 
-    doc_ids = _catalog_doc_ids(library, source)
+    doc_ids = _catalog_doc_ids(library, source, scope=scope)
     id_to_index = {did: idx for idx, did in enumerate(doc_ids)}
 
     with library._conn_provider.acquire() as conn:

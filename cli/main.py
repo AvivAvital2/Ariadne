@@ -78,6 +78,7 @@ def create_parser() -> argparse.ArgumentParser:
     from cli.sync import register_commands as register_sync
     from cli.themes_cmd import register_commands as register_themes_cmd
     from cli.trace import register_commands as register_trace
+    from cli.spools_cmd import register_commands as register_spools
 
     register_core(subparsers)
     register_index(subparsers)
@@ -97,6 +98,7 @@ def create_parser() -> argparse.ArgumentParser:
     register_graph(subparsers)
     register_callers(subparsers)
     register_trace(subparsers)
+    register_spools(subparsers)
 
     return parser
 
@@ -154,6 +156,7 @@ def main() -> int:
     from cli.sync import HANDLERS as SYNC_HANDLERS
     from cli.themes_cmd import HANDLERS as THEMES_CMD_HANDLERS
     from cli.trace import HANDLERS as TRACE_HANDLERS
+    from cli.spools_cmd import HANDLERS as SPOOLS_HANDLERS
 
     handlers: dict = {}
     handlers.update(CORE_HANDLERS)
@@ -174,6 +177,7 @@ def main() -> int:
     handlers.update(GRAPH_HANDLERS)
     handlers.update(CALLERS_HANDLERS)
     handlers.update(TRACE_HANDLERS)
+    handlers.update(SPOOLS_HANDLERS)
 
     handler = handlers.get(args.command)
     if handler is None:

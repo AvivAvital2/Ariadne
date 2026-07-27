@@ -91,6 +91,7 @@ class GeneratorConfig:
     # x-api-key auth; api_key/base_url should be Anthropic's. Default
     # "openai" preserves historical behavior.
     provider: str = 'openai'
+    withhold_source_prose: bool = False
 
 
 def _dangling_autodoc_meta(bundle):
@@ -155,6 +156,7 @@ class DocGenerator:
 
     config: GeneratorConfig = field(factory=GeneratorConfig)
     analyzer: SourceAnalyzer = field(factory=SourceAnalyzer)
+    intent_filler: object | None = None
     _provider: object | None = field(default=None, init=False)
 
     async def __aenter__(self) -> DocGenerator:
@@ -714,11 +716,7 @@ class DocGenerator:
         """
         requested = doc_types or self.config.doc_types
         doc_types = filter_doc_types_for_language(requested, bundle.language)
-
-        try:
-            source_code = bundle.path.read_text(encoding='utf-8')
-        except (OSError, UnicodeDecodeError):
-            source_code = ''
+        bundle, source_code = self._prepare_bundle_source(bundle)
 
         _logger.info(
             'Generating docs from bundle %s (lang=%s, types: %s)',
@@ -822,11 +820,7 @@ class DocGenerator:
         """
         requested = doc_types or self.config.doc_types
         doc_types = filter_doc_types_for_language(requested, bundle.language)
-
-        try:
-            source_code = bundle.path.read_text(encoding='utf-8')
-        except (OSError, UnicodeDecodeError):
-            source_code = ''
+        bundle, source_code = self._prepare_bundle_source(bundle)
 
         bundles: list[PromptBundle] = []
         for doc_type in doc_types:
@@ -899,6 +893,26 @@ class DocGenerator:
             phase='generate', doc_type=doc_type, language=bundle.language,
         ):
             return await self._call_llm(system_prompt, user_prompt)
+    def _prepare_bundle_source(self, bundle):
+        """Raw source for user repos; the filler swap for Spool builds (§18.4).
+
+    Withhold mode renders the structural spine (no comments, no
+    docstrings) and scrubs the module docstring so no tier-3 prose
+    reaches the prompt; ``intent_filler`` is the only admitted prose.
+    """
+        if not self.config.withhold_source_prose:
+            try:
+                return bundle, bundle.path.read_text(encoding='utf-8')
+            except (OSError, UnicodeDecodeError):
+                return bundle, ''
+        import attrs
+
+        from docgen.filler_swap import structural_source
+
+        scrubbed = attrs.evolve(bundle, module_docstring=None)
+        return scrubbed, structural_source(
+            bundle, intent_filler=self.intent_filler,
+        )
 
     @staticmethod
     def _public_classes_from_bundle(

@@ -22,6 +22,18 @@ _logger = logging.getLogger(__name__)
 # Default embedding model
 DEFAULT_MODEL = 'text-embedding-3-large'
 EMBEDDING_DIM = 3072
+
+# Max chars of a document's content folded into its embedding text.
+_DOC_EMBED_CONTENT_CHARS = 2000
+
+
+def doc_embedding_text(title: str, content: str) -> str:
+    """The canonical text a document is embedded over: title + truncated
+    content. The ONE source of truth for doc-embedding input, shared by the
+    embedding writer and the spool pack's re-embed fallback so their vectors
+    live in the same space (two hand-rolled copies had already drifted —
+    see the spool CRIT-10 re-embed regression)."""
+    return f'{title}\n\n{(content or "")[:_DOC_EMBED_CONTENT_CHARS]}'
 def _parse_retry_after(response: httpx.Response) -> float | None:
     """Seconds to wait per the server hint (Retry-After header or body note), else None."""
     import re

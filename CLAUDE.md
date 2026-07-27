@@ -59,6 +59,18 @@ uv run ariadne trace-flow <symbol> --depth 3      # Cross-language flow trace (S
 
 `ariadne sync` auto-detects when changed files include a SCIP-routable language not yet declared in `index_kinds`, runs `discover --config-only`, and prints a hint to re-run `index` for the new language. Manual config of `index_kinds` / `scip:` blocks isn't required.
 
+### Environment Spools
+An opt-in **environment knowledge plugin**: a declarative, versioned pack of prebuilt docs/embeddings for a runtime (Databricks is Phase 1). Enable per project with a `spools:` mapping in `ariadne.yaml` (e.g. `spools: {databricks: {runtime: databricks-dbr17.3-lts}}` — the `runtime:` pin is **required**; an unpinned enable fails closed with a `runtime-unpinned` gap so a spool can't silently accept any version); registered spools join the query scope under a reserved `spool:<name>` source id.
+```bash
+uv run ariadne spools                 # Status: each enabled spool registered (target runtime) or a structured gap; exit 1 iff gaps
+uv run ariadne spools create [ENV]    # ONE command — interactively set up ./spools.yaml (which spool + each version; repo set auto from the env) then build: consent → fetch (clone at pins) → source add → index → onboard (cost prompt) → pack
+uv run ariadne spools create --batch  # Pre-select batched onboard embeddings (~half price); --live picks live; no flag → onboard's live-vs-batch prompt (the toggle)
+uv run ariadne spools create --yes --batch        # Non-interactive: skip setup + all prompts, build an existing complete spools.yaml (CI)
+uv run ariadne spools create --allow-ungrounded   # Build even when the corpus language has no SCIP indexer (docs-only, no code-tier grounding)
+uv run ariadne spools install PACK.zip            # Verify checksum + install a pack into the store + cache
+```
+**Recipe (`spools.yaml`):** `runtime:` pins the runtime edition (enable fails closed if unpinned or on a mismatch); `languages:` lists the corpus languages; `corpus:` maps each repo to a pinned tag/sha — **you specify the versions** (`create`'s interactive setup prompts you for each; the repo set comes from the environment automatically), and `create` resolves any missing shas from the tags, shows them at consent, and pins them back (TOFU). **Grounding gate:** a Spool must be SCIP-indexable, so `create` refuses a corpus whose language has no registered SCIP indexer (e.g. Go) — the declared `languages:` are checked *before any fetch*, and the fetched corpus *before the paid `onboard`* — instead of silently falling back to the raw-file/ast-grep path. `--allow-ungrounded` (default off) overrides. Step-by-step build guide: `docs/building-a-databricks-spool.md`. Full design: `designs/spool-environment-plugin.md`.
+
 ### Configuration
 See `ariadne.yaml` for:
 - `default_source`: Default source name (e.g., "mylib")

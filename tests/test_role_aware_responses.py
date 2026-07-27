@@ -29,6 +29,13 @@ from unittest.mock import AsyncMock
 import numpy as np
 import pytest
 
+from ariadne_mcp.service_analysis import AnalysisMixin
+from ariadne_mcp.service_search import SearchMixin
+from config import get_config
+from library import Library
+from scope_resolution import make_scoped_library
+from tests._scoped_config_fixture import install_test_config
+
 
 _DIM = 3072  # text-embedding-3-large; matches schema.EMBEDDING_DIM
 
@@ -357,6 +364,78 @@ async def test_ask_role_pm_cache_hit_skips_adapter(
     assert response.answer == 'Cached PM-friendly content about tokens.', (
         f'expected cached content; got: {response.answer!r}'
     )
+
+
+@pytest.mark.asyncio
+async def test_ask_pm_cache_does_not_leak_across_sources(tmp_path, monkeypatch):
+    """HIGH-4 — the PM audience cache must be SOURCE-scoped. A cached
+    audience_response persisted under source B must NOT be served for a PM
+    ask scoped to source A, even when question + role + spool_fp all match
+    (spools are project-global, so spool_fp is identical across sources and
+    is NOT sufficient isolation on its own). The pre-fix lookup queried the
+    raw library with no closure filter and leaked B's private answer to A."""
+    install_test_config(monkeypatch, tmp_path, ('srcA', 'srcB'))
+    q = 'How does authentication work?'
+    seed = 4242
+    lib = Library(tmp_path / 'leak.db')
+    try:
+        # Source B: a dev doc + a cached PM answer derived from it.
+        dev_b = lib.add_document(
+            'explanation', 'B auth', 'srcB developer auth explanation',
+            source_files=['b.py'], embedding=_unit_vec(seed), metadata={},
+            source_name='srcB',
+        )
+        lib.add_document(
+            'audience_response', f'product_manager response: {q}',
+            'SRCB-PRIVATE PM ANSWER',
+            source_files=['b.py'], embedding=_unit_vec(seed),
+            metadata={'audience': 'product_manager',
+                      'derived_from': [dev_b.id], 'question': q},
+            source_name='srcB',
+        )
+        # Source A: its own dev doc matching the same question, so the PM ask
+        # scoped to A retrieves something and reaches the cache lookup.
+        lib.add_document(
+            'explanation', 'A auth', 'srcA developer auth explanation',
+            source_files=['a.py'], embedding=_unit_vec(seed), metadata={},
+            source_name='srcA',
+        )
+
+        class _StableEmbedder:
+            async def embed(self, text):
+                return _unit_vec(seed)
+
+        class _Svc(SearchMixin, AnalysisMixin):
+            @staticmethod
+            def _cache_key(*a, **k):
+                return hash((a, tuple(sorted(k.items()))))
+
+            def get_branch(self):
+                return None
+
+            def _resolve_scope(self, source):
+                return make_scoped_library(self.config, self.library, source)
+
+        svc = _Svc()
+        svc.library = lib
+        svc.config = get_config()
+        svc._query_cache = {}
+        svc.embedding_service = _StableEmbedder()
+
+        fresh = AsyncMock(return_value='FRESH SRCA PM ANSWER')
+        monkeypatch.setattr('docgen.role_adapter.adapt_for_audience', fresh)
+
+        resp = await svc.ask(question=q, role='product_manager', source='srcA')
+
+        # No leak: srcB's private cached answer must not surface for srcA.
+        assert 'SRCB-PRIVATE' not in resp.answer, (
+            f"cross-source leak: srcA received srcB's cached answer: "
+            f'{resp.answer!r}'
+        )
+        # Cache miss under srcA → the adapter produced a fresh srcA answer.
+        assert 'FRESH SRCA PM ANSWER' in resp.answer
+    finally:
+        lib.close()
 
 
 # ---------------------------------------------------------------------------
