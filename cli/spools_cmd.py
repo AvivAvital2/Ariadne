@@ -153,6 +153,8 @@ def _theme(args: argparse.Namespace) -> int:
     def on_stage(stage, completed, total):
         print(f'  [{stage}] {completed}/{total}', flush=True)
 
+    print(f'▸ clustering the {args.spool} corpus into spool themes '
+          f'(free, silent — ~10 min on a large corpus)…', flush=True)
     summary = theme_spool(args.spool, batch_strategy=strategy,
                           on_stage=on_stage if strategy is not None else None)
     if summary is None:
