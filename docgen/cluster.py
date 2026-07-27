@@ -244,6 +244,8 @@ def cluster_themes(
     stability_threshold: float = 0.5,
     source: str | None = None,
     scope=None,
+    association: str | None = None,
+    cross_source_only: bool = True,
     semantic_edge_scale: float = 0.5,
 ) -> ClusterRun:
     """Run Leiden over the hybrid graph and persist stable theme assignments.
@@ -277,8 +279,8 @@ def cluster_themes(
         if len(members) >= min_cluster_size
     }
 
-    association = _association_key(scope)
-    if scope is not None:
+    association = _association_key(scope) if association is None else association
+    if scope is not None and cross_source_only:
         # A scoped spool pass keeps only genuinely cross-source clusters
         # (spanning the spool AND a project); pure clusters are dropped
         # before stabilization so they never consume a prior id or persist.

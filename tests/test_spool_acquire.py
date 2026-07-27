@@ -236,6 +236,7 @@ class TestSpoolLanguageGate:
             'source_add': lambda name, path: calls.append('source_add'),
             'index': lambda name: calls.append('index'),
             'onboard': lambda name: calls.append('onboard'),
+            'theme': lambda name: calls.append('theme'),
             'build': lambda **kw: calls.append('build'),
         }
         result = create_spool(
@@ -244,7 +245,9 @@ class TestSpoolLanguageGate:
             confirm=lambda p: 'y', phases=phases, allow_ungrounded=True,
         )
         assert result.accepted is True
-        assert calls == ['source_add', 'index', 'onboard', 'build']
+        # The spool's own theme pass runs between onboard and pack build, so
+        # its corpus themes are tagged to spool:<name>, not the base '' pass.
+        assert calls == ['source_add', 'index', 'onboard', 'theme', 'build']
 
 
 class TestSpoolAcquire:

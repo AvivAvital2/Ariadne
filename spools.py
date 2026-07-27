@@ -616,6 +616,40 @@ def reconcile_spool_themes(
     )
 
 
+def build_spool_internal_themes(
+    library, spool_name, corpus_sources, *,
+    min_cluster_size: int = 3, k: int = 5, min_sim: float = 0.6,
+) -> int:
+    """Cluster a spool's OWN corpus into spool-internal themes.
+
+    The single-source analog of :func:`reconcile_spool_themes`: it (re)builds
+    semantic edges over the corpus scope and clusters it in association-only
+    mode. ``cross_source_only=False`` keeps the corpus's internal clusters (a
+    cross-source pass would drop them), and they are tagged under the spool's
+    reserved ``spool:<name>`` association so they gate by enable and never
+    occupy the base '' pass (that base-pass tagging is the leak). Clustering
+    is free/deterministic and leaves the new themes dirty; the caller
+    summarizes the returned count.
+    """
+    from docgen.cluster import cluster_themes
+    from docgen.graph_builder import build_semantic_edges
+
+    spool_source = spool_source_id(spool_name)
+    scope = frozenset(corpus_sources)
+    build_semantic_edges(library, scope=scope, k=k, min_sim=min_sim)
+    cluster_themes(
+        library, scope=scope, association=spool_source,
+        cross_source_only=False, min_cluster_size=min_cluster_size,
+    )
+    return sum(
+        1
+        for theme in library.list_themes(
+            coherent_only=False, association=spool_source,
+        )
+        if theme.dirty
+    )
+
+
 def delta_corpus_plan(prior_shas: dict, new_shas: dict) -> tuple:
     """Split a new corpus into (reuse, rebuild) against a prior build.
 

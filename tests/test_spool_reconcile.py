@@ -14,7 +14,12 @@ import pytest
 from config import Config
 from docgen.cluster import _association_key
 from library import Library
-from spools import SpoolError, reconcile_spool_themes, spool_source_id
+from spools import (
+    SpoolError,
+    build_spool_internal_themes,
+    reconcile_spool_themes,
+    spool_source_id,
+)
 
 
 def _config(tmp_path, body):
@@ -170,5 +175,32 @@ def test_reconcile_unknown_spool_raises(tmp_path):
         ''')
         with pytest.raises(SpoolError):
             reconcile_spool_themes(lib, cfg, 'nonexistent')
+    finally:
+        lib.close()
+
+
+def test_build_spool_internal_themes_tags_corpus_and_avoids_base_pass(tmp_path):
+    # A spool BUILD themes its OWN corpus. Its single-source (spool-internal)
+    # clusters must be KEPT — a cross-source reconcile pass would drop them —
+    # and tagged under the spool's reserved association, NEVER the base ''
+    # pass (that base-pass tagging is exactly the leak: corpus themes
+    # surfacing in every project). The single-source analog of reconcile.
+    lib = Library(tmp_path / 'b.db')
+    try:
+        corpus = 'databricks'
+        sp = spool_source_id(corpus)  # 'spool:databricks'
+        v = [1.0, 0.05, 0, 0, 0, 0, 0, 0]
+        for i in range(3):
+            _add(lib, f'c_{i}', v, corpus)
+
+        dirty = build_spool_internal_themes(lib, corpus, {corpus})
+
+        # Retained (single-source kept) and tagged under spool:databricks.
+        tagged = lib.list_themes(coherent_only=False, association=sp)
+        assert len(tagged) == 1
+        assert dirty >= 1
+        # NOT in the base '' pass (no leak) and NOT under the raw corpus key.
+        assert lib.list_themes(coherent_only=False, association='') == []
+        assert lib.list_themes(coherent_only=False, association=corpus) == []
     finally:
         lib.close()

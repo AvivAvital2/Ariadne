@@ -597,6 +597,8 @@ def create_spool(spoolfile_path, *, dest_dir, out_path, approve: bool,
     phases['index'](name)
     print('▸ generating docs (onboard — cost preview follows)…')
     phases['onboard'](name)
+    print('▸ clustering spool themes (spool:<name> partition)…')
+    phases.get('theme', lambda _n: None)(name)
     print('▸ building spool pack…')
     phases['build'](
         source=name, version=version, runtime=packfile.runtime,
@@ -672,8 +674,35 @@ def _default_phases(batch_mode=None, onboard_approve=False,
                 source_root=source_root, out_path=out_path, taxonomy=taxonomy,
             )
 
-    return {'source_add': source_add, 'index': index,
-            'onboard': onboard, 'build': build}
+    def theme(name):
+        # The spool's OWN theme pass: cluster the corpus into
+        # spool:<name>-associated themes (build_spool_internal_themes) and
+        # summarize the dirty ones. Distinct from onboard's base '' pass above
+        # — corpus themes are tagged to the spool so they never occupy (or
+        # leak from) the base partition. Uses the generate_themes summarizer
+        # directly, so the general refresh_themes / `themes build` flow is
+        # untouched.
+        import asyncio
+
+        from config import get_config
+        from docgen.themes import generate_themes
+        from library import Library
+        from spools import build_spool_internal_themes
+        from writer import LibraryWriter
+
+        model = spools_model or get_config().model
+        with Library(get_config().db_path) as library:
+            if not build_spool_internal_themes(library, name, {name}):
+                return
+
+            async def _summarize():
+                async with LibraryWriter(library) as writer:
+                    await generate_themes(library, writer, model=model)
+
+            asyncio.run(_summarize())
+
+    return {'source_add': source_add, 'index': index, 'onboard': onboard,
+            'theme': theme, 'build': build}
 
 
 def consent_text(packfile: Packfile) -> str:

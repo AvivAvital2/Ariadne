@@ -302,6 +302,42 @@ class TestClusterThemes:
         members = next(iter(run.clusters.values()))
         assert members == {'mix_p0', 'mix_p1', 'mix_s0', 'mix_s1'}
 
+    def test_association_only_pass_tags_and_keeps_single_source(
+        self, library: Library,
+    ) -> None:
+        # The inverse of the reconcile pass: a spool BUILD themes its OWN
+        # corpus. It must (1) keep the corpus's single-source (spool-internal)
+        # clusters — which the cross-source filter above would drop — and
+        # (2) tag them with the spool's association, NOT the base '' pass
+        # (that base-pass tagging is exactly the leak: corpus themes surfacing
+        # in every project). ``cross_source_only=False`` retains single-source
+        # clusters; ``association=`` overrides the scope-derived key so the
+        # tag is the spool source id the retrieval gate checks against.
+        from docgen.cluster import cluster_themes
+        from docgen.graph_builder import build_semantic_edges
+
+        v = [1.0, 0.05, 0, 0, 0, 0, 0, 0]
+        for i in range(3):
+            _add_catalog(library, f'corp_{i}', v, source_name='src1')
+        build_semantic_edges(library, k=5, min_sim=0.6)
+
+        run = cluster_themes(
+            library, scope=frozenset({'src1'}),
+            association='spool:demo', cross_source_only=False,
+            min_cluster_size=3,
+        )
+
+        # The single-source cluster is retained (a cross-source scoped pass
+        # would have dropped it).
+        assert len(run.clusters) == 1
+        # Tagged with the explicit spool association — NOT the base '' pass
+        # (no leak) and NOT the scope-derived 'src1' key.
+        assert len(
+            library.list_themes(coherent_only=False, association='spool:demo'),
+        ) == 1
+        assert library.list_themes(coherent_only=False, association='') == []
+        assert library.list_themes(coherent_only=False, association='src1') == []
+
 
 # ---------------------------------------------------------------------------
 # Drift / merge / membership churn
