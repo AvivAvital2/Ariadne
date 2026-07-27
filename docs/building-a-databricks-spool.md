@@ -65,7 +65,7 @@ One command sets up the recipe, then builds it — in order:
 2. **Consent prompt** — lists each repo at its resolved SHA. Type `y`. The resolved SHAs
    are pinned back into `spools.yaml` (trust-on-first-use).
 3. **Grounding gate** — verifies the corpus languages are SCIP-indexable. `[python, scala]`
-   pass; a corpus in an unsupported language (e.g. Go) aborts here with a clear message
+   pass; a corpus in an unsupported language (e.g. Ruby) aborts here with a clear message
    rather than building a hollow, ungrounded pack.
 4. **Fetch → source add → discover/index** — clones the repos and runs `scip-python` +
    `scip-java`.

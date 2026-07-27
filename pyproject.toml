@@ -68,7 +68,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
-include = ["*.py", "cli/", "library/", "ariadne_mcp/", "docgen/", "docs/", "tests/", "slack_bridge/"]
+include = ["*.py", "cli/", "library/", "ariadne_mcp/", "docgen/", "docs/", "tests/", "slack_bridge/", "web/"]
 
 [dependency-groups]
 dev = [

@@ -72,9 +72,14 @@ npm install -g @sourcegraph/scip-typescript
 brew install coursier/formulas/coursier
 cs install scip-java
 
+# Go (needs a working Go toolchain on PATH)
+go install github.com/scip-code/scip-go/cmd/scip-go@latest
+
 # Merge tool (always required)
 # Download from https://github.com/sourcegraph/scip/releases
 ```
+
+`scip-go` type-checks each Go module (rooted at a `go.mod`) via `go/packages` — no build-tool orchestration, so it indexes in a single fast pass per module. Unlike `scip-java` it needs no `pom.xml`/`build.sbt`; it does need the Go toolchain (`go`) installed.
 
 For Python projects with non-standard environments (conda, pipenv with hashed venv names), declare the interpreter in `ariadne.yaml`:
 
@@ -184,7 +189,7 @@ uv run ariadne trace-flow <symbol> --depth 3
 ### Limitations
 
 - **`.scip` artifacts must be current.** Stale indexes raise `ScipTooStaleError`. Re-run `ariadne index --source X` after meaningful source changes (or just push a new commit and let the next `ariadne sync` print the hint).
-- **Indexer environment matters.** scip-python needs the project's Python venv to resolve third-party imports. scip-typescript needs `node_modules`. scip-java needs the project's build tool (sbt/Maven/Gradle). If these aren't available where Ariadne runs, the indexer fails and `ariadne index` exits non-zero.
+- **Indexer environment matters.** scip-python needs the project's Python venv to resolve third-party imports. scip-typescript needs `node_modules`. scip-java needs the project's build tool (sbt/Maven/Gradle). scip-go needs a working Go toolchain (`go`) on PATH. If these aren't available where Ariadne runs, the indexer fails and `ariadne index` exits non-zero.
 - **HTTP-tier resolution is pattern-based.** `axios.post('/api/login')` matches `POST /api/login` perfectly. Dynamic URLs like `axios.post(`/api/${kind}/login`)` bind with `confidence='ambiguous'`. Constants resolve via SCIP-known string definitions; non-constant interpolation doesn't.
 - **Layer C (config / process invocations) not yet wired.** `string_literals` is populated as a prereq for the route extractors, but `config_values` (HOCON / dotenv) and `process_invocations` (subprocess.run / Popen edge synthesis) extractors exist with tests but aren't called by any production CLI command. Lower immediate value than the HTTP path.
 
