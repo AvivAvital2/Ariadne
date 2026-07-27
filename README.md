@@ -56,6 +56,34 @@ Ariadne runs a one-time pipeline over your source tree, then keeps the result cu
 
 See [docs/architecture.md](docs/architecture.md) for the internals.
 
+## Spools: a version-pinned consultant for your target system
+
+A **spool** is an opt-in knowledge pack that turns Ariadne into a consultant for a system
+your code must conform to — built once from that system's *own pinned sources* (corpus
+SHAs recorded, licenses verified, code SCIP-indexed, docs/themes/embeddings pre-generated),
+then installed anywhere with no cloning, no indexing, and no LLM spend.
+
+What makes it a consultant rather than a search index: answers about *your* code rank your
+code first, with the target's knowledge as a clearly-labeled lens — and questions the
+target owns flip the sides. Either way, every answer cites its ground truth: the runtime
+pin, per-component versions, `@Since`/deprecation facts extracted from the corpus, and each
+repo's SHA and license. When the ground truth isn't in the pack, the consultant says so —
+it never quietly falls back to training-data guesswork about your versions.
+
+- **Environment consultants** (shipped recipes): **Databricks** — Spark, Delta, and the
+  SDK pinned to a runtime edition, for questions like *"how would this pipeline behave on
+  DBR 17.3?"* — and **OpenTofu**, grounded in the MPL-licensed engine's Go source (and
+  named for its actual corpus).
+- **The recipe is the extension point.** The same mechanism — pinned corpus, trust tiers,
+  interaction surfaces, a per-role harm profile — is designed to serve other consultant
+  roles: **regulatory** (a regulation at a pinned amendment state), **compliance** (which
+  requirements of a standard's version your artifacts can be checked against — and which
+  need evidence no tool should pretend to have), **security** (a framework's security
+  model at your pinned version), and **internal platforms** — the strongest case of all,
+  since your in-house SDK is the one thing an LLM's training data has never seen.
+
+Build and install walkthrough: [docs/building-a-databricks-spool.md](docs/building-a-databricks-spool.md).
+
 ## Installation
 
 ```bash
