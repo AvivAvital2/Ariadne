@@ -1,6 +1,6 @@
 [project]
 name = "ariadne"
-version = "0.1.0"
+version = "0.3.0"
 description = "Documentation library with config-based source path management"
 requires-python = ">=3.12.6"
 license = "Apache-2.0"
