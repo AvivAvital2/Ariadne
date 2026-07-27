@@ -16,7 +16,14 @@ Synthetic ScipIndex fixtures — no DB, no indexer run.
 """
 from __future__ import annotations
 
-from docgen.scip_cross_source import CrossSourceGraph
+from types import SimpleNamespace
+
+from docgen.scip_cross_source import (
+    CrossSourceGraph,
+    CrossSourceSymbol,
+    ReachSite,
+    build_reach_findings,
+)
 from docgen.scip_extractor import (
     ScipIndex,
     _ScipDoc,
@@ -89,3 +96,84 @@ class TestExternalRefResolution:
         graph = _build_graph()
         graph.materialize(resolve_external_to={'some-other-source'})
         assert graph.callers_of(SPARK_DEF) == []
+
+
+class TestReachInto:
+    """The reach substrate — the graph-driven 'where' half of `reach ⋈ knowledge`.
+    Given resolved cross-source edges from a consumer into a spool, ``reach_into``
+    returns which spool symbols the consumer calls and WHERE (file:line, per
+    site), so the env-bridge/synthesis can localize + annotate them.
+    """
+
+    def _graph(self) -> CrossSourceGraph:
+        graph = _build_graph()  # userrepo.run() calls spool SparkSession
+        graph.materialize(resolve_external_to={'spool:databricks'})
+        return graph
+
+    def test_returns_spool_symbol_with_consumer_sites(self) -> None:
+        reach = self._graph().reach_into({'spool:databricks'})
+        assert SPARK_DEF in reach
+        sites = reach[SPARK_DEF]
+        assert len(sites) == 1
+        s = sites[0]
+        assert isinstance(s, ReachSite)
+        assert s.consumer_source == 'userrepo'
+        assert s.caller == RUN_DEF
+        assert s.file == 'app/main.py'
+        assert s.line == 13          # 1-indexed ref line (SCIP range start 12)
+        assert s.confidence == 'resolved'
+
+    def test_resolved_only_and_unknown_target(self) -> None:
+        graph = self._graph()
+        assert graph.reach_into({'spool:databricks'}, resolved_only=True)[SPARK_DEF]
+        assert graph.reach_into({'no-such-source'}) == {}
+
+    def test_from_sources_filter(self) -> None:
+        graph = self._graph()
+        assert graph.reach_into(
+            {'spool:databricks'}, from_sources={'userrepo'})[SPARK_DEF]
+        assert graph.reach_into(
+            {'spool:databricks'}, from_sources={'unrelated'}) == {}
+
+
+class TestReachFindings:
+    """Assemble reach (WHERE) with the docs documenting each reached spool symbol
+    (WHAT-knowledge) — the deterministic reach⋈knowledge substrate the synthesis
+    consumes. Pure: synthetic reach result + symbol table + a fake doc lookup, no
+    DB. (Doc-join granularity/quality is a value-gate concern, deferred.)
+    """
+
+    def _sym(self, qn='pyspark.sql.SparkSession') -> CrossSourceSymbol:
+        return CrossSourceSymbol(
+            canonical_id=SPARK_DEF, source_name='spool:databricks',
+            language='python', file='pyspark/sql/session.py',
+            line_start=0, line_end=5, kind='Class', display_name='SparkSession',
+            qualified_name=qn, parent_qualified_name='pyspark.sql')
+
+    def _site(self) -> ReachSite:
+        return ReachSite(consumer_source='userrepo', caller=RUN_DEF,
+                         file='app/main.py', line=13, confidence='resolved')
+
+    def test_pairs_sites_with_symbol_docs(self) -> None:
+        site = self._site()
+        docs_by_file = {'pyspark/sql/session.py': [
+            SimpleNamespace(id='d1', title='SparkSession Gotchas')]}
+        findings = build_reach_findings(
+            {SPARK_DEF: [site]}, {SPARK_DEF: self._sym()},
+            lambda f: docs_by_file.get(f, []))
+        assert len(findings) == 1
+        fnd = findings[0]
+        assert fnd.symbol == SPARK_DEF
+        assert fnd.qualified_name == 'pyspark.sql.SparkSession'
+        assert fnd.sites == (site,)
+        assert fnd.doc_ids == ('d1',)
+        assert fnd.doc_titles == ('SparkSession Gotchas',)
+
+    def test_reached_symbol_without_docs_still_reported(self) -> None:
+        # We know WHERE even when no knowledge doc documents the symbol —
+        # report it with empty docs (honest-gap surfaces downstream).
+        site = self._site()
+        findings = build_reach_findings(
+            {SPARK_DEF: [site]}, {SPARK_DEF: self._sym()}, lambda f: [])
+        assert findings[0].sites == (site,)
+        assert findings[0].doc_ids == ()

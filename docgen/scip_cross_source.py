@@ -180,6 +180,57 @@ class _SourceEntry:
     name: str
     index: 'ScipIndex'
     language: str
+@frozen
+class ReachSite:
+    """One place a consumer artifact reaches INTO a target (spool): the calling
+    symbol + file:line, and the edge confidence (``'resolved'`` = bridged by
+    qualified-name moniker resolution across the store; ``'exact'`` = same
+    canonical id)."""
+    consumer_source: str
+    caller: str
+    file: str
+    line: int
+    confidence: str
+@frozen
+class ReachFinding:
+    """One reached spool symbol: WHERE the consumer calls it (``sites``) plus the
+    spool docs documenting it (``doc_ids``/``doc_titles`` — the WHAT-knowledge).
+    The deterministic unit the reach-knowledge synthesis turns into
+    "what breaks / what to tune on version X, and where"."""
+    symbol: str
+    qualified_name: "str | None"
+    sites: tuple
+    doc_ids: tuple
+    doc_titles: tuple
+
+
+def build_reach_findings(reach_result, symbols, find_docs):
+    """Pair reach sites (from :meth:`CrossSourceGraph.reach_into`) with the docs
+    documenting each reached symbol.
+
+    ``reach_result``: ``{symbol_canonical_id: [ReachSite, ...]}``.
+    ``symbols``: ``{canonical_id: CrossSourceSymbol}`` (e.g. ``graph._symbols``).
+    ``find_docs``: ``callable(file) -> [doc]`` where each doc has ``.id`` and
+    ``.title`` (e.g. a per-file ``find_documents_by_source_files``).
+
+    Pure — no graph or DB access — so it unit-tests cleanly and the doc-join
+    granularity (file-level today; symbol-level later) can evolve without
+    touching the graph. A symbol with no documenting doc is still reported (we
+    know WHERE even when there's no knowledge doc — the honest-gap surfaces
+    downstream)."""
+    findings = []
+    for symbol_id, sites in reach_result.items():
+        sym = symbols.get(symbol_id)
+        file = getattr(sym, "file", None)
+        docs = find_docs(file) if file else []
+        findings.append(ReachFinding(
+            symbol=symbol_id,
+            qualified_name=getattr(sym, "qualified_name", None),
+            sites=tuple(sites),
+            doc_ids=tuple(d.id for d in docs),
+            doc_titles=tuple(d.title for d in docs),
+        ))
+    return findings
 
 
 class CrossSourceGraph:
@@ -806,6 +857,37 @@ class CrossSourceGraph:
     (reverse autodoc lookup, ingested by :meth:`load_from`). () when none.
     """
         return tuple(sorted(self._rst_autodoc.get(symbol_qualified_name, ())))
+
+    def reach_into(self, target_sources, *, from_sources=None, resolved_only=False):
+        """Cross-source edges reaching INTO ``target_sources`` (a spool),
+        grouped by the target symbol the consumer calls.
+
+        Returns ``{target_symbol_canonical_id: [ReachSite, ...]}``. Only edges
+        whose caller is OUTSIDE the targets count (a consumer reaching in), so a
+        target's internal edges are excluded. ``from_sources`` restricts to
+        specific consumer sources; ``resolved_only`` keeps only moniker-resolved
+        edges (the cross-store reach, not same-canonical-id matches). This is the
+        graph-driven "where" the env-bridge and reach-knowledge synthesis stand on.
+        """
+        targets = frozenset(target_sources)
+        out = {}
+        for edge in self._edges:
+            if edge.callee.source_name not in targets:
+                continue
+            if edge.caller.source_name in targets:
+                continue
+            if from_sources is not None and edge.caller.source_name not in from_sources:
+                continue
+            if resolved_only and edge.confidence != 'resolved':
+                continue
+            out.setdefault(edge.callee.canonical_id, []).append(ReachSite(
+                consumer_source=edge.caller.source_name,
+                caller=edge.caller.canonical_id,
+                file=edge.file,
+                line=edge.line,
+                confidence=edge.confidence,
+            ))
+        return out
 
 
 @frozen
