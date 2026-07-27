@@ -613,10 +613,13 @@ class TestScopedLibrary:
     #   - scoped association ('|'-joined sorted source-name key, e.g.
     #     'product|spool:alpha'): admitted iff EVERY source it spans is in
     #     the closure (unchanged).
-    #   - base pass (''): member-grounded — admitted iff at least one
-    #     member element's source is in the closure. "Always visible" was
-    #     the leak: the base global pass clusters the WHOLE store, so a
-    #     spool corpus's themes surfaced in every project's results.
+    #   - base pass (''): member-grounded — admitted iff the scope's
+    #     sources hold at least _BASE_THEME_MIN_MEMBER_SHARE of the
+    #     theme's membership. "Always visible" was the leak (the base
+    #     global pass clusters the WHOLE store), and any-single-member
+    #     admission still leaked whole-cluster summaries across scopes: a
+    #     theme's CONTENT is written over ALL its members, so one stray
+    #     in-scope member must not admit a foreign cluster's summary.
     #   - a theme doc with NO themes row (a stale orphan from an earlier
     #     rebuild) is never admitted — fail closed.
     def test_t8_theme_docs_gated_by_association_closure(
@@ -684,6 +687,30 @@ class TestScopedLibrary:
                 member_count=1, resolution=1.0, summary_hash='h3',
                 association='spool:beta',
             )
+            # A straggler: one product member inside a 12-member cluster
+            # whose mass lives in 'bulk' (8.3% product share). Its summary
+            # is about the bulk repo — one stray member must not admit it
+            # into product scope, while the bulk scope (91.7%) sees it.
+            straggler_theme = library.add_document(
+                content_type='theme', title='straggler-theme',
+                content='summary dominated by the bulk repo', source_name=None,
+            )
+            bulk_members = [
+                library.add_document(
+                    content_type='explanation', title=f'bulk-doc-{i}',
+                    content='bulk repo content', source_name='bulk',
+                )
+                for i in range(11)
+            ]
+            library.add_theme(
+                cluster_id='c-straggler', doc_id=straggler_theme.id,
+                member_count=12, resolution=1.0, summary_hash='h5',
+                association='',
+            )
+            library.set_theme_members(
+                'c-straggler',
+                [(product_doc.id, 1.0)] + [(d.id, 1.0) for d in bulk_members],
+            )
 
             def scoped_for(closure):
                 return ScopedLibrary(library, frozenset(closure))
@@ -723,6 +750,36 @@ class TestScopedLibrary:
             # members actually live: a different project sees NEITHER the
             # product-grounded base theme NOR 'product|spool:alpha'.
             assert titles_for({'other', 'shared', 'spool:alpha'}) == set()
+
+            # The membership-share threshold: 1-of-12 members (8.3%) does
+            # NOT admit the straggler into product scope — its content is
+            # the bulk repo's summary — while the bulk scope (11/12) sees
+            # it alongside the member docs themselves.
+            assert 'straggler-theme' not in titles_for({'product', 'shared'})
+            bulk_titles = titles_for({'bulk'})
+            assert 'straggler-theme' in bulk_titles
+
+            # A LONE in-scope member admits only a cluster it co-dominates:
+            # 1-of-6 (16.7%) clears the bare share threshold but is still
+            # one stray member in a foreign cluster — hidden. (The 1-of-1
+            # base theme above stays visible: a lone member at 100%.)
+            lone_theme = library.add_document(
+                content_type='theme', title='lone-straggler-theme',
+                content='small cluster dominated by the bulk repo',
+                source_name=None,
+            )
+            library.add_theme(
+                cluster_id='c-lone', doc_id=lone_theme.id,
+                member_count=6, resolution=1.0, summary_hash='h6',
+                association='',
+            )
+            library.set_theme_members(
+                'c-lone',
+                [(product_doc.id, 1.0)]
+                + [(d.id, 1.0) for d in bulk_members[:5]],
+            )
+            assert 'lone-straggler-theme' not in titles_for({'product', 'shared'})
+            assert 'lone-straggler-theme' in titles_for({'bulk'})
 
             # The id-filter path (get_documents_batch → _filter_ids_by_closure)
             # gates identically — an out-of-scope theme id is dropped even

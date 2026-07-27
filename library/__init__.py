@@ -378,6 +378,19 @@ class Library(
         self.close()
 
 
+# Base-pass ('') themes are member-grounded (ScopedLibrary._admitted_theme_ids):
+# a theme is admitted to a scope only when the scope's sources hold at least
+# this share of its membership. Any-member admission leaked whole-cluster
+# summaries across scopes (a 999-member private cluster was admitted on ONE
+# stray in-scope member — a theme's content is written over ALL its members).
+# Measured separation on the live store: leaking stragglers held <= 0.35%
+# share; legitimate small cross-repo themes held >= 17%. A LONE in-scope
+# member additionally admits only a cluster it co-dominates (>= 0.5 share) —
+# "one stray member never admits a foreign cluster's summary". Provisional —
+# calibrate with real distributions (same policy as the spool gate constants).
+_BASE_THEME_MIN_MEMBER_SHARE = 0.10
+
+
 class ScopedLibrary:
     """Closure-bounded view onto a ``Library``.
 
@@ -686,18 +699,20 @@ class ScopedLibrary:
         return all(
             token in self._closure for token in association.split('|')
         )
-
     def _admitted_theme_ids(self, doc_ids) -> set:
         """The subset of theme summary ``doc_ids`` that pass the theme gate.
 
         A scoped association is admitted iff every source it spans is in
         the closure (:meth:`_theme_association_admitted`). A base-pass
-        ('') theme is member-grounded: admitted iff at least one member
-        element's source is in the closure — the base global pass
-        clusters the WHOLE store, so pass-level "always admit" leaked a
-        spool corpus's themes into every project's results. A theme doc
-        with no themes row (a stale orphan from an earlier rebuild) is
-        never admitted — fail closed.
+        ('') theme is member-grounded: admitted iff the closure's sources
+        hold at least ``_BASE_THEME_MIN_MEMBER_SHARE`` of its membership,
+        and a LONE in-scope member only admits a cluster it co-dominates
+        (>= half the membership) —
+        a theme's content summarizes ALL its members, so pass-level or
+        any-single-member admission leaked foreign clusters' summaries
+        into scopes holding a negligible share. A theme doc with no
+        themes row (a stale orphan from an earlier rebuild) is never
+        admitted — fail closed.
         """
         doc_ids = [d for d in doc_ids if d]
         if not doc_ids:
@@ -710,18 +725,23 @@ class ScopedLibrary:
             for chunk in chunk_ids(list(doc_ids), reserved=len(closure_params)):
                 id_placeholders = ','.join('?' * len(chunk))
                 rows = conn.execute(
-                    f'SELECT t.doc_id, t.association, EXISTS('
-                    f'SELECT 1 FROM theme_members tm '
+                    f'SELECT t.doc_id, t.association, '
+                    f'(SELECT COUNT(*) FROM theme_members tm '
                     f'JOIN documents md ON md.id = tm.element_id '
                     f'WHERE tm.cluster_id = t.cluster_id '
-                    f'AND md.source_name IN ({src_placeholders})'
-                    f') FROM themes t WHERE t.doc_id IN ({id_placeholders})',
+                    f'AND md.source_name IN ({src_placeholders})), '
+                    f'(SELECT COUNT(*) FROM theme_members tm '
+                    f'WHERE tm.cluster_id = t.cluster_id) '
+                    f'FROM themes t WHERE t.doc_id IN ({id_placeholders})',
                     list(closure_params) + chunk,
                 ).fetchall()
-                for doc_id, association, member_in_scope in rows:
+                for doc_id, association, in_scope, total in rows:
                     if association:
                         if self._theme_association_admitted(str(association)):
                             admitted.add(str(doc_id))
-                    elif member_in_scope:
-                        admitted.add(str(doc_id))
+                    elif total:
+                        share = in_scope / total
+                        lone_stray = in_scope == 1 and share < 0.5
+                        if share >= _BASE_THEME_MIN_MEMBER_SHARE and not lone_stray:
+                            admitted.add(str(doc_id))
         return admitted
