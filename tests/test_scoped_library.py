@@ -12,6 +12,8 @@ chokepoint.
 Fixture nomenclature: ``shared`` is a leaf shared library; ``product``
 depends on ``shared``; ``extension`` depends on ``product``. The
 closure under test is ``{'product', 'shared'}``.
+
+See ``designs/directional-closure-scoping.md`` Phase 2 for the cycle plan.
 """
 from __future__ import annotations
 
@@ -601,3 +603,107 @@ class TestScopedLibrary:
             assert 'product-feature-on-main' not in titles_f  # branch
             assert 'product-feature-on-other' in titles_f
             assert 'extension-stable' not in titles_f          # closure
+
+    # ---- T8 -----------------------------------------------------------
+    # Spool theme isolation. Cross-cutting THEME summary docs carry
+    # source_name=NULL (cross-source by design) and were admitted
+    # unconditionally — so a spool's themes leaked into EVERY project's
+    # results regardless of whether that spool was in scope. The rule for
+    # a NULL-source theme: admit iff its ``themes.association`` is the
+    # base/user pass ('') OR every source the association spans (the
+    # '|'-joined sorted source-name key) is in the closure. Since
+    # ``make_scoped_library`` unions the ENABLED spool sources into the
+    # closure, this makes a spool's themes visible only when that spool is
+    # enabled, and a project×spool theme only in that project's own scope:
+    #   - ''                    (base/user)      -> always visible
+    #   - 'product|spool:alpha' (cross-source)   -> iff product & spool:alpha in closure
+    #   - 'spool:beta'          (spool-internal) -> iff spool:beta in closure
+    def test_t8_theme_docs_gated_by_association_closure(
+        self, tmp_path: Path,
+    ) -> None:
+        from library import Library, ScopedLibrary
+
+        with Library(tmp_path / 'library.db') as library:
+            # A normal in-closure doc — always visible, spool-independent.
+            library.add_document(
+                content_type='explanation', title='product-doc',
+                content='product content', source_name='product',
+            )
+            # Three NULL-source theme summary docs at three associations.
+            base_theme = library.add_document(
+                content_type='theme', title='base-theme',
+                content='user/base pass theme', source_name=None,
+            )
+            xsrc_theme = library.add_document(
+                content_type='theme', title='xsrc-theme',
+                content='project x spool cross-source theme',
+                source_name=None,
+            )
+            spool_theme = library.add_document(
+                content_type='theme', title='spool-internal-theme',
+                content='spool-internal corpus theme', source_name=None,
+            )
+            library.add_theme(
+                cluster_id='c-base', doc_id=base_theme.id,
+                member_count=1, resolution=1.0, summary_hash='h1',
+                association='',
+            )
+            library.add_theme(
+                cluster_id='c-xsrc', doc_id=xsrc_theme.id,
+                member_count=1, resolution=1.0, summary_hash='h2',
+                association='product|spool:alpha',
+            )
+            library.add_theme(
+                cluster_id='c-spool', doc_id=spool_theme.id,
+                member_count=1, resolution=1.0, summary_hash='h3',
+                association='spool:beta',
+            )
+
+            def scoped_for(closure):
+                return ScopedLibrary(library, frozenset(closure))
+
+            def titles_for(closure):
+                return {
+                    d.title
+                    for d in scoped_for(closure).list_documents_lite()
+                }
+
+            # Neither spool in scope: base theme + product doc only; both
+            # spool-associated themes are hidden.
+            assert titles_for({'product', 'shared'}) == {
+                'product-doc', 'base-theme',
+            }
+
+            # spool:alpha in scope (enabled): the product×alpha theme
+            # joins; the spool:beta-only theme stays hidden.
+            assert titles_for({'product', 'shared', 'spool:alpha'}) == {
+                'product-doc', 'base-theme', 'xsrc-theme',
+            }
+
+            # Both spool sources in scope: every theme is admitted.
+            assert titles_for(
+                {'product', 'shared', 'spool:alpha', 'spool:beta'},
+            ) == {
+                'product-doc', 'base-theme', 'xsrc-theme',
+                'spool-internal-theme',
+            }
+
+            # A cross-source theme is scoped to ITS project: querying a
+            # different project with spool:alpha enabled must NOT surface
+            # 'product|spool:alpha' (product is not in this closure).
+            assert titles_for({'other', 'shared', 'spool:alpha'}) == {
+                'base-theme',
+            }
+
+            # The id-filter path (get_documents_batch → _filter_ids_by_closure)
+            # gates identically — an out-of-scope spool's theme id is
+            # dropped even when explicitly requested.
+            all_theme_ids = [base_theme.id, xsrc_theme.id, spool_theme.id]
+            batch_none = scoped_for(
+                {'product', 'shared'},
+            ).get_documents_batch(all_theme_ids)
+            assert {d.id for d in batch_none} == {base_theme.id}
+            batch_alpha = scoped_for(
+                {'product', 'shared', 'spool:alpha'},
+            ).get_documents_batch(all_theme_ids)
+            assert {d.id for d in batch_alpha} == {base_theme.id, xsrc_theme.id}

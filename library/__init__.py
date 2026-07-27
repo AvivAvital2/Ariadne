@@ -439,29 +439,42 @@ class ScopedLibrary:
         )
 
     def list_documents_lite(self, content_type=None):
-        """Lite docs restricted to the closure.
+        """Lite docs restricted to the scope.
 
         Filters out any document whose ``source_name`` is not in the
-        closure. Theme docs (``content_type='theme'``) are an exception:
-        themes are cross-source by design (per ``docgen/themes.py``
-        module docstring) and carry ``source_name=NULL``; they're admitted
-        regardless of closure so the user-facing search/list paths can
-        surface them.
+        closure. Theme docs (``content_type='theme'``) carry
+        ``source_name=NULL`` (cross-source by design); they pass the
+        association gate instead — see :meth:`_admit`.
         """
         rows = self._library.list_documents_lite(content_type=content_type)
-        return [d for d in rows if self._admit(d)]
+        theme_ids = [
+            d.id for d in rows
+            if d.source_name is None and d.content_type == 'theme'
+        ]
+        theme_assoc = self._theme_associations(theme_ids)
+        return [d for d in rows if self._admit(d, theme_assoc)]
 
-    def _admit(self, doc) -> bool:
-        """Return True if ``doc`` should pass the closure filter.
+    def _admit(self, doc, theme_assoc=None) -> bool:
+        """Return True if ``doc`` should pass the scope filter.
 
-        In-closure source matches admit it. NULL-source themes are
-        admitted unconditionally (cross-source by design). Everything
-        else is rejected — untagged non-theme rows are not silently
-        exposed.
+        In-closure source matches admit it. A NULL-source theme is
+        admitted only when its ``themes.association`` passes the closure
+        gate (the base pass '' always; a scoped association iff every
+        source it spans is in the closure — see
+        :meth:`_theme_association_admitted`). ``theme_assoc`` is an
+        optional ``{doc_id: association}`` map for batch callers; when
+        absent the association is fetched per-doc. Everything else is
+        rejected.
         """
         if doc.source_name in self._closure:
             return True
-        return doc.source_name is None and doc.content_type == 'theme'
+        if doc.source_name is None and doc.content_type == 'theme':
+            if theme_assoc is None:
+                theme_assoc = self._theme_associations([doc.id])
+            return self._theme_association_admitted(
+                theme_assoc.get(doc.id, ''),
+            )
+        return False
 
     def get_embeddings_for_ids(self, doc_ids):
         """Embedding lookup restricted to the closure.
@@ -624,10 +637,13 @@ class ScopedLibrary:
         ]
 
     def _filter_ids_by_closure(self, doc_ids):
-        """Return the subset of ``doc_ids`` whose ``source_name`` is in
-        the closure. Caller passes any sequence of ids; we intersect at
-        the data layer, batching to stay under SQLite's variable
-        limit."""
+        """Return the subset of ``doc_ids`` admitted by the scope.
+
+        In-closure sources are admitted; NULL-source theme rows are
+        admitted only when their ``themes.association`` passes the closure
+        gate (base pass '' always; a scoped association iff every source
+        it spans is in the closure). Batches to stay under SQLite's
+        variable limit."""
         if not doc_ids:
             return []
         if not self._closure:
@@ -638,22 +654,70 @@ class ScopedLibrary:
         src_placeholders = ','.join('?' * len(closure_params))
         allowed: list[str] = []
         with self._library._conn_provider.acquire() as conn:
-            # Each chunk's query also binds the closure params, so reserve their
-            # width from the budget — a wide closure shrinks the chunk instead
-            # of pushing the statement over SQLite's variable limit.
             for chunk in chunk_ids(doc_ids, reserved=len(closure_params)):
                 id_placeholders = ','.join('?' * len(chunk))
-                # Admit NULL-source theme rows alongside in-closure
-                # sources: themes are cross-source by design (see
-                # ``docgen/themes.py`` module docstring).
+                # LEFT JOIN themes so each NULL-source theme row's
+                # association is available and can be gated by closure
+                # exactly like ``_admit`` (base pass '' always; scoped iff
+                # every source the association spans is in the closure).
                 rows = conn.execute(
-                    f'SELECT id FROM documents '
-                    f'WHERE id IN ({id_placeholders}) '
+                    f'SELECT d.id, d.source_name, d.content_type, '
+                    f"COALESCE(t.association, '') "
+                    f'FROM documents d '
+                    f'LEFT JOIN themes t ON t.doc_id = d.id '
+                    f'WHERE d.id IN ({id_placeholders}) '
                     f'AND ('
-                    f'source_name IN ({src_placeholders}) '
-                    f"OR (source_name IS NULL AND content_type = 'theme')"
+                    f'd.source_name IN ({src_placeholders}) '
+                    f"OR (d.source_name IS NULL AND d.content_type = 'theme')"
                     f')',
                     chunk + list(closure_params),
                 ).fetchall()
-                allowed.extend(str(row[0]) for row in rows)
+                for doc_id, source_name, content_type, association in rows:
+                    if source_name in self._closure:
+                        allowed.append(str(doc_id))
+                    elif (
+                        source_name is None
+                        and content_type == 'theme'
+                        and self._theme_association_admitted(association)
+                    ):
+                        allowed.append(str(doc_id))
         return allowed
+
+    def _theme_association_admitted(self, association: str) -> bool:
+        """A theme's ``association`` passes the closure gate.
+
+        '' is the base/user pass — always admitted. Otherwise the
+        association is a '|'-joined sorted source-name key naming every
+        source the theme spans; it is admitted iff every one of those
+        sources is in the closure. Because ``make_scoped_library`` unions
+        the enabled spool sources into the closure, a spool-scoped theme
+        is visible only when that spool is enabled (and a project x spool
+        theme only in that project's own scope).
+        """
+        if not association:
+            return True
+        return all(
+            token in self._closure for token in association.split('|')
+        )
+
+    def _theme_associations(self, doc_ids) -> dict:
+        """Map each theme summary ``doc_id`` to its ``themes.association``.
+
+        Missing ids (a theme doc with no themes row) default to '' — the
+        base pass — so they stay visible, matching the pre-gate behavior
+        for untracked theme docs."""
+        if not doc_ids:
+            return {}
+        from library.sql_vars import chunk_ids
+        result: dict = {}
+        with self._library._conn_provider.acquire() as conn:
+            for chunk in chunk_ids(list(doc_ids)):
+                placeholders = ','.join('?' * len(chunk))
+                rows = conn.execute(
+                    f'SELECT doc_id, association FROM themes '
+                    f'WHERE doc_id IN ({placeholders})',
+                    chunk,
+                ).fetchall()
+                for doc_id, association in rows:
+                    result[str(doc_id)] = str(association)
+        return result
