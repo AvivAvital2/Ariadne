@@ -356,6 +356,48 @@ _register_admin(mcp)
 
 
 # ---------------------------------------------------------------------------
+# stdout isolation for the stdio transport
+# ---------------------------------------------------------------------------
+
+
+class _JsonRpcStdout:
+    """A ``sys.stdout`` stand-in for the stdio MCP server.
+
+    The stdio transport wraps ``sys.stdout.buffer`` to speak JSON-RPC, so the
+    binary ``buffer`` here stays the real stdout (the wire). Every Python-level
+    text write — ``print`` and Rich ``console.print`` — is routed to stderr
+    instead, so stray application output (e.g. cli.generate's ``Run log: ...``)
+    can never land on the protocol stream and corrupt it.
+    """
+
+    def __init__(self, real, err) -> None:
+        self.buffer = real.buffer
+        self._err = err
+
+    def write(self, text):
+        return self._err.write(text)
+
+    def flush(self):
+        return self._err.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._err, name)
+
+
+def reserve_stdout() -> None:
+    """Reserve stdout for the MCP JSON-RPC transport (route app output to stderr).
+
+    An MCP stdio server speaks JSON-RPC on stdout, so nothing else may write
+    there: one stray ``print`` / Rich ``console.print`` corrupts the stream and
+    the client fails to parse it. Call this before running the stdio transport.
+    """
+    import sys
+    if isinstance(sys.stdout, _JsonRpcStdout):
+        return
+    sys.stdout = _JsonRpcStdout(sys.stdout, sys.stderr)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -389,6 +431,9 @@ if __name__ == '__main__':
     if not os.environ.get('ARIADNE_MCP_VERBOSE'):
         logging.getLogger('mcp.server.lowlevel.server').setLevel(logging.WARNING)
 
+    # stdout is the JSON-RPC wire for the stdio transport — route any stray
+    # application output (print / Rich console) to stderr so it can't corrupt it.
+    reserve_stdout()
     mcp.run(transport='stdio')
                                                                                                                                                                   
                 
