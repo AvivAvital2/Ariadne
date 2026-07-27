@@ -32,6 +32,8 @@ TOOL_ROUTES = {
     '/api/sources': 'ariadne_list_sources',
     '/api/discover': 'ariadne_discover',
     '/api/estimate': 'ariadne_estimate',
+    '/api/ask': 'ariadne_ask',
+    '/api/search': 'ariadne_search',
 }
 
 
@@ -243,6 +245,27 @@ async def _onboard_events(request: web.Request) -> web.StreamResponse:
     return resp
 
 
+def _feedback_call(body: dict) -> tuple[str, dict]:
+    """Route a feedback POST to the right tool: helpful → log_hit, else log_miss.
+
+    Carries the ask/search ``event_id``; an optional free-text note is forwarded
+    as ``feedback`` when present (log_miss defaults it to '' server-side).
+    """
+    args: dict = {'event_id': body.get('event_id')}
+    if body.get('feedback'):
+        args['feedback'] = str(body['feedback'])
+    tool = 'ariadne_log_hit' if body.get('helpful') else 'ariadne_log_miss'
+    return tool, args
+
+
+async def _feedback(request: web.Request) -> web.Response:
+    """Record 👍/👎 on an answer via its event_id (ariadne_log_hit / log_miss)."""
+    body = await _read_json(request)
+    tool, args = _feedback_call(body)
+    status, resp = await dispatch_tool(request.app['bridge'], tool, args)
+    return web.json_response(resp, status=status)
+
+
 def make_app(bridge=None, *, server_params=None, mcp_url=None) -> web.Application:
     """Build the onboarding web app.
 
@@ -255,6 +278,7 @@ def make_app(bridge=None, *, server_params=None, mcp_url=None) -> web.Applicatio
     app['jobs'] = {}
     app.router.add_post('/api/onboard', _onboard_start)
     app.router.add_get('/api/onboard/events', _onboard_events)
+    app.router.add_post('/api/feedback', _feedback)
     app.router.add_get('/', _index)
     app.router.add_get('/api/browse', _browse)
     app.router.add_get('/api/pick-folder', _pick_folder)

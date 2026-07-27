@@ -28,6 +28,7 @@ from web.server import (
     list_dirs,
     make_app,
     native_picker_command,
+    _feedback_call,
     _onboard_tool_args,
     _run_onboard,
 )
@@ -67,7 +68,8 @@ async def test_backend_bridges_to_mcp_tools(tmp_path):
     # ---- D2: route table covers the onboarding tools; make_app wires them ----
     assert set(TOOL_ROUTES.values()) == {
         'ariadne_source_add', 'ariadne_list_sources',
-        'ariadne_discover', 'ariadne_estimate'}
+        'ariadne_discover', 'ariadne_estimate',
+        'ariadne_ask', 'ariadne_search'}
     for path, tool in TOOL_ROUTES.items():
         s, b = await dispatch_tool(bridge, tool, {'source': 'proj'})
         assert s == 200 and b['tool'] == tool
@@ -176,3 +178,32 @@ async def test_transport_selection(monkeypatch):
     await server._startup_connect(app2)
     assert called == {'http': 'http://remote:8000/mcp'}
     assert app2['bridge'] == 'http-bridge'
+
+
+async def test_ask_search_feedback_endpoints():
+    """Ask + Search are 1:1 tool forwards (auto-registered via TOOL_ROUTES);
+    /api/feedback routes 👍 → log_hit, 👎 → log_miss by event_id."""
+    bridge = _FakeBridge()
+    app = make_app(bridge=bridge)
+    registered = {(r.method, r.resource.canonical) for r in app.router.routes()}
+
+    # ask + search are pure forwards, wired as POST routes
+    assert TOOL_ROUTES['/api/ask'] == 'ariadne_ask'
+    assert TOOL_ROUTES['/api/search'] == 'ariadne_search'
+    assert ('POST', '/api/ask') in registered
+    assert ('POST', '/api/search') in registered
+    assert ('POST', '/api/feedback') in registered
+
+    # dispatch forwards the browser body straight to the tool (question/role)
+    status, body = await dispatch_tool(
+        bridge, 'ariadne_ask', {'question': 'how does X work?', 'role': 'developer'})
+    assert status == 200
+    assert body['echo'] == {'question': 'how does X work?', 'role': 'developer'}
+
+    # feedback tool-routing: helpful → log_hit; else → log_miss; feedback optional
+    assert _feedback_call({'event_id': 5, 'helpful': True}) == (
+        'ariadne_log_hit', {'event_id': 5})
+    assert _feedback_call({'event_id': 7, 'helpful': False, 'feedback': 'wrong'}) == (
+        'ariadne_log_miss', {'event_id': 7, 'feedback': 'wrong'})
+    assert _feedback_call({'event_id': 9, 'helpful': False}) == (
+        'ariadne_log_miss', {'event_id': 9})
