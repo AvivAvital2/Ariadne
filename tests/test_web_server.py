@@ -142,3 +142,37 @@ async def test_backend_bridges_to_mcp_tools(tmp_path):
         err_events.append(q_err.get_nowait())
     assert err_events[-1]['type'] == 'error'
     assert 'ariadne_onboard' in err_events[-1]['error']
+
+
+async def test_transport_selection(monkeypatch):
+    """Phase B: the backend connects over stdio by default, or to a remote
+    streamable-http MCP URL when one is given (``ariadne serve --mcp-url``)."""
+    import web.server as server
+
+    called: dict = {}
+
+    async def fake_http(stack, url):
+        called['http'] = url
+        return 'http-bridge'
+
+    async def fake_stdio(stack, params):
+        called['stdio'] = params
+        return 'stdio-bridge'
+
+    monkeypatch.setattr(server, 'connect_http', fake_http)
+    monkeypatch.setattr(server, 'connect_stdio', fake_stdio)
+
+    # stdio path: no mcp_url → connect_stdio with the server params
+    app = server.make_app(server_params='PARAMS')
+    assert app.get('_mcp_url') is None
+    await server._startup_connect(app)
+    assert called == {'stdio': 'PARAMS'}
+    assert app['bridge'] == 'stdio-bridge'
+
+    # remote path: an mcp_url → connect_http with that url
+    called.clear()
+    app2 = server.make_app(mcp_url='http://remote:8000/mcp')
+    assert app2['_mcp_url'] == 'http://remote:8000/mcp'
+    await server._startup_connect(app2)
+    assert called == {'http': 'http://remote:8000/mcp'}
+    assert app2['bridge'] == 'http-bridge'

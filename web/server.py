@@ -18,6 +18,7 @@ from aiohttp import web
 
 from web.mcp_client import (
     MCPCallError,
+    connect_http,
     connect_stdio,
     stdio_server_params,
 )
@@ -242,12 +243,13 @@ async def _onboard_events(request: web.Request) -> web.StreamResponse:
     return resp
 
 
-def make_app(bridge=None, *, server_params=None) -> web.Application:
+def make_app(bridge=None, *, server_params=None, mcp_url=None) -> web.Application:
     """Build the onboarding web app.
 
-    Pass ``bridge`` to inject an MCP bridge (tests). Otherwise the app spawns
-    the MCP server over stdio on startup using ``server_params`` (or the
-    default subprocess params) and tears it down on cleanup.
+    Pass ``bridge`` to inject an MCP bridge (tests). Otherwise the app connects
+    on startup — to a remote ``ariadne mcp --http`` server when ``mcp_url`` is
+    given, else by spawning one over stdio (from ``server_params`` or the
+    default) — and tears it down on cleanup.
     """
     app = web.Application()
     app['jobs'] = {}
@@ -265,6 +267,7 @@ def make_app(bridge=None, *, server_params=None) -> web.Application:
         app['bridge'] = bridge
     else:
         app['_server_params'] = server_params
+        app['_mcp_url'] = mcp_url
         app.on_startup.append(_startup_connect)
         app.on_cleanup.append(_cleanup_disconnect)
     return app
@@ -272,8 +275,12 @@ def make_app(bridge=None, *, server_params=None) -> web.Application:
 
 async def _startup_connect(app: web.Application) -> None:
     stack = AsyncExitStack()
-    params = app['_server_params'] or stdio_server_params()
-    app['bridge'] = await connect_stdio(stack, params)
+    url = app.get('_mcp_url')
+    if url:
+        app['bridge'] = await connect_http(stack, url)
+    else:
+        params = app['_server_params'] or stdio_server_params()
+        app['bridge'] = await connect_stdio(stack, params)
     app['_mcp_stack'] = stack
 
 
@@ -283,7 +290,15 @@ async def _cleanup_disconnect(app: web.Application) -> None:
         await stack.aclose()
 
 
-def serve(host: str = '127.0.0.1', port: int = 8765, *, config_path: str | None = None) -> None:
-    """Run the onboarding server, spawning the MCP server as a stdio child."""
-    app = make_app(server_params=stdio_server_params(config_path))
+def serve(host: str = '127.0.0.1', port: int = 8765, *,
+          config_path: str | None = None, mcp_url: str | None = None) -> None:
+    """Run the onboarding server.
+
+    Connects to a remote ``ariadne mcp --http`` server when ``mcp_url`` is
+    given; otherwise spawns the MCP server as a stdio child.
+    """
+    if mcp_url:
+        app = make_app(mcp_url=mcp_url)
+    else:
+        app = make_app(server_params=stdio_server_params(config_path))
     web.run_app(app, host=host, port=port)

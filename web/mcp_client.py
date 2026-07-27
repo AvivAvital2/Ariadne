@@ -92,3 +92,19 @@ async def connect_stdio(stack: AsyncExitStack, params: StdioServerParameters) ->
     session = await stack.enter_async_context(ClientSession(read, write))
     await session.initialize()
     return MCPBridge(session)
+
+
+async def connect_http(stack: AsyncExitStack, url: str) -> MCPBridge:
+    """Open a streamable-http MCP session on ``stack`` and return a bridge.
+
+    The remote counterpart of ``connect_stdio``: connects to a running
+    ``ariadne mcp --http`` server at ``url`` instead of spawning one over
+    stdio. The caller owns ``stack`` and closes it on shutdown.
+    """
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
+
+    read, write, _ = await stack.enter_async_context(streamablehttp_client(url))
+    session = await stack.enter_async_context(ClientSession(read, write))
+    await session.initialize()
+    return MCPBridge(session)

@@ -47,6 +47,12 @@ def register_commands(subparsers):
     # mcp
     mcp_parser = subparsers.add_parser('mcp', help='Start the MCP server (stdio transport)')
     mcp_parser.add_argument('--directory', help='Ariadne project directory (default: directory containing ariadne.yaml)')
+    mcp_parser.add_argument('--http', action='store_true',
+        help='Serve over streamable-http (remote) instead of stdio.')
+    mcp_parser.add_argument('--host', default='127.0.0.1',
+        help='Bind host for --http (default: 127.0.0.1)')
+    mcp_parser.add_argument('--port', type=int, default=8000,
+        help='Bind port for --http (default: 8000)')
 
     serve_parser = subparsers.add_parser(
         'serve', help='Start the web onboarding UI (connects to the MCP server)')
@@ -54,6 +60,9 @@ def register_commands(subparsers):
         '--host', default='127.0.0.1', help='Bind host (default: 127.0.0.1)')
     serve_parser.add_argument(
         '--port', type=int, default=8765, help='Bind port (default: 8765)')
+    serve_parser.add_argument('--mcp-url', default=None,
+        help='Connect to a remote `ariadne mcp --http` server at this URL '
+             'instead of spawning one over stdio.')
 
     # sync-claude-md (internal command for PostToolUse hook)
     sync_md_parser = subparsers.add_parser('sync-claude-md', help='Sync edited CLAUDE.md to Ariadne')
@@ -498,6 +507,19 @@ def _build_embedding_matrix_on_startup() -> None:
         )
 
 
+def _serve_mcp(mcp, *, http: bool, host: str, port: int) -> None:
+    """Run the MCP server: stdio by default, streamable-http under ``--http``.
+
+    Host/port apply only to the http transport; stdio is a local pipe.
+    """
+    if http:
+        mcp.settings.host = host
+        mcp.settings.port = port
+        mcp.run(transport='streamable-http')
+    else:
+        mcp.run(transport='stdio')
+
+
 def cmd_mcp(args: argparse.Namespace) -> int:
     """Start the MCP server.
 
@@ -517,7 +539,12 @@ def cmd_mcp(args: argparse.Namespace) -> int:
 
     if os.environ.get('ARIADNE_BUILD_MATRIX_ON_STARTUP', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
         _build_embedding_matrix_on_startup()
-    mcp_server.mcp.run(transport='stdio')
+    _serve_mcp(
+        mcp_server.mcp,
+        http=getattr(args, 'http', False),
+        host=getattr(args, 'host', '127.0.0.1'),
+        port=getattr(args, 'port', 8000),
+    )
     return 0
 
 
@@ -539,6 +566,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         host=args.host,
         port=args.port,
         config_path=os.environ.get('ARIADNE_CONFIG'),
+        mcp_url=getattr(args, 'mcp_url', None),
     )
     return 0
 
