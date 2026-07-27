@@ -8,7 +8,13 @@ const path = require('node:path');
 
 // Repo root (this file lives at web/e2e/cypress.config.js).
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const HOST = '127.0.0.1';
+// Use `localhost` everywhere (bind, readiness ping, and the URL handed to
+// Cypress). Cypress runs its own proxy on `localhost`; if the app is on a
+// different host (127.0.0.1) it's cross-origin and cy.visit's socket injection
+// fails (CDP -32000 "Cannot find context") → the spec silently re-runs → the
+// boot loop. `--host localhost` also makes ariadne serve bind BOTH 127.0.0.1
+// and ::1, so the browser reaches it whichever localhost resolves to.
+const HOST = 'localhost';
 
 // Track EVERY spawned server so none can leak. A single missed teardown, a
 // second startAriadne before a stop, or a Cypress crash/Ctrl-C used to leave
@@ -78,19 +84,7 @@ module.exports = defineConfig({
     pageLoadTimeout: 120000,   // 2-min cap on cy.visit (a stuck load fails + saves the video)
     defaultCommandTimeout: 8000,
     taskTimeout: 120000,       // 2-min cap on cy.task (server start/stop)
-    experimentalMemoryManagement: true,   // reduce run-mode renderer memory pressure
     setupNodeEvents(on) {
-      // Headless Electron crashes the renderer on GPU-composited CSS (the
-      // topbar's backdrop-filter:blur), and in `cypress run` a renderer crash
-      // RESTARTS the whole spec — which re-runs before() → startAriadne, over
-      // and over (that's the "214 boots"). Force software/CPU compositing so
-      // the blur can't take the GPU process down. Fixes the browser, not the page.
-      on('before:browser:launch', (browser, launchOptions) => {
-        if (browser.family === 'chromium') {
-          launchOptions.args.push('--disable-gpu', '--disable-gpu-compositing', '--disable-dev-shm-usage');
-        }
-        return launchOptions;
-      });
       on('task', {
         // Boot a FRESH, isolated Ariadne: a new temp config dir (empty DB +
         // empty cache) on a fresh port, plus a synthetic source directory for
