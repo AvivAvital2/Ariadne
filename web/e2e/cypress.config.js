@@ -33,15 +33,6 @@ function ping(port) {
   });
 }
 
-async function waitFor(fn, want, ms) {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    if ((await fn()) === want) return true;
-    await new Promise((r) => setTimeout(r, 300));
-  }
-  return (await fn()) === want;
-}
-
 module.exports = defineConfig({
   e2e: {
     // NOTE: no baseUrl on purpose. Cypress verifies a configured baseUrl at
@@ -67,19 +58,38 @@ module.exports = defineConfig({
           fs.mkdirSync(path.join(sourcePath, 'pkg'), { recursive: true });
           fs.writeFileSync(path.join(sourcePath, 'pkg', 'a.py'), 'def a():\n    return 1\n');
 
+          // Capture output so a startup failure is DIAGNOSABLE (not a silent
+          // 45s timeout). Both streams are consumed, so the child can never
+          // block on a full pipe buffer.
+          let out = '';
+          let exited = null;
           proc = spawn('uv', ['run', 'ariadne', 'serve', '--host', HOST, '--port', String(port)], {
             cwd: REPO_ROOT,
             env: { ...process.env, ARIADNE_CONFIG: path.join(workspace, 'ariadne.yaml') },
-            stdio: 'ignore',   // flip to 'inherit' to debug a startup failure
-            detached: true,    // own process group → clean group kill (incl. the MCP child)
+            stdio: ['ignore', 'pipe', 'pipe'],
+            detached: true,   // own process group → clean group kill (incl. the MCP child)
           });
+          const grab = (d) => { out = (out + d.toString()).slice(-8000); };
+          proc.stdout.on('data', grab);
+          proc.stderr.on('data', grab);
+          proc.on('exit', (code, signal) => { exited = { code, signal }; });
 
-          const up = await waitFor(() => ping(port), true, 45000);
-          if (!up) {
-            try { process.kill(-proc.pid, 'SIGKILL'); } catch (e) { /* already gone */ }
-            throw new Error(`ariadne serve did not become ready on http://${HOST}:${port} (try stdio:'inherit')`);
+          // Poll for readiness; fail FAST (with the server's output) if it dies
+          // or never comes up — so "the server didn't spin" is obvious, not a hang.
+          const deadline = Date.now() + 45000;
+          while (Date.now() < deadline) {
+            if (exited) {
+              throw new Error(
+                `ariadne serve exited before it was ready (code=${exited.code}, signal=${exited.signal}).\n`
+                + `--- server output ---\n${out || '(no output)'}`);
+            }
+            if (await ping(port)) return { baseUrl: `http://${HOST}:${port}`, sourcePath };
+            await new Promise((r) => setTimeout(r, 300));
           }
-          return { baseUrl: `http://${HOST}:${port}`, sourcePath };
+          try { process.kill(-proc.pid, 'SIGKILL'); } catch (e) { /* gone */ }
+          throw new Error(
+            `ariadne serve did not become ready on http://${HOST}:${port} within 45s.\n`
+            + `--- server output (tail) ---\n${out || '(no output — is `uv run ariadne serve` runnable from the repo root?)'}`);
         },
 
         async stopAriadne() {
