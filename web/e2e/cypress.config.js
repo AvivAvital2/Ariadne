@@ -78,7 +78,19 @@ module.exports = defineConfig({
     pageLoadTimeout: 120000,   // 2-min cap on cy.visit (a stuck load fails + saves the video)
     defaultCommandTimeout: 8000,
     taskTimeout: 120000,       // 2-min cap on cy.task (server start/stop)
+    experimentalMemoryManagement: true,   // reduce run-mode renderer memory pressure
     setupNodeEvents(on) {
+      // Headless Electron crashes the renderer on GPU-composited CSS (the
+      // topbar's backdrop-filter:blur), and in `cypress run` a renderer crash
+      // RESTARTS the whole spec — which re-runs before() → startAriadne, over
+      // and over (that's the "214 boots"). Force software/CPU compositing so
+      // the blur can't take the GPU process down. Fixes the browser, not the page.
+      on('before:browser:launch', (browser, launchOptions) => {
+        if (browser.family === 'chromium') {
+          launchOptions.args.push('--disable-gpu', '--disable-gpu-compositing', '--disable-dev-shm-usage');
+        }
+        return launchOptions;
+      });
       on('task', {
         // Boot a FRESH, isolated Ariadne: a new temp config dir (empty DB +
         // empty cache) on a fresh port, plus a synthetic source directory for
