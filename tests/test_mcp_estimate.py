@@ -94,6 +94,12 @@ async def test_estimate_tool_evolves_through_contract(monkeypatch, tmp_path):
     models = {m.model: (m.input_per_million, m.output_per_million)
               for m in est.available_models}
     assert models.get('claude-opus-4-8') == (5.0, 25.0)
+    # The picker is derived from LLM_PRICING and offers the generally-available
+    # models but NOT invitation-only ones: claude-mythos-5 (Project Glasswing)
+    # is excluded, while claude-fable-5 and claude-sonnet-5 remain.
+    assert 'claude-mythos-5' not in models
+    assert 'claude-fable-5' in models
+    assert 'claude-sonnet-5' in models
     assert 'explanation' in est.language_doc_types.get('python', [])
 
     # ---- D4: batch is never costlier, and cheaper when work exists ---
