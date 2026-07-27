@@ -34,6 +34,16 @@ DEFAULT_GENERATE_DOC_TYPES = (
     'explanation', 'architecture', 'qa', 'gotcha', 'diagram',
 )
 
+
+def parse_doc_types_off(args) -> frozenset[str]:
+    """The ``--doc-types-off`` set — doc types shown in the picker but left
+    unchecked by default (opt-in). Parsed from the comma-separated flag; empty
+    when the flag is absent."""
+    raw = getattr(args, 'doc_types_off', None)
+    if not raw:
+        return frozenset()
+    return frozenset(t.strip() for t in raw.split(',') if t.strip())
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
@@ -356,6 +366,14 @@ def register_generate_parser(subparsers: argparse._SubParsersAction) -> None:
             'LLM calls >= this threshold (default: 200)'
         ),
     )
+    generate_parser.add_argument(
+        '--max-batch-retries', type=int, default=3,
+        help=(
+            'Max batched validation-retry rounds: re-submit validation '
+            'failures as fresh batches up to this many times (default: 3; '
+            '0 disables). Each round is a full batch cycle.'
+        ),
+    )
     # ``--yes`` skips the first-run confirmation prompt that warns
     # about the 24h SLA. CI runs and frequent-batch users want this.
     generate_parser.add_argument(
@@ -531,6 +549,7 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
             provider=provider,
             batch_mode=getattr(args, 'batch_mode', 'auto'),
             auto_batch_threshold=getattr(args, 'auto_batch_threshold', 200),
+            max_batch_validation_retries=getattr(args, 'max_batch_retries', 3),
             staleness_db_path=Path(cfg.staleness_db_path),
             base_path=source_path,
             library=_library_for_estimate(args.db),
@@ -773,6 +792,13 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
         retry_table.add_row(
             'Failed after all retries', f'[red]{unrecovered}[/red]',
         )
+        # The retry bill: what the batched re-roll rounds cost (estimated,
+        # batch-priced). Only shown when batch retries actually spent money.
+        if result.validation_retry_cost_usd > 0:
+            retry_table.add_row(
+                'Retry cost (est.)',
+                f'[yellow]${result.validation_retry_cost_usd:.4f}[/yellow]',
+            )
         console.print(retry_table)
 
     if result.errors:

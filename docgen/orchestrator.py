@@ -155,6 +155,11 @@ class OrchestratorConfig:
     # ``batch_mode='always'`` to avoid billing-surprise hazards.
     batch_mode: str = 'auto'
     auto_batch_threshold: int = 200
+    # Batched validation-retry: how many extra batch rounds to re-roll
+    # validation failures (0 disables retrying; the initial failure count is
+    # still reported). Each round is a full batch cycle — see
+    # ``_batch_validation_retry``.
+    max_batch_validation_retries: int = 3
 
     def __attrs_post_init__(self) -> None:
         """Resolve source_path to prevent relative path mismatches."""
@@ -207,23 +212,15 @@ BATCH_DISPATCH_IMPLEMENTED: bool = True
 # Validation retry policy in batch mode (#45.6)
 # ---------------------------------------------------------------------------
 #
-# Streaming dispatch retries validation failures in
-# ``_validate_with_retry`` (line 685 ff.); batch dispatch deliberately
-# does NOT, per Decision 1a in the #45 design (handoff
-# 2026-05-09). Rationale:
-#
-# 1. Batch economics are predicated on a single round-trip — falling
-#    back to sync retries on every validation failure would erase the
-#    50% discount the user asked for via ``--batch always``.
-# 2. Validation failures in real runs are rare and recoverable by
-#    re-running just the affected files in sync mode — the abort/
-#    failure summary surfaces them.
-#
-# Tier 2 may add mixed-mode fallback (batch first, sync retry on
-# failed validations) when there's evidence the regression matters
-# in practice. Until then, this constant pins the divergence so a
-# future maintainer reading both call sites sees the contract.
-BATCH_VALIDATION_RETRY: bool = False
+# Both dispatch paths now retry validation failures — but differently:
+# streaming re-rolls inline via ``_validate_with_retry``; batch re-submits the
+# failing prompts as FRESH BATCHES (``_batch_validation_retry``), staying in
+# batch so the 50% discount is preserved (the original Decision-1a objection was
+# that a *sync* retry would erase it — a batched retry does not). Rounds are
+# capped by ``OrchestratorConfig.max_batch_validation_retries`` and the summary
+# bills them. Set this False to hard-disable the batch retry path (the
+# per-round cap via config is the normal knob).
+BATCH_VALIDATION_RETRY: bool = True
 
 
 @frozen
@@ -279,6 +276,8 @@ class PipelineResult:
     validation_initial_failures: int = 0
     validation_retry_attempts: int = 0
     validation_recovered: int = 0
+    # Estimated USD spent on batched validation-retry rounds (the "retry bill").
+    validation_retry_cost_usd: float = 0.0
     cache_stats: object | None = None  # CacheStats — typed object to avoid import cycle
     aborted: bool = False
     abort_reason: str = ''
@@ -1119,8 +1118,14 @@ class DocGenOrchestrator:
         prompts: list[PromptBundle],
         file_to_idxs: dict[Path, list[int]],
         config_hash: str,
+        record_pending: bool = True,
     ) -> tuple[dict[str, str | None], BatchAbort | None]:
         """Submit, poll, fetch a batch of prompts.
+
+        ``record_pending`` (default True) records the batch in
+        ``pending_batches`` for crash-resume. Validation-retry sub-batches pass
+        False: they are best-effort re-rolls, and recording a SUBSET batch under
+        the run's ``config_hash`` would let resume adopt it as the main batch.
 
         Returns ``(results_by_cid, abort_or_None)``. On abort:
         - Quota at submit: no batch was created; nothing to clean
@@ -1169,13 +1174,15 @@ class DocGenOrchestrator:
             )
 
         # Persist for resume — record AFTER submit so we have a real
-        # batch_id, BEFORE poll so a crash mid-poll can resume.
-        self._record_pending_batch(
-            batch_id=submission.batch_id,
-            prompts=prompts,
-            file_to_idxs=file_to_idxs,
-            config_hash=config_hash,
-        )
+        # batch_id, BEFORE poll so a crash mid-poll can resume. Retry
+        # sub-batches skip this (see ``record_pending``).
+        if record_pending:
+            self._record_pending_batch(
+                batch_id=submission.batch_id,
+                prompts=prompts,
+                file_to_idxs=file_to_idxs,
+                config_hash=config_hash,
+            )
 
         # Poll with progress wired to _emit.
         total = len(prompts)
@@ -1234,12 +1241,107 @@ class DocGenOrchestrator:
             )
 
         # Success — clear pending row to avoid orphan accumulation.
-        self._staleness.clear_pending_batch(submission.batch_id)
+        if record_pending:
+            self._staleness.clear_pending_batch(submission.batch_id)
         return results, None
+
+    def _estimate_batch_cost(self, prompt, response_text) -> float:
+        """Estimated USD for re-rolling one prompt at batch pricing.
+
+        Approximate by design: batch results don't surface exact token counts,
+        so we use the shared chars→tokens heuristic × the model's rate × the
+        batch discount — the same basis as the dry-run estimator."""
+        from docgen.pricing import (
+            CHARS_PER_TOKEN,
+            LLM_PRICING,
+            _BATCH_DISCOUNT,
+        )
+        rates = LLM_PRICING.get(self.config.model)
+        if rates is None:
+            return 0.0
+        in_rate, out_rate = rates
+        in_chars = len(prompt.system_prompt or '') + len(prompt.user_prompt or '')
+        out_chars = len(response_text or '')
+        in_tok = in_chars / CHARS_PER_TOKEN
+        out_tok = out_chars / CHARS_PER_TOKEN
+        return (in_tok * in_rate + out_tok * out_rate) / 1_000_000 * _BATCH_DISCOUNT
+
+    async def _batch_validation_retry(self, prompts, results_by_cid) -> dict:
+        """Re-roll validation-failing prompts as FRESH batches, up to
+        ``config.max_batch_validation_retries`` rounds, merging recoveries into
+        ``results_by_cid`` in place. Stays in batch (keeps the discount); the
+        retry batches are dispatched WITHOUT the resume machinery so a crash
+        can't leave a subset batch under the run's config_hash.
+
+        Returns ``{'initial_failures': set[int], 'attempts': dict[int,int],
+        'recovered': set[int], 'cost_usd': float}``. ``initial_failures`` is
+        computed even when the round budget is 0, so the summary is accurate.
+        """
+        empty = {'initial_failures': set(), 'attempts': {},
+                 'recovered': set(), 'cost_usd': 0.0}
+        if (not BATCH_VALIDATION_RETRY or not self.config.validate
+                or self._generator is None):
+            return empty
+
+        def _is_invalid(idx: int) -> bool:
+            text = results_by_cid.get(str(idx))
+            if text is None:
+                return False  # API-errored row (not a validation failure)
+            doc = self._generator.assemble_doc(prompts[idx], text)
+            return not self._validator.validate(
+                doc.content, doc.doc_type, doc.title).is_valid
+
+        failing = [i for i in range(len(prompts)) if _is_invalid(i)]
+        if not failing:
+            return empty
+
+        initial = set(failing)
+        attempts: dict[int, int] = {}
+        recovered: set[int] = set()
+        cost = 0.0
+        max_rounds = self.config.max_batch_validation_retries
+
+        round_num = 0
+        while failing and round_num < max_rounds:
+            round_num += 1
+            self._emit(
+                f'Batch validation retry {round_num}/{max_rounds}: '
+                f're-rolling {len(failing)} doc(s)...', 0, 0)
+            sub_prompts = [prompts[i] for i in failing]
+            # record_pending=False: a retry sub-batch is best-effort, never the
+            # resumable main batch.
+            sub_results, abort = await self._dispatch_batch(
+                sub_prompts, {}, '', record_pending=False)
+            if abort is not None:
+                self._emit(
+                    f'Batch retry stopped ({abort.reason}); keeping '
+                    f'recoveries so far.', 0, 0)
+                break
+            still_failing: list[int] = []
+            for pos, idx in enumerate(failing):
+                attempts[idx] = attempts.get(idx, 0) + 1
+                new_text = sub_results.get(str(pos))
+                cost += self._estimate_batch_cost(sub_prompts[pos], new_text)
+                if new_text is None:
+                    still_failing.append(idx)
+                    continue
+                doc = self._generator.assemble_doc(prompts[idx], new_text)
+                if self._validator.validate(
+                        doc.content, doc.doc_type, doc.title).is_valid:
+                    results_by_cid[str(idx)] = new_text  # merge the recovery
+                    recovered.add(idx)
+                else:
+                    still_failing.append(idx)
+            failing = still_failing
+
+        return {'initial_failures': initial, 'attempts': attempts,
+                'recovered': recovered, 'cost_usd': cost}
 
     # -------------------------------------------------------------------
     # Result assembly (#45.6) — wrap batch responses, validate, store.
-    # No retry on validation failures (per BATCH_VALIDATION_RETRY).
+    # Validation failures were re-rolled first by ``_batch_validation_retry``
+    # (batched retry); whatever still fails here is dropped, and the retry
+    # telemetry is carried through on each GenerationResult.
     # -------------------------------------------------------------------
 
     async def _assemble_and_store(
@@ -1249,6 +1351,7 @@ class DocGenOrchestrator:
         results_by_cid: dict[str, str | None],
         files_to_process: list[Path],
         pre_gen_failed: list[Path],
+        retry: dict | None = None,
     ) -> tuple[list[GenerationResult], list[ValidationResult]]:
         """Wrap batch responses into GeneratedDocs, validate, store.
 
@@ -1258,10 +1361,11 @@ class DocGenOrchestrator:
         prompt's index in ``prompts`` as a string, which the caller
         also stored in ``file_to_idxs`` as a list of ints.
 
-        Validation runs but does NOT retry on failure — see
-        ``BATCH_VALIDATION_RETRY`` for the rationale. The streaming
-        path's ``_validate_with_retry`` is intentionally NOT called
-        from here.
+        Validation-failing prompts were already re-rolled by
+        ``_batch_validation_retry`` (batched retry) before this runs, so
+        ``results_by_cid`` holds any recoveries; a doc still failing here is
+        dropped. ``retry`` carries the per-index retry telemetry
+        (initial-failure / attempts / recovered) threaded onto each result.
 
         ``docs_generated`` follows streaming's contract:
         ``len(doc_ids)``. Under ``dry_run=True``, ``_store_document``
@@ -1272,6 +1376,8 @@ class DocGenOrchestrator:
             msg = 'Components not initialized'
             raise RuntimeError(msg)
 
+        _retry = retry or {
+            'initial_failures': set(), 'attempts': {}, 'recovered': set()}
         all_results: list[GenerationResult] = []
         all_val_results: list[ValidationResult] = []
 
@@ -1309,7 +1415,6 @@ class DocGenOrchestrator:
             val_results: list[ValidationResult] = []
             doc_ids: list[str] = []
             failed = 0
-            val_initial_failures = 0
 
             for i in idxs:
                 prompt = prompts[i]
@@ -1323,13 +1428,13 @@ class DocGenOrchestrator:
                 gen_doc = self._generator.assemble_doc(prompt, text)
 
                 if self.config.validate:
-                    # NO retry per BATCH_VALIDATION_RETRY = False.
+                    # Retries already ran in _batch_validation_retry; a doc
+                    # still invalid here is dropped.
                     val = self._validator.validate(
                         gen_doc.content, gen_doc.doc_type, gen_doc.title,
                     )
                     val_results.append(val)
                     if not val.is_valid:
-                        val_initial_failures += 1
                         failed += 1
                         continue
 
@@ -1351,9 +1456,11 @@ class DocGenOrchestrator:
                 docs_failed=failed,
                 validation_results=tuple(val_results),
                 doc_ids=tuple(doc_ids),
-                validation_initial_failures=val_initial_failures,
-                validation_retry_attempts=0,  # batch doesn't retry
-                validation_recovered=0,
+                validation_initial_failures=len(
+                    set(idxs) & _retry['initial_failures']),
+                validation_retry_attempts=sum(
+                    _retry['attempts'].get(i, 0) for i in idxs),
+                validation_recovered=len(set(idxs) & _retry['recovered']),
             ))
             all_val_results.extend(val_results)
 
@@ -1445,9 +1552,12 @@ class DocGenOrchestrator:
                     unprocessed_files=tuple(files_to_process),
                 )
 
+        # Re-roll validation failures as fresh batches before the final
+        # assemble/store (recoveries merged into results_by_cid).
+        retry = await self._batch_validation_retry(prompts, results_by_cid)
         results, all_val_results = await self._assemble_and_store(
             prompts, file_to_idxs, results_by_cid,
-            files_to_process, pre_gen_failed,
+            files_to_process, pre_gen_failed, retry=retry,
         )
 
         # Phase 4: post-processing — themes + crossrefs, same as streaming.
@@ -1463,10 +1573,9 @@ class DocGenOrchestrator:
         val_initial_failures = sum(
             r.validation_initial_failures for r in results
         )
-        # batch path doesn't retry — these are always 0, but include
-        # for shape parity with streaming PipelineResult.
         val_retry_attempts = sum(r.validation_retry_attempts for r in results)
         val_recovered = sum(r.validation_recovered for r in results)
+        val_retry_cost = retry['cost_usd']
 
         cache_stats = None
         provider = getattr(self._generator, '_provider', None)
@@ -1483,6 +1592,7 @@ class DocGenOrchestrator:
             validation_initial_failures=val_initial_failures,
             validation_retry_attempts=val_retry_attempts,
             validation_recovered=val_recovered,
+            validation_retry_cost_usd=val_retry_cost,
             cache_stats=cache_stats,
         )
 
@@ -1570,10 +1680,12 @@ class DocGenOrchestrator:
         # Successful fetch — clear the pending row.
         self._staleness.clear_pending_batch(pending.batch_id)
 
+        retry = await self._batch_validation_retry(prompts, results_by_cid)
         results, all_val_results = await self._assemble_and_store(
             prompts, file_to_idxs, results_by_cid,
             files_to_process=files_resumed,
             pre_gen_failed=[],
+            retry=retry,
         )
 
         # Post-processing (same as fresh batch run).
@@ -1594,6 +1706,13 @@ class DocGenOrchestrator:
             docs_created=docs_created,
             docs_failed=docs_failed,
             validation_results=tuple(all_val_results),
+            validation_initial_failures=sum(
+                r.validation_initial_failures for r in results),
+            validation_retry_attempts=sum(
+                r.validation_retry_attempts for r in results),
+            validation_recovered=sum(
+                r.validation_recovered for r in results),
+            validation_retry_cost_usd=retry['cost_usd'],
             cache_stats=cache_stats,
         )
 
