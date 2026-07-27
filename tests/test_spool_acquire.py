@@ -189,9 +189,11 @@ class TestSpoolLanguageGate:
         # phase ran — the paid onboard was never reached.
         assert calls == []
 
-    def test_create_threads_taxonomy_recipe_to_build(self, tmp_path, fixture_repo):
-        # The aisle's advisory taxonomy declared in the spoolfile must reach the
-        # build phase (→ the pack manifest), so a built aisle carries its lens.
+    def test_create_threads_recipe_declarations_to_build(self, tmp_path, fixture_repo):
+        # EVERY pack-bound recipe declaration must reach the build phase (→
+        # the pack manifest): the aisle's advisory taxonomy, the per-component
+        # runtime map, and the surface vocabularies — a created spool carries
+        # its lens, its version joins, and its surface tier.
         repo, _sha = fixture_repo
         spoolfile = tmp_path / 'tax-spools.yaml'
         spoolfile.write_text(textwrap.dedent(f'''
@@ -200,6 +202,10 @@ class TestSpoolLanguageGate:
             version: 1.0.0
             languages: [python]
             taxonomy: [serialization, parallelism]
+            runtime_components:
+              core: '2.5.0'
+            surfaces:
+              serialization: [serializ, pickle]
             corpus:
               core:
                 url: {repo}
@@ -218,6 +224,8 @@ class TestSpoolLanguageGate:
             confirm=lambda p: 'y', phases=phases,
         )
         assert captured['taxonomy'] == ('serialization', 'parallelism')
+        assert captured['runtime_components'] == {'core': '2.5.0'}
+        assert captured['surfaces'] == {'serialization': ['serializ', 'pickle']}
 
     def test_allow_ungrounded_bypasses_language_gate(
         self, tmp_path, fixture_repo,

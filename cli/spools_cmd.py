@@ -195,6 +195,23 @@ def _recipe_runtime_components(recipe_path) -> dict:
     return {str(key): str(value) for key, value in raw.items()}
 
 
+def _recipe_surfaces(recipe_path) -> dict:
+    """The recipe's interaction-surface vocabularies. Tolerant like
+    ``_recipe_runtime_components`` — missing/malformed yields {}."""
+    try:
+        import yaml
+        data = yaml.safe_load(Path(recipe_path).read_text()) or {}
+    except Exception:
+        return {}
+    raw = data.get('surfaces')
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key): [str(stem) for stem in value]
+        for key, value in raw.items() if isinstance(value, list)
+    }
+
+
 def _build(args: argparse.Namespace) -> int:
     """Package ``--source`` into a pack zip (fails loud on misconfig)."""
     from library import Library
@@ -217,6 +234,7 @@ def _build(args: argparse.Namespace) -> int:
             out_path=args.out,
             runtime_components=_recipe_runtime_components(
                 Path.cwd() / 'spools.yaml'),
+            surfaces=_recipe_surfaces(Path.cwd() / 'spools.yaml'),
         )
     print(f'  built  {args.out}  (environment {manifest.environment}, '
           f'runtime {manifest.target_runtime}, {manifest.checksum})')

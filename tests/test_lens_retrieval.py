@@ -192,6 +192,27 @@ class TestFallbackSpoolDocs:
         assert picked[0].connection == 'semantic'
         assert float(picked[0].detail) >= lens_retrieval.SPOOL_FALLBACK_GATE
 
+    def test_restrict_to_scopes_the_fallback_candidates(self, lib) -> None:
+        # The surface tier's consumption: when the question resolves to
+        # surfaces, the fallback pool is RESTRICTED to surface-tagged docs —
+        # categorical scoping (P13), similarity still ranks inside it.
+        seed = lib.add_document(
+            content_type='explanation', title='repo io doc', content='b',
+            source_name='src1', doc_id='r-seed',
+        )
+        _spool_doc(lib, 'd-tagged', 'Mesh IO Guide')
+        _spool_doc(lib, 'd-untagged', 'Mesh Sidecar Notes')
+        matrix = _matrix({
+            'r-seed': (1.0, 0.0),
+            'd-tagged': (0.8, 0.6),
+            'd-untagged': (0.9, np.sqrt(1 - 0.81)),   # closer, but off-surface
+        })
+        picked = lens_retrieval.fallback_spool_docs(
+            lib, matrix, ['spool:env1'], [seed.id], limit=3,
+            restrict_to={'d-tagged'},
+        )
+        assert [c.doc_id for c in picked] == ['d-tagged']
+
     def test_no_seeds_no_fallback(self, lib) -> None:
         _spool_doc(lib, 'd-close', 'Mesh IO Guide')
         matrix = _matrix({'d-close': (1.0, 0.0)})

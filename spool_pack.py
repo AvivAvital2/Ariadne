@@ -272,6 +272,19 @@ def _copy_spool_themes(src, dest, spool_name) -> list:
     return inserted
 
 
+def _copy_surface_tags(src, dest, source_name):
+    """Copy the corpus's surface_tags (Slice 3) — corpus-keyed like
+    version_facts; no rename at install."""
+    from library.surface_tags import init_surface_tags_schema
+    with src._conn_provider.acquire() as sconn, \
+            dest._conn_provider.acquire() as dconn:
+        init_surface_tags_schema(sconn)
+        init_surface_tags_schema(dconn)
+        _copy_source_scoped_table(
+            sconn, dconn, 'surface_tags', source_name, source_name)
+        dconn.commit()
+
+
 def _gather_attribution(source_root):
     """Scan corpus clones under ``source_root`` (each marked with the fetch's
     ``.ariadne-corpus-sha``) for their top-level LICENSE/NOTICE files, so the
@@ -354,6 +367,7 @@ def build_pack(
     corpus_shas=None,
     taxonomy=(),
     runtime_components=None,
+    surfaces=None,
 ) -> SpoolManifest:
     """Build a pack zip from ``library``'s ``environment`` source.
 
@@ -390,6 +404,13 @@ def build_pack(
     extract_facts_for_source(
         library, outer_sources=[environment], corpus_source=environment,
         source_root=source_root)
+    if surfaces:
+        # Slice 3: tag the corpus's doc-grade docs from the recipe's
+        # surface vocabularies (deterministic, offline). Idempotent.
+        from library.surface_tags import tag_surfaces_for_source
+        tag_surfaces_for_source(
+            library, outer_sources=[environment], corpus_source=environment,
+            surfaces=surfaces)
 
     import numpy as np
 
@@ -424,6 +445,7 @@ def build_pack(
             _copy_source_scip(library, pack, environment,
                               strip_path_prefix=root_prefix)
             _copy_version_facts(library, pack, environment)
+            _copy_surface_tags(library, pack, environment)
             _copy_spool_themes(library, pack, environment)
         _checkpoint(db_path)
         db_blob = db_path.read_bytes()
@@ -448,6 +470,7 @@ def build_pack(
         corpus_shas=dict(corpus_shas or {}),
         taxonomy=tuple(taxonomy or ()),
         runtime_components=dict(runtime_components or {}),
+        surfaces={k: list(v) for k, v in (surfaces or {}).items()},
         extraction_coverage_version=EXTRACTION_COVERAGE_VERSION,
         attribution=attribution,
     )
@@ -634,6 +657,7 @@ def install_pack(library, pack_path, *, cache_dir,
                     dest_source_name=install_source,
                 )
                 _copy_version_facts(pack, library, manifest.environment)
+                _copy_surface_tags(pack, library, manifest.environment)
                 newly_inserted.extend(
                     _copy_spool_themes(pack, library, manifest.environment))
         except Exception:

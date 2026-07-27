@@ -163,7 +163,8 @@ def select_spool_docs(library, matrix, sources, hits, *, query_embedding=None,
 
 
 def fallback_spool_docs(library, matrix, sources, seed_doc_ids, *,
-                        gate=SPOOL_FALLBACK_GATE, limit=3) -> list:
+                        gate=SPOOL_FALLBACK_GATE, limit=3,
+                        restrict_to=None) -> list:
     """The semantic fallback tier (repo-only + fallback / honest-gap
     probing): per-doc two-hop from repo seed docs into DOC-GRADE candidates,
     admitted iff the best seed cosine clears the gate. Contributions are
@@ -177,6 +178,10 @@ def fallback_spool_docs(library, matrix, sources, seed_doc_ids, *,
     candidates = [
         doc_id for doc_id in doc_grade_spool_candidates(library, sources)
         if doc_id in matrix.id_to_row
+        # The surface tier's consumption: when the question resolved to
+        # surfaces, the fallback pool is RESTRICTED to surface-tagged docs
+        # — categorical scoping (P13); similarity still ranks inside it.
+        and (restrict_to is None or doc_id in restrict_to)
     ]
     if not candidates:
         return []

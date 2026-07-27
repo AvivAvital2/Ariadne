@@ -73,8 +73,9 @@ def _trim_related_documents(content: str, max_links: int = 5) -> str:
 # v2 = 2026-07-26 (member-grounded theme gate, spool provenance rank,
 # per-source suggestion pool). v3 = lens routing wired (regimes change every
 # routed result set). v4 = entity-cap + reserved semantic fill in
-# select_spool_docs (fuse/expert-only result sets change).
-_RETRIEVAL_CACHE_VERSION = 4
+# select_spool_docs (fuse/expert-only result sets change). v5 =
+# surface-scoped fallback (no-crisp result sets change where tags exist).
+_RETRIEVAL_CACHE_VERSION = 5
 
 class SearchMixin:
     """Search implementation with multi-phase ranking.
@@ -250,7 +251,8 @@ class SearchMixin:
         )
 
     async def _lens_ranked_ids(self, route, repo_ids, retrieval_sources,
-                               query, limit, weights):
+                               query, limit, weights,
+                               surface_restrict=None):
         """Regime → (ranked ids, connection labels) (design §5-§6).
         repo-only: spool silent;
         fuse: repo ranking + categorical spool contributions; expert-only:
@@ -304,7 +306,8 @@ class SearchMixin:
             elif route.fallback_enabled:
                 contributions = fallback_spool_docs(
                     self.library, matrix, retrieval_sources,
-                    repo_ranked[:3], limit=2)
+                    repo_ranked[:3], limit=2,
+                    restrict_to=surface_restrict)
             else:
                 contributions = []
             extra = [c.doc_id for c in contributions]
@@ -443,9 +446,31 @@ class SearchMixin:
                 corpus_names = {
                     s.split(':', 1)[1] for s in spool_sources if ':' in s}
                 retrieval_sources = sorted(set(spool_sources) | corpus_names)
+                surface_restrict = None
+                try:
+                    from library.surface_tags import (
+                        docs_for_surfaces,
+                        surfaces_for_question,
+                        surfaces_from_resolution,
+                    )
+                    _surfaces = surfaces_from_resolution(spool_resolution)
+                    _question_surfaces = (
+                        surfaces_for_question(effective_query, _surfaces)
+                        if _surfaces else []
+                    )
+                    if _question_surfaces:
+                        with self.library._conn_provider.acquire() as _conn:
+                            _tagged = docs_for_surfaces(
+                                _conn, sorted(corpus_names),
+                                _question_surfaces)
+                        surface_restrict = _tagged or None
+                except Exception:
+                    _logger.debug(
+                        'lens: surface restriction unavailable',
+                        exc_info=True)
                 ranked_ids, lens_connections = await self._lens_ranked_ids(
                     route, repo_ids, retrieval_sources, effective_query,
-                    limit, weights)
+                    limit, weights, surface_restrict=surface_restrict)
                 if route.regime == 'honest-gap':
                     spool_doc_ids = {d.id for d in lite_docs
                                      if is_spool_source(d.source_name)}

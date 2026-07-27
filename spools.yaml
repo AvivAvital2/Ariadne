@@ -13,6 +13,52 @@ runtime_components:
   spark: '4.0.0'
   delta: '4.0.0'
   databricks-sdk-py: '0.121.0'
+# Interaction surfaces (PROVISIONAL, hand-drafted): surface name → keyword
+# STEMS, matched word-start-bounded ('serializ' hits serialization/serializer,
+# never mid-word). The build's tag pass marks doc-grade docs, the pack ships
+# the tags, and the consumer matches questions against these same stems to
+# scope the no-crisp semantic fallback. The embedding-vs-descriptor tagger is
+# the documented upgrade path; refine stems freely — re-tagging is idempotent.
+surfaces:
+  serialization:
+    - serializ
+    - deserializ
+    - pickle
+    - kryo
+    - arrow
+    - encoder
+    - udf
+  parallelism:
+    - parallel
+    - concurren
+    - partition
+    - repartition
+    - shuffle
+    - executor
+    - coalesc
+  io:
+    - checkpoint
+    - stream
+    - reader
+    - writer
+    - ingest
+    - connector
+  memory:
+    - memory
+    - cache
+    - spill
+    - persist
+    - broadcast
+    - oom
+  state:
+    - stateful
+    - watermark
+  lifecycle:
+    - deprecat
+    - migrat
+    - upgrad
+    - versio
+    - lifecycl
 corpus:
   spark:
     url: https://github.com/apache/spark

@@ -777,6 +777,55 @@ class TestSpoolPack:
             titles = {d.title for d in without_spool.list_documents_lite()}
             assert 'Mesh Compaction Patterns' not in titles
 
+    def test_surface_tags_travel_with_pack(self, tmp_path):
+        # Slice 3: build tags the corpus's doc-grade docs from the recipe's
+        # surface vocabularies, the manifest carries the vocabularies (the
+        # consumer matches QUESTIONS against them), and the tags land
+        # corpus-keyed at install.
+        import sqlite3
+
+        from library.surface_tags import (
+            docs_for_surfaces,
+            surfaces_from_resolution,
+        )
+
+        root = tmp_path / 'corpus'
+        root.mkdir()
+        surfaces = {'serialization': ['serializ', 'pickle']}
+        with Library(tmp_path / 'builder.db') as builder:
+            tagged = builder.add_document(
+                'explanation', 'Serialization Tuning', 'body',
+                source_name='fakebricks',
+            )
+            builder.add_document(
+                'explanation', 'Governance Notes', 'body',
+                source_name='fakebricks',
+            )
+            manifest = build_pack(
+                builder, environment='fakebricks', version='1.0',
+                target_runtime='fake-17.3', certified_docs=(),
+                source_root=root, out_path=tmp_path / 'pack.zip',
+                surfaces=surfaces,
+            )
+        assert manifest.surfaces == surfaces
+        with zipfile.ZipFile(tmp_path / 'pack.zip') as zf:
+            packed = SpoolManifest.from_dict(
+                yaml.safe_load(zf.read('manifest.yaml')))
+        assert packed.surfaces == surfaces
+
+        with Library(tmp_path / 'consumer.db') as consumer:
+            install_pack(consumer, tmp_path / 'pack.zip',
+                         cache_dir=tmp_path / 'c')
+            with consumer._conn_provider.acquire() as conn:
+                assert docs_for_surfaces(
+                    conn, ['fakebricks'], ['serialization']) == {tagged.id}
+
+        # The consumer reads the vocabularies off the resolution.
+        from types import SimpleNamespace
+        resolution = SimpleNamespace(registered={
+            'fakebricks': SimpleNamespace(manifest=packed)})
+        assert surfaces_from_resolution(resolution) == surfaces
+
     def test_version_facts_travel_with_pack(self, tmp_path):
         # Slice 2: build extracts the corpus's version markers from the
         # LOCATED source lines into version_facts, the pack ships them, and

@@ -247,6 +247,11 @@ class SpoolManifest:
     # the right-hand side of the version_facts availability join, so
     # "is X available on MY runtime" resolves from the pin.
     runtime_components: dict = field(default_factory=dict)
+    # Slice 3: the recipe's interaction-surface vocabularies (surface name →
+    # keyword stems). The pack's tags are built from these at build time and
+    # the CONSUMER matches questions against the same vocabularies — the
+    # surface tier's two halves stay in lockstep.
+    surfaces: dict = field(default_factory=dict)
     # The aisle's advisory lens (designs/spool-expert-aisles.md §2): the
     # concern/opportunity/gotcha dimensions this expert applies to a caller's
     # code (databricks: parallelism · serialization · autolog-patching · …).
@@ -281,6 +286,7 @@ class SpoolManifest:
             'embedding_dim': self.embedding_dim,
             'corpus_shas': dict(self.corpus_shas),
             'runtime_components': dict(self.runtime_components),
+            'surfaces': {k: list(v) for k, v in self.surfaces.items()},
             'taxonomy': list(self.taxonomy),
             'extraction_coverage_version': self.extraction_coverage_version,
             'attribution': [
@@ -322,6 +328,9 @@ class SpoolManifest:
                 corpus_shas=dict(data.get('corpus_shas') or {}),
                 runtime_components=dict(
                     data.get('runtime_components') or {}),
+                surfaces={
+                    str(k): [str(s) for s in (v or [])]
+                    for k, v in (data.get('surfaces') or {}).items()},
                 taxonomy=tuple(data.get('taxonomy') or ()),
                 extraction_coverage_version=int(
                     data.get('extraction_coverage_version', 0) or 0),
