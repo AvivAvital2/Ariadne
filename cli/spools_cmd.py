@@ -75,7 +75,8 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help='Onboard embeddings live (full price); skips the live/batch toggle')
     _mode.add_argument('--batch', dest='batch_mode', action='store_const',
         const='batch',
-        help='Onboard embeddings via the Batch API (~half price); skips the live/batch toggle')
+        help='Onboard embeddings AND theme summaries via the Batch API '
+             '(~half price); skips the live/batch toggle')
     create_parser.set_defaults(batch_mode=None)
     create_parser.add_argument('--yes', '-y', action='store_true',
         help='Non-interactive: skip setup + prompts and build the existing spools.yaml (pair with --batch/--live for a fully unattended run)')

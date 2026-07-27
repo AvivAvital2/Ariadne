@@ -261,6 +261,24 @@ async def summarize_theme(
     return await _apply_theme_response(library, writer, req, response)
 
 
+def estimate_theme_summary_cost(
+    prompt_texts, *, model, batched, out_tokens_per_theme: int = 350,
+):
+    """Estimated USD for summarizing the given ASSEMBLED prompts — the
+    number disclosed before any spend (chars/4 heuristic + LLM_PRICING +
+    the Batch API discount). Unknown models yield None, never a fake $0."""
+    from docgen.pricing import _BATCH_DISCOUNT, LLM_PRICING
+
+    rates = LLM_PRICING.get(model)
+    if rates is None:
+        return None
+    rate_in, rate_out = rates
+    tokens_in = sum(len(text) // 4 for text in prompt_texts)
+    tokens_out = len(prompt_texts) * out_tokens_per_theme
+    cost = (tokens_in * rate_in + tokens_out * rate_out) / 1e6
+    return cost * _BATCH_DISCOUNT if batched else cost
+
+
 async def generate_themes(
     library: "Library",
     writer: "LibraryWriter",

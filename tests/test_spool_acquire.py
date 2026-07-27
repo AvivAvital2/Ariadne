@@ -1202,3 +1202,114 @@ class TestThemeSpool:
         calls['dirty'] = 0
         assert theme_spool('envx') is None             # nothing dirty -> free
         assert 'batched' not in calls and 'live' not in calls
+
+
+class TestThemeCostGate:
+    def test_estimate_from_real_prompts_with_batch_discount(self):
+        # Pure math over the ASSEMBLED prompt texts (chars/4 heuristic +
+        # LLM_PRICING + the batch discount) — the number shown before any
+        # spend. Unknown models yield None, never a fake $0.
+        from docgen.pricing import _BATCH_DISCOUNT, LLM_PRICING
+        from docgen.themes import estimate_theme_summary_cost
+
+        rate_in, rate_out = LLM_PRICING['claude-sonnet-5']
+        texts = ['x' * 4000, 'y' * 4000]          # 2 themes, ~1000 tok each
+        live = estimate_theme_summary_cost(
+            texts, model='claude-sonnet-5', batched=False)
+        expected_live = (2000 * rate_in + 2 * 350 * rate_out) / 1e6
+        assert live == pytest.approx(expected_live)
+        batched = estimate_theme_summary_cost(
+            texts, model='claude-sonnet-5', batched=True)
+        assert batched == pytest.approx(expected_live * _BATCH_DISCOUNT)
+        assert estimate_theme_summary_cost(
+            texts, model='mystery-model-9', batched=True) is None
+
+    def test_proceed_gate_declines_before_any_summarize(self, tmp_path, monkeypatch):
+        # Interactive create discloses the estimated cost AFTER the free
+        # clustering and lets the user decline — themes stay clustered
+        # (dirty), NO summarize twin runs, no spend.
+        calls = {}
+        cfg = SimpleNamespace(db_path=str(tmp_path / 'gate.db'),
+                              spools_model='claude-sonnet-5',
+                              model='claude-opus-4-8')
+        monkeypatch.setattr('config.get_config', lambda: cfg)
+        monkeypatch.setattr('spools.build_spool_internal_themes',
+                            lambda library, name, sources: 3)
+
+        async def fake_batched(*a, **k):
+            calls['batched'] = True
+            return {'summarized': 3, 'incoherent': 0, 'failed': 0}
+
+        async def fake_live(*a, **k):
+            calls['live'] = True
+            return {'summarized': 3, 'incoherent': 0, 'failed': 0}
+
+        monkeypatch.setattr('docgen.themes.generate_themes_batched', fake_batched)
+        monkeypatch.setattr('docgen.themes.generate_themes', fake_live)
+
+        seen = []
+        got = theme_spool('envx', proceed=lambda est: seen.append(est) or False)
+        assert got is None
+        assert not calls                     # declined -> no twin ran
+        assert len(seen) == 1                # the gate SAW the estimate
+
+        got = theme_spool('envx', proceed=lambda est: True)
+        assert calls == {'live': True} and got['summarized'] == 3
+
+    def test_default_phases_thread_strategy_and_gate(self, monkeypatch):
+        # create --batch: the resolved strategy reaches theme_spool; the
+        # unattended path (--yes) skips the proceed gate, the interactive
+        # path wires one.
+        captured = {}
+        monkeypatch.setattr(
+            'spool_acquire.theme_spool',
+            lambda name, **kw: captured.update(name=name, **kw))
+        sentinel = object()
+        phases = _default_phases(
+            'batch', onboard_approve=True, spools_model='claude-sonnet-5',
+            theme_batch_strategy=sentinel)
+        phases['theme']('envx')
+        assert captured['batch_strategy'] is sentinel
+        assert captured['model'] == 'claude-sonnet-5'
+        assert captured['proceed'] is None            # --yes: no extra gate
+
+        captured.clear()
+        phases = _default_phases(
+            'batch', onboard_approve=False, spools_model='claude-sonnet-5',
+            theme_batch_strategy=sentinel)
+        phases['theme']('envx')
+        assert callable(captured['proceed'])          # interactive: gated
+
+    def test_create_batch_fails_fast_without_the_key(
+        self, tmp_path, fixture_repo, monkeypatch,
+    ):
+        # `spools create --batch` needs the theme model's API key for the
+        # batched summaries — a missing key must fail BEFORE consent/fetch,
+        # never after the paid onboard.
+        repo, sha = fixture_repo
+        spoolfile = tmp_path / 'ff-spools.yaml'
+        spoolfile.write_text(textwrap.dedent(f'''
+            name: ffbricks
+            runtime: r-1.x
+            version: 1.0.0
+            languages: [python]
+            corpus:
+              core:
+                url: {repo}
+                tag: v1.0
+                sha: {sha}
+        '''))
+        cfg = SimpleNamespace(spools_model='claude-sonnet-5',
+                              model='claude-opus-4-8', provider='anthropic')
+        monkeypatch.setattr('config.get_config', lambda: cfg)
+        monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
+        consents = []
+        with pytest.raises(SpoolError) as excinfo:
+            create_spool(
+                spoolfile, dest_dir=tmp_path / 'corpus',
+                out_path=tmp_path / 'p.zip', approve=True,
+                confirm=lambda p: consents.append(p) or 'y',
+                batch_mode='batch',
+            )
+        assert 'ANTHROPIC_API_KEY' in str(excinfo.value)
+        assert consents == []                # refused before consent/fetch

@@ -537,6 +537,28 @@ def create_spool(spoolfile_path, *, dest_dir, out_path, approve: bool,
                 f'--allow-ungrounded for a docs-only pack.',
             )
 
+    # --batch covers the theme summaries too (Anthropic/OpenAI Batch API):
+    # resolve the strategy NOW so a missing key fails BEFORE consent/fetch —
+    # never after the paid onboard.
+    theme_batch_strategy = None
+    if batch_mode == 'batch' and phases is None:
+        from types import SimpleNamespace
+
+        from cli.generate import resolve_batch_strategy
+        from config import get_config as _get_config
+
+        _cfg = _get_config()
+        theme_batch_strategy, _provider, _key_env = resolve_batch_strategy(
+            SimpleNamespace(model=_cfg.spools_model or _cfg.model,
+                            provider=None),
+            _cfg,
+        )
+        if theme_batch_strategy is None:
+            raise SpoolError(
+                f'--batch theme summaries use the {_provider} Batch API and '
+                f'{_key_env} is not set — export it (or drop --batch).',
+            )
+
     # Resolve missing shas IN MEMORY so the consent prompt can show them; the
     # write-back happens ONLY after consent (declining leaves the file alone).
     resolved_any = False
@@ -610,7 +632,8 @@ def create_spool(spoolfile_path, *, dest_dir, out_path, approve: bool,
     from config import get_config
     phases = phases or _default_phases(
         batch_mode, onboard_approve=approve,
-        spools_model=get_config().spools_model)
+        spools_model=get_config().spools_model,
+        theme_batch_strategy=theme_batch_strategy)
     print('▸ registering source…')
     phases['source_add'](name, str(dest_dir))
     print('▸ indexing corpus with SCIP…')
@@ -649,8 +672,15 @@ def _run_cli(*argv) -> None:
         raise SpoolError(f"`ariadne {' '.join(argv)}` failed (exit {code})")
 
 
+def _theme_proceed_prompt(estimate) -> bool:
+    """The interactive gate shown after the free clustering — mirrors
+    onboard's cost prompt (--yes skips it)."""
+    return input('Proceed with theme summaries? [y/N] '
+                 ).strip().lower() in ('y', 'yes')
+
+
 def _default_phases(batch_mode=None, onboard_approve=False,
-                    spools_model=None) -> dict:
+                    spools_model=None, theme_batch_strategy=None) -> dict:
     """The real pipeline (operational session): heavy phases keep their own
     interactive gates (onboard shows the cost preview and prompts).
     ``batch_mode`` ('batch' | 'live' | None) pre-selects onboard's embedding
@@ -706,14 +736,18 @@ def _default_phases(batch_mode=None, onboard_approve=False,
 
     def theme(name):
         # The spool's OWN theme pass — see :func:`theme_spool` (also exposed
-        # as `spools theme` for post-hoc builds).
-        theme_spool(name, model=spools_model)
+        # as `spools theme` for post-hoc builds). --batch threads the batch
+        # strategy here too; --yes (onboard_approve) skips the cost gate.
+        theme_spool(name, model=spools_model,
+                    batch_strategy=theme_batch_strategy,
+                    proceed=None if onboard_approve else _theme_proceed_prompt)
 
     return {'source_add': source_add, 'index': index, 'onboard': onboard,
             'theme': theme, 'build': build}
 
 
-def theme_spool(name, *, batch_strategy=None, model=None, on_stage=None):
+def theme_spool(name, *, batch_strategy=None, model=None, on_stage=None,
+                proceed=None):
     """Cluster a spool's OWN corpus into ``spool:<name>``-associated themes
     and summarize the dirty ones — the create flow's theme phase, standalone
     (`spools theme`), so a builder can add or refresh a spool's themes
@@ -739,8 +773,34 @@ def theme_spool(name, *, batch_strategy=None, model=None, on_stage=None):
     cfg = get_config()
     model = model or cfg.spools_model or cfg.model
     with Library(cfg.db_path) as library:
-        if not build_spool_internal_themes(
-                library, name, {name, spool_source_id(name)}):
+        dirty = build_spool_internal_themes(
+            library, name, {name, spool_source_id(name)})
+        if not dirty:
+            return None
+
+        # Cost disclosure BEFORE any spend: price the REAL assembled prompts
+        # (clustering above was free). ``proceed`` (interactive create) may
+        # decline — themes stay clustered/dirty, no LLM call is made.
+        from docgen.themes import (
+            _build_theme_request,
+            estimate_theme_summary_cost,
+        )
+        texts = []
+        for cluster_id in library.get_dirty_themes():
+            request = _build_theme_request(library, cluster_id)
+            if request is not None:
+                texts.append(request.system_prompt + request.user_prompt)
+        estimate = estimate_theme_summary_cost(
+            texts, model=model, batched=batch_strategy is not None)
+        mode_label = ('batched, ~50% off' if batch_strategy is not None
+                      else 'live')
+        estimate_label = (f'~${estimate:.2f}' if estimate is not None
+                          else f'(no price on record for {model})')
+        print(f'  {dirty} dirty themes → summaries estimated '
+              f'{estimate_label} on {model} ({mode_label})', flush=True)
+        if proceed is not None and not proceed(estimate):
+            print('  declined — themes stay clustered (dirty); '
+                  're-run `spools theme` to summarize later', flush=True)
             return None
 
         async def _summarize():
