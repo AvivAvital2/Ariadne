@@ -510,6 +510,22 @@ class DocGenOrchestrator:
         if progress_callback is not None:
             self.progress_callback = progress_callback
 
+        # A pinned/immutable spool corpus already fully generated at this sha has
+        # a frozen file set — nothing new to discover, nothing changed to
+        # regenerate — so skip discovery + staleness + generation entirely.
+        if self._generation_already_complete():
+            self._emit(
+                'Corpus unchanged (pinned) and already fully generated — '
+                'skipping documentation.',
+            )
+            return PipelineResult(
+                files_processed=0, files_skipped=0,
+                docs_created=0, docs_failed=0,
+            )
+        # Not skipping: drop any stale completion marker so a partial/interrupted
+        # run below never leaves one that would wrongly skip next time.
+        self._invalidate_generation_marker()
+
         # Check dependency documentation exists
         if self.config.dependencies:
             self._emit('Checking dependency documentation...')
@@ -595,10 +611,11 @@ class DocGenOrchestrator:
         )
         if batch_resolved:
             _logger.info('Batch dispatch resolved: %s', batch_reason)
-            return await self._run_batch(
+            result = await self._run_batch(
                 files_to_process, files_skipped,
                 crossref_progress=crossref_progress,
             )
+            return self._finalize_generation(result)
         _logger.info('Sync dispatch resolved: %s', batch_reason)
 
         if files_to_process:
@@ -723,7 +740,7 @@ class DocGenOrchestrator:
         if provider is not None:
             cache_stats = getattr(provider, 'cache_stats', None)
 
-        return PipelineResult(
+        return self._finalize_generation(PipelineResult(
             files_processed=len(files_to_process) - len(unprocessed),
             files_skipped=files_skipped,
             docs_created=docs_created,
@@ -737,7 +754,57 @@ class DocGenOrchestrator:
             aborted=abort_event.is_set(),
             abort_reason=abort_reason,
             unprocessed_files=tuple(unprocessed),
+        ))
+
+    def _generation_already_complete(self) -> bool:
+        """True iff this source is a pinned/immutable spool corpus already fully
+        generated at its current sha for the requested doc types — the case
+        where discovery + staleness + generation can be skipped entirely."""
+        if self.config.force_regenerate:
+            return False
+        source_name = self.config.source_name
+        if not source_name:
+            return False
+        from config import get_config
+        if not get_config().source_staleness_exempt(source_name):
+            return False
+        from docgen.generation_marker import (
+            current_corpus_shas,
+            generation_complete,
         )
+        root = self.config.source_path
+        if not current_corpus_shas(root):
+            return False  # not a pinned/fetched corpus (no corpus-sha markers)
+        return generation_complete(
+            root / '.ariadne', root, requested_doc_types=self.config.doc_types,
+        )
+
+    def _invalidate_generation_marker(self) -> None:
+        from docgen.generation_marker import invalidate_marker
+
+        invalidate_marker(self.config.source_path / '.ariadne')
+
+    def _finalize_generation(self, result: PipelineResult) -> PipelineResult:
+        """After a fully-successful run, record the generation-completion marker
+        for a pinned spool corpus so the next run can skip discovery. No-op on
+        failure/abort, or for non-exempt / non-pinned sources."""
+        if result.docs_failed or result.errors or result.aborted:
+            return result
+        source_name = self.config.source_name
+        if not source_name:
+            return result
+        from config import get_config
+        if not get_config().source_staleness_exempt(source_name):
+            return result
+        from docgen.generation_marker import current_corpus_shas, write_marker
+
+        root = self.config.source_path
+        shas = current_corpus_shas(root)
+        if shas:
+            write_marker(
+                root / '.ariadne', corpus_shas=shas, doc_types=self.config.doc_types,
+            )
+        return result
 
     async def _process_file(self, path: Path) -> GenerationResult:
         """Process a single source file.
