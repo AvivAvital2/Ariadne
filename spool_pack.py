@@ -69,6 +69,24 @@ def _under_certified(source_file: str, source_root: Path, certified_docs) -> boo
     return False
 
 
+def _strip_builder_paths(doc, root_prefix: str):
+    """Builder-machine absolute paths must not ship in a pack: rewrite
+    ``source_root``-absolute references to corpus-RELATIVE in ``source_files``
+    and in the content text (catalog bodies embed the path string). Shipping
+    them leaks the builder's username/machine layout — a real pack carried
+    them in 100% of its docs — and a consumer's file reads that follow them
+    dead-end anyway (the corpus isn't on the consumer's disk)."""
+    from attrs import evolve
+    return evolve(
+        doc,
+        content=doc.content.replace(root_prefix, ''),
+        source_files=[
+            f[len(root_prefix):] if f.startswith(root_prefix) else f
+            for f in doc.source_files
+        ],
+    )
+
+
 def _copy_doc_with_sections(dest, doc, *, embedding, metadata, source_name,
                             sections, allow_reserved_source=False):
     """Copy one document (+ its sections) into ``dest`` — the shared body of
@@ -98,7 +116,8 @@ _SCIP_SOURCE_SCOPED_LAYERS = (
 )
 
 
-def _copy_source_scoped_table(sconn, dconn, table, source_name, target_source):
+def _copy_source_scoped_table(sconn, dconn, table, source_name, target_source,
+                              *, strip_path_prefix=None):
     """Copy one ``source_name``-scoped SCIP layer table,
     rewriting the source_name column to ``target_source``.
 
@@ -118,6 +137,19 @@ def _copy_source_scoped_table(sconn, dconn, table, source_name, target_source):
     ).fetchall()
     if not rows:
         return
+    if strip_path_prefix and 'file' in cols:
+        # Same no-builder-paths rule as the documents (_strip_builder_paths):
+        # string_literals/config_values carried machine-absolute paths in
+        # every row of a real pack.
+        fi = cols.index('file')
+        rows = [
+            (*r[:fi],
+             (r[fi][len(strip_path_prefix):]
+              if isinstance(r[fi], str) and r[fi].startswith(strip_path_prefix)
+              else r[fi]),
+             *r[fi + 1:])
+            for r in rows
+        ]
     sn = cols.index('source_name')
     out = [(*r[:sn], target_source, *r[sn + 1:]) for r in rows]
     dconn.executemany(
@@ -127,7 +159,8 @@ def _copy_source_scoped_table(sconn, dconn, table, source_name, target_source):
     )
 
 
-def _copy_source_scip(src, dest, source_name, *, dest_source_name=None):
+def _copy_source_scip(src, dest, source_name, *, dest_source_name=None,
+                      strip_path_prefix=None):
     """Copy ``source_name``'s self-contained SCIP graph from ``src`` into
     ``dest``: its ``scip_symbols`` (scoped by source_name)
     and every ``scip_edges`` row touching one of those symbols.
@@ -185,6 +218,7 @@ def _copy_source_scip(src, dest, source_name, *, dest_source_name=None):
         for table in _SCIP_SOURCE_SCOPED_LAYERS:
             _copy_source_scoped_table(
                 sconn, dconn, table, source_name, target_source,
+                strip_path_prefix=strip_path_prefix,
             )
         dconn.commit()
 
@@ -294,6 +328,9 @@ def build_pack(
             f'no documents for source {environment!r} — nothing to pack',
         )
     source_root = Path(source_root).resolve()
+    # Certification is judged on the ORIGINAL absolute paths below; every
+    # written row is then rewritten corpus-relative (_strip_builder_paths).
+    root_prefix = str(source_root) + '/'
 
     import numpy as np
 
@@ -318,12 +355,15 @@ def build_pack(
                         embedding_dim = int(
                             np.asarray(doc.embedding, dtype=np.float32).shape[0],
                         )
+                    shipped = _strip_builder_paths(doc, root_prefix)
                     _copy_doc_with_sections(
-                        pack, doc, embedding=doc.embedding, metadata=metadata,
+                        pack, shipped, embedding=doc.embedding,
+                        metadata=metadata,
                         source_name=doc.source_name,
                         sections=sections.get(doc.id),  # HIGH-2: sections travel
                     )
-            _copy_source_scip(library, pack, environment)
+            _copy_source_scip(library, pack, environment,
+                              strip_path_prefix=root_prefix)
         _checkpoint(db_path)
         db_blob = db_path.read_bytes()
 

@@ -720,6 +720,64 @@ class TestSpoolPack:
                 ).fetchall()
         assert ('spark.sql.shuffle.partitions', '200', doc_source) in cfg
 
+    def test_pack_carries_no_builder_absolute_paths(self, tmp_path):
+        # A real pack shipped the builder's machine-local absolute paths in
+        # 100% of its docs (content + source_files) and in every
+        # string_literals/config_values row — leaking the builder's username
+        # and machine layout, and dead-ending consumer-side file reads (the
+        # corpus isn't on the consumer's disk). Packs must carry
+        # corpus-RELATIVE paths everywhere.
+        import sqlite3
+
+        root = tmp_path / 'corpus'
+        (root / 'pkg').mkdir(parents=True)
+        abs_file = str(root / 'pkg' / 'mod.py')
+        with Library(tmp_path / 'builder.db') as builder:
+            builder.add_document(
+                'catalog', 'pkg.mod.helper_fn',
+                f'function pkg.mod.helper_fn [python] {abs_file}:3-9 '
+                ':: def helper_fn(',
+                source_files=[abs_file],
+                source_name='fakebricks',
+                metadata={'kind': 'element',
+                          'qualified_name': 'pkg.mod.helper_fn'},
+            )
+            with builder._conn_provider.acquire() as conn:
+                init_scip_schema(conn)
+                conn.execute(
+                    'INSERT INTO string_literals (source_name, file, '
+                    'line_start, col_start, value) VALUES (?,?,?,?,?)',
+                    ('fakebricks', abs_file, 3, 0, 'lit'),
+                )
+                conn.execute(
+                    'INSERT INTO config_values (source_name, file, key, '
+                    'value, line_start) VALUES (?,?,?,?,?)',
+                    ('fakebricks', abs_file, 'k', 'v', 1),
+                )
+            build_pack(
+                builder, environment='fakebricks', version='1.0',
+                target_runtime='fake-17.3', certified_docs=(),
+                source_root=root, out_path=tmp_path / 'pack.zip',
+            )
+        with zipfile.ZipFile(tmp_path / 'pack.zip') as zf:
+            (tmp_path / 'extracted-pack.db').write_bytes(zf.read('pack.db'))
+        conn = sqlite3.connect(tmp_path / 'extracted-pack.db')
+        try:
+            builder_marker = str(tmp_path)
+            content, source_files = conn.execute(
+                'SELECT content, source_files FROM documents',
+            ).fetchone()
+            assert builder_marker not in content
+            assert builder_marker not in source_files
+            assert source_files == '["pkg/mod.py"]'
+            assert 'pkg/mod.py:3-9' in content
+            assert [r[0] for r in conn.execute(
+                'SELECT file FROM string_literals')] == ['pkg/mod.py']
+            assert [r[0] for r in conn.execute(
+                'SELECT file FROM config_values')] == ['pkg/mod.py']
+        finally:
+            conn.close()
+
     def test_disabled_spool_scip_not_surfaced(self, tmp_path):
         # A spool's SCIP edges surface only when its namespace is in the
         # query closure. Out of closure (spool disabled), scip_callers on a
