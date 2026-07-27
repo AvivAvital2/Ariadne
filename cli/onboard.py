@@ -16,11 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.console import Console
-
-from cli.catalog import cmd_catalog_describe
-from cli.dry_run import _PhaseUI, cmd_dry_run
-from cli.generate import cmd_generate
-from cli.themes_cmd import cmd_themes_build
+from cli.dry_run import cmd_dry_run
 
 if TYPE_CHECKING:
     from library import Library
@@ -197,100 +193,34 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
         f'[bold]ariadne onboard[/bold] · source: {source_name} '
         f'· model: {model} · LLM mode: {mode_label}',
     )
-
-    def _ns(**overrides) -> argparse.Namespace:
-        base = argparse.Namespace(**vars(args))
-        for k, v in overrides.items():
-            setattr(base, k, v)
-        return base
-
-    # Concurrency override: a uniform --concurrency N supersedes each
-    # phase's baked-in default. Unset → defaults (describe=4, generate=3;
-    # catalog-sync=4 is honored inside the preview).
+    from cli.onboard_pipeline import OnboardError, run_onboard_pipeline
     cc = getattr(args, 'concurrency', None)
-    catalog_describe_args = _ns(
-        source=source_name, force=False, model=model,
-        concurrency=cc if cc is not None else 4,
-        max_calls=None,
-        dry_run=False, batch=use_batch, resume=False,
-        quiet=not verbose,
-    )
-    # Propagate the batch choice to generate too — without this, generate
-    # would silently auto-batch when the prompt count crosses 200 even
-    # when the user explicitly asked for live.
-    generate_batch_mode = 'always' if use_batch else 'never'
-    generate_args = _ns(
-        source=source_name, model=model, provider=None,
-        api_key=None, types=','.join(selected_doc_types),
-        concurrency=cc if cc is not None else 3,
-        force=False,
-        dry_run=False, verbose=verbose,
-        path=None, no_crossrefs=False,
-        batch_mode=generate_batch_mode, auto_batch_threshold=200,
-        confirm_yes=True,
-        quiet=not verbose,
-    )
-    themes_args = _ns(
-        source=source_name, themes_action='build',
-        model=model,
-        quiet=not verbose,
-    )
 
-    ui = _PhaseUI(verbose=verbose)
-    # (label, success_line, invoke, fatal). fatal=False phases warn and
-    # continue on failure — themes are a semantic-clustering augmentation, so
-    # a themes failure must not discard a completed (and, for a spool, paid)
-    # generate + embed run at the last step.
-    phases: list[tuple[str, str, object, bool]] = [
-        (
-            'Describing catalog elements',
-            '  [green]✓[/green] Catalog-describe — descriptions persisted',
-            lambda: cmd_catalog_describe(catalog_describe_args),
-            True,
-        ),
-        (
-            'Generating documentation',
-            '  [green]✓[/green] Generate — explanation/architecture/qa docs written',
-            lambda: cmd_generate(generate_args),
-            True,
-        ),
-        (
-            'Building themes',
-            '  [green]✓[/green] Themes build — cluster summaries written',
-            lambda: cmd_themes_build(themes_args),
-            False,
-        ),
-    ]
+    async def _progress(label, current, total):
+        console.print()
+        console.print(f'[cyan]Phase {current}/{total}: {label}[/cyan]')
 
-    import inspect
+    try:
+        result = await run_onboard_pipeline(
+            source_name, model, tuple(selected_doc_types),
+            mode=batch_mode, concurrency=cc, verbose=verbose,
+            progress=_progress, db_path=getattr(args, 'db', None),
+        )
+    except OnboardError as exc:
+        console.print(f'[red]{exc} Pipeline stopped.[/red]')
+        return exc.rc
 
-    for label, success_line, invoke, fatal in phases:
-        with ui.passthrough(label):
-            result = invoke()
-            rc = await result if inspect.isawaitable(result) else result
-        if rc != 0:
-            if fatal:
-                console.print(
-                    f'[red]Phase {label!r} failed (rc={rc}). Pipeline '
-                    'stopped.[/red]',
-                )
-                return rc
-            # Non-fatal (e.g. themes): surface loudly but keep the completed
-            # docs/embeddings — they're persisted and the pack can still build.
-            console.print(
-                f'[yellow]Phase {label!r} failed (rc={rc}) — continuing; it '
-                'augments the docs and the generated docs/pack are '
-                'unaffected.[/yellow]',
-            )
-            continue
-        if not verbose:
-            console.print(success_line)
+    if not result.themes_ok:
+        console.print(
+            "[yellow]Phase 'Building themes' failed — continuing; it augments "
+            "the docs and the generated docs/pack are unaffected.[/yellow]")
 
     console.print()
     console.print(
         f'[bold green]✓ Onboarding complete for source: '
-        f'{source_name}[/bold green]',
-    )
+        f'{source_name}[/bold green]')
+    console.print(
+        f'  [dim]{result.docs_written} docs · {result.themes_found} themes[/dim]')
     return 0
 
 

@@ -110,21 +110,34 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
             return rc
         return _stub
 
-    # Paid phases — these are what onboard runs directly after approval.
+    # Paid phases — run by the onboard pipeline after approval. Patch them at
+    # cli.onboard_pipeline, where they're imported and invoked.
     monkeypatch.setattr(
-        'cli.onboard.cmd_catalog_describe',
+        'cli.onboard_pipeline.cmd_catalog_describe',
         make_async_stub('catalog-describe'),
     )
     monkeypatch.setattr(
-        'cli.onboard.cmd_generate', make_async_stub('generate'),
+        'cli.onboard_pipeline.cmd_generate', make_async_stub('generate'),
     )
     # onboard awaits the themes phase as a coroutine (its pipeline is
     # async). Stub the awaitable core, not the sync `cmd_themes`
     # dispatcher — the async stub also guards that onboard actually
     # awaits it.
     monkeypatch.setattr(
-        'cli.onboard.cmd_themes_build', make_async_stub('themes'),
+        'cli.onboard_pipeline.cmd_themes_build', make_async_stub('themes'),
     )
+
+    # The pipeline reads ready-stats from the Library after the phases —
+    # substitute a double so these CLI tests never touch a real DB.
+    class _FakeLib:
+        def count_documents(self, content_type=None):
+            return 0
+
+        def list_themes(self, *, coherent_only=True):
+            return []
+
+    monkeypatch.setattr(
+        'cli.onboard_pipeline.get_library', lambda db_path=None: _FakeLib())
 
     # Free phases live INSIDE the preview. Stub them so that if onboard
     # ever re-runs them directly, they'd show up in `invoked` (they must
@@ -214,7 +227,7 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
     # ---- T6: paid-phase failure stops the pipeline ------------------
     invoked.clear(); seen_args.clear()
     monkeypatch.setattr(
-        'cli.onboard.cmd_generate', make_async_stub('generate', rc=5),
+        'cli.onboard_pipeline.cmd_generate', make_async_stub('generate', rc=5),
     )
     rc = await cmd_onboard(_args(approve=True))
     assert rc == 5
@@ -222,7 +235,7 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
         f'themes must not run after generate fails; got {invoked}'
     )
     monkeypatch.setattr(
-        'cli.onboard.cmd_generate', make_async_stub('generate'),
+        'cli.onboard_pipeline.cmd_generate', make_async_stub('generate'),
     )
 
     # ---- T7: --concurrency reaches preview + paid phases ------------
@@ -291,7 +304,7 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
     # semantic-clustering augmentation failed at the last step -------------
     invoked.clear(); seen_args.clear()
     monkeypatch.setattr(
-        'cli.onboard.cmd_themes_build', make_async_stub('themes', rc=1))
+        'cli.onboard_pipeline.cmd_themes_build', make_async_stub('themes', rc=1))
     # T10 left the doc-type picker as a throwing guard; restore a benign one
     # so this demand reaches the paid phases (proceed=True) without tripping it.
     monkeypatch.setattr(

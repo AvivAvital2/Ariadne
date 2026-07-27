@@ -8,6 +8,7 @@ from ariadne_mcp.models import (
     AdminActionResponse,
     DiscoverResponse,
     EstimateResponse,
+    OnboardResponse,
     SourceAddResponse,
     SourceListResponse,
 )
@@ -534,6 +535,44 @@ def ariadne_list_sources() -> SourceListResponse:
     return AriadneService.get().list_sources()
 
 
+async def ariadne_onboard(
+    source: str | None = None,
+    model: str | None = None,
+    doc_types: list[str] | None = None,
+    batch: bool = False,
+    concurrency: int | None = None,
+    ctx: Context | None = None,
+) -> OnboardResponse:
+    """Generate documentation for a source end-to-end — the onboarding "Generate" step.
+
+    Runs the PAID phases (catalog-describe → generate → themes-build) and
+    returns the "ready" stats (files indexed, docs written, themes found,
+    coverage). NOT idempotent and long-running — it spends LLM budget and
+    writes documents, streaming progress via ``ctx.report_progress``. Run
+    ``ariadne_estimate`` first for the cost preview (and ``ariadne_source_add``
+    → ``ariadne_discover`` before that).
+
+    Args:
+        source: Source name (defaults to the configured default_source).
+        model: LLM model for the paid phases (defaults to the configured model).
+        doc_types: Doc types to generate (defaults to the standard set).
+        batch: Use the ~50%-off Message Batches API (up to 24h SLA) instead of
+            live dispatch.
+        concurrency: Max parallel LLM calls; defaults to each phase's default.
+    """
+    from ariadne_mcp.service import AriadneService
+
+    async def _report(label, current, total):
+        if ctx is not None:
+            await ctx.report_progress(current, total, label)
+
+    return await AriadneService.get().onboard(
+        source, model=model, doc_types=doc_types,
+        mode='batch' if batch else 'live', concurrency=concurrency,
+        progress=_report,
+    )
+
+
 def register_tools(mcp) -> None:
     """Register admin tools with the MCP server."""
     from mcp.types import ToolAnnotations
@@ -643,3 +682,11 @@ def register_tools(mcp) -> None:
         idempotentHint=True,
         openWorldHint=False,
     ))(ariadne_trace_flow)
+
+    mcp.tool(annotations=ToolAnnotations(
+        title='Onboard Source (generate docs)',
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    ))(ariadne_onboard)

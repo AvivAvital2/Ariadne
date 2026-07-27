@@ -20,6 +20,7 @@ from ariadne_mcp.models import (
     LanguageCount,
     ListResponse,
     ModelPrice,
+    OnboardResponse,
     SourceAddResponse,
     SourceEntry,
     SourceListResponse,
@@ -595,4 +596,48 @@ class AdminMixin:
         return FeedbackResponse(
             success=success,
             message='Miss logged.' if success else 'Event not found.',
+        )
+
+    async def onboard(
+        self,
+        source: str | None = None,
+        *,
+        model: str | None = None,
+        doc_types: list[str] | None = None,
+        mode: str = 'live',
+        concurrency: int | None = None,
+        progress=None,
+    ) -> OnboardResponse:
+        """Run the paid onboarding phases for a source (the "Generate" step).
+
+        Delegates the paid work to ``run_onboard_pipeline`` (catalog-describe →
+        generate → themes-build) with an optional progress callback, then reads
+        coverage + the indexed-file count via :meth:`coverage`. NOT idempotent:
+        it spends LLM budget and writes documents. The free phases (discover /
+        index / catalog-sync) and the cost preview are the caller's job.
+        """
+        from cli.generate import DEFAULT_GENERATE_DOC_TYPES
+        from cli.onboard_pipeline import run_onboard_pipeline
+
+        src = self._resolve_source(source)
+        if src is None:
+            raise ValueError(
+                'No source specified and no default_source configured.')
+        cfg = self.config
+        model = model or cfg.model
+        types = tuple(doc_types) if doc_types else tuple(DEFAULT_GENERATE_DOC_TYPES)
+
+        result = await run_onboard_pipeline(
+            src, model, types, mode=mode, concurrency=concurrency,
+            progress=progress, db_path=cfg.db_path,
+        )
+        cov = self.coverage(src)
+        return OnboardResponse(
+            source=src, model=model, mode=mode,
+            files_indexed=cov.total_files,
+            docs_written=result.docs_written,
+            themes_found=result.themes_found,
+            coverage_percent=round(cov.coverage_percent, 1),
+            doc_types=list(types),
+            themes_ok=result.themes_ok,
         )

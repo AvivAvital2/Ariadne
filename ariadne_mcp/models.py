@@ -550,3 +550,23 @@ class SourceListResponse(BaseModel):
 
     sources: list[SourceEntry] = Field(default_factory=list)
     default_source: str | None = None
+
+
+class OnboardResponse(BaseModel):
+    """Response from ariadne_onboard — the paid build's "ready" stats.
+
+    ``ariadne_onboard`` runs the paid phases (catalog-describe → generate →
+    themes-build) and reports what the Step-5 "ready" screen shows: files
+    indexed, docs written, themes found, and the resulting coverage. Not
+    idempotent — it spends LLM budget and writes documents.
+    """
+
+    source: str
+    model: str
+    mode: str  # 'live' | 'batch'
+    files_indexed: int
+    docs_written: int
+    themes_found: int
+    coverage_percent: float
+    doc_types: list[str] = Field(default_factory=list)
+    themes_ok: bool = True
