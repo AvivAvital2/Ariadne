@@ -64,7 +64,7 @@ An opt-in **environment knowledge plugin**: a declarative, versioned pack of pre
 ```bash
 uv run ariadne spools                 # Status: each enabled spool registered (target runtime) or a structured gap; exit 1 iff gaps
 uv run ariadne spools create [ENV]    # ONE command — interactively set up ./spools.yaml (which spool + each version; repo set from a built-in recipe OR discovered on GitHub by name) then build: consent → fetch (clone at pins) → source add → index → onboard (cost prompt) → pack
-uv run ariadne spools create --batch  # Pre-select batched onboard embeddings AND batched theme summaries (~half price); --live picks live; no flag → onboard's live-vs-batch prompt (the toggle). Missing theme-model API key fails BEFORE consent/fetch
+uv run ariadne spools create --batch  # Pre-select batched onboard embeddings AND batched theme summaries (~half price); --live picks live; no flag → ONE live-vs-batch prompt at create scope drives both. Batch (flag or prompt) + missing theme-model API key fails BEFORE consent/fetch
 uv run ariadne spools theme NAME --batch  # Build/refresh a spool's OWN themes post-hoc: free clustering, then PAID summaries (cost disclosed from the real prompts first; --batch ~half price). Interactive create gates the same spend with a y/N prompt (--yes skips)
 uv run ariadne spools create --yes --batch        # Non-interactive: skip setup + all prompts, build an existing complete spools.yaml (CI)
 uv run ariadne spools create --allow-ungrounded   # Build even when the corpus language has no SCIP indexer (docs-only, no code-tier grounding)

@@ -537,9 +537,18 @@ def create_spool(spoolfile_path, *, dest_dir, out_path, approve: bool,
                 f'--allow-ungrounded for a docs-only pack.',
             )
 
-    # --batch covers the theme summaries too (Anthropic/OpenAI Batch API):
-    # resolve the strategy NOW so a missing key fails BEFORE consent/fetch —
-    # never after the paid onboard.
+    # No --batch/--live flag: ask the SAME live-vs-batch selector onboard
+    # uses, ONCE, at create scope — the answer drives BOTH the onboard
+    # embeddings (threaded as the flag, silencing onboard's own prompt) and
+    # the theme summaries below.
+    if batch_mode is None and phases is None:
+        from cli.onboard import _prompt_for_batch_mode
+        batch_mode = _prompt_for_batch_mode(
+            title='LLM mode (onboard + theme summaries)')
+
+    # --batch (flag OR prompt) covers the theme summaries too (Anthropic/
+    # OpenAI Batch API): resolve the strategy NOW so a missing key fails
+    # BEFORE consent/fetch — never after the paid onboard.
     theme_batch_strategy = None
     if batch_mode == 'batch' and phases is None:
         from types import SimpleNamespace

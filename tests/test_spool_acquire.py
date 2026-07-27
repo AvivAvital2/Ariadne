@@ -1313,3 +1313,85 @@ class TestThemeCostGate:
             )
         assert 'ANTHROPIC_API_KEY' in str(excinfo.value)
         assert consents == []                # refused before consent/fetch
+
+
+class TestCreateModePrompt:
+    def _spoolfile(self, tmp_path, repo, sha):
+        spoolfile = tmp_path / 'mp-spools.yaml'
+        spoolfile.write_text(textwrap.dedent(f'''
+            name: mpbricks
+            runtime: r-1.x
+            version: 1.0.0
+            languages: [python]
+            corpus:
+              core:
+                url: {repo}
+                tag: v1.0
+                sha: {sha}
+        '''))
+        return spoolfile
+
+    def test_prompted_batch_drives_onboard_and_themes(
+        self, tmp_path, fixture_repo, monkeypatch,
+    ):
+        # No --batch/--live flag: create asks the SAME live-vs-batch selector
+        # onboard uses, ONCE, at create scope — and the answer drives BOTH
+        # the onboard embeddings (flag threaded, onboard's own prompt
+        # silenced) and the theme summaries (strategy + pre-consent key
+        # fail-fast + cost gate), exactly like the explicit flag.
+        repo, sha = fixture_repo
+        cfg = SimpleNamespace(spools_model='claude-sonnet-5',
+                              model='claude-opus-4-8', provider='anthropic')
+        monkeypatch.setattr('config.get_config', lambda: cfg)
+        prompts = []
+        monkeypatch.setattr(
+            'cli.onboard._prompt_for_batch_mode',
+            lambda **kw: prompts.append(kw) or 'batch')
+        sentinel = object()
+        monkeypatch.setattr(
+            'cli.generate.resolve_batch_strategy',
+            lambda args, config: (sentinel, 'anthropic', 'ANTHROPIC_API_KEY'))
+        captured = {}
+
+        def fake_phases(batch_mode=None, **kw):
+            captured.update(kw, batch_mode=batch_mode)
+            noop = lambda *a, **k: None
+            return {'source_add': noop, 'index': noop, 'onboard': noop,
+                    'theme': noop, 'build': noop}
+
+        monkeypatch.setattr(spool_acquire, '_default_phases', fake_phases)
+        create_spool(
+            self._spoolfile(tmp_path, repo, sha),
+            dest_dir=tmp_path / 'corpus', out_path=tmp_path / 'p.zip',
+            approve=True, confirm=lambda p: 'y', batch_mode=None,
+        )
+        assert len(prompts) == 1                       # asked ONCE, up front
+        assert captured['batch_mode'] == 'batch'       # onboard gets --batch
+        assert captured['theme_batch_strategy'] is sentinel
+
+    def test_prompted_live_stays_live_no_key_needed(
+        self, tmp_path, fixture_repo, monkeypatch,
+    ):
+        repo, sha = fixture_repo
+        cfg = SimpleNamespace(spools_model='claude-sonnet-5',
+                              model='claude-opus-4-8', provider='anthropic')
+        monkeypatch.setattr('config.get_config', lambda: cfg)
+        monkeypatch.setattr(
+            'cli.onboard._prompt_for_batch_mode', lambda **kw: 'live')
+        monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
+        captured = {}
+
+        def fake_phases(batch_mode=None, **kw):
+            captured.update(kw, batch_mode=batch_mode)
+            noop = lambda *a, **k: None
+            return {'source_add': noop, 'index': noop, 'onboard': noop,
+                    'theme': noop, 'build': noop}
+
+        monkeypatch.setattr(spool_acquire, '_default_phases', fake_phases)
+        create_spool(
+            self._spoolfile(tmp_path, repo, sha),
+            dest_dir=tmp_path / 'corpus', out_path=tmp_path / 'p.zip',
+            approve=True, confirm=lambda p: 'y', batch_mode=None,
+        )
+        assert captured['batch_mode'] == 'live'        # live everywhere
+        assert captured['theme_batch_strategy'] is None
