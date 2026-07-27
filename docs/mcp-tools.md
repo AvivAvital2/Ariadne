@@ -103,6 +103,13 @@ Cache invalidation is lazy — at the next cache-lookup, if any parent dev doc h
 
 Role taxonomy is currently `developer` (default) + `product_manager`. Extension to other audiences is a config change, not a code change — see `designs/role-aware-responses.md`.
 
+### Environment spools in responses (optional)
+
+When a spool is enabled (`spools:` in `ariadne.yaml` — see [building-a-databricks-spool.md](building-a-databricks-spool.md)):
+
+- `ariadne_search` results can include the environment's docs, clearly labeled with their `spool:<name>` source. Routing is a bidirectional lens — repo-subject questions rank your code first with the spool as a capped lens; environment-subject questions flip the sides — and the response's `lens_primary` field names which side owned the ranking (`repo` or `spool`).
+- `ariadne_ask` answers carry an environment header with the runtime pin and component versions, a "Pinned version facts" block (`@Since`/deprecation data from the corpus) when the question touches a versioned symbol, and a provenance line citing each corpus pin + detected license.
+
 > **Tip:** Search returns full document content, which may trigger Claude Code's "Large MCP response" warning. Set `MAX_MCP_OUTPUT_TOKENS=50000` in your `.claude/settings.local.json` `env` section to suppress it. See [claude-code-integration.md](claude-code-integration.md) for details.
 
 See [claude-code-integration.md](claude-code-integration.md) for setup details.

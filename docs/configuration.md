@@ -22,6 +22,14 @@ sources:
 # Base directory for exported docs (organized by source name)
 docs_base: ./docs
 
+# Environment spools (opt-in) — installed knowledge packs join the query
+# scope under the reserved source id spool:<name>. The runtime pin is
+# REQUIRED: an unpinned or mismatched enable fails closed with a structured
+# gap (`ariadne spools` shows it) rather than silently accepting any pack.
+spools:
+  databricks:
+    runtime: dbr17.3-lts
+
 # Behavioral directive — tells Claude to mention when Ariadne helped
 mention_ariadne:
   enabled: true
@@ -32,6 +40,7 @@ defaults:
   db_path: ariadne.db
   provider: anthropic        # 'anthropic' | 'openai'
   model: claude-opus-4-8     # claude-opus-4-8 (Anthropic) or gpt-5.5 (OpenAI)
+  spools_model: claude-sonnet-5  # optional: model for SPOOL BUILDS only (unset → inherit model)
 ```
 
 ### Source Configuration Fields

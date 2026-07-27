@@ -26,6 +26,7 @@ Ariadne *is* a graph-RAG — a structural graph, [Leiden](https://en.wikipedia.o
 - **Served over MCP.** The whole library lives in one queryable SQLite store exposed to any MCP agent (Claude Code, custom agents), automatically scoped to the source it's working in plus that source's dependencies — so results never bleed across unrelated codebases.
 - **Portable — author once, consume anywhere.** `export` packs the whole library into a single git-committable zip (or a markdown tree with `--no-archive`); `import` rebuilds a fully searchable database from it on any machine, re-embedding locally — so the model that *authors* the docs and the one that *serves* them can differ (a local model works fine). Re-import is a **delta**: documents whose content hasn't changed are skipped, so syncing a team's knowledge base only costs the docs that actually moved. See [docs/import-export.md](docs/import-export.md).
 - **Ask from Slack (optional).** A read-only Slack bot puts the knowledge base in your team's chat — @mention it, DM it, or run `/ariadne`, and Claude (via the Agent SDK) answers from Ariadne's docs. It runs in Socket Mode (an outbound WebSocket, no public URL to expose). See [docs/slack-bridge-deployment.md](docs/slack-bridge-deployment.md).
+- **Environment spools (opt-in).** Install a prebuilt, version-pinned knowledge pack for a runtime (Databricks first) and ask cross-environment questions — *"how would my code run on Databricks?"* — answered from the environment's **own pinned corpus** fused with your repo, never from training-data guesswork: answers cite the runtime pin, per-component versions, `@Since`/deprecation facts, and each corpus SHA + license. Packs are build-once, distribute-many — installing costs no cloning, no indexing, no LLM spend. See [docs/building-a-databricks-spool.md](docs/building-a-databricks-spool.md).
 
 **Effortless setup**
 
@@ -166,6 +167,7 @@ Full reference — source fields, dependency detection, the exclusion policy —
 | [scip-cross-source.md](docs/scip-cross-source.md) | SCIP indexing & cross-source / cross-language intelligence |
 | [workflows.md](docs/workflows.md) | Keeping docs fresh, git-sync, hooks, branch docs, findings |
 | [import-export.md](docs/import-export.md) | Export/import round-trip; author once, consume anywhere (incl. local LLMs) |
+| [building-a-databricks-spool.md](docs/building-a-databricks-spool.md) | Environment spools: build, install, and enable a runtime knowledge pack |
 | [architecture.md](docs/architecture.md) | How it works, subsystems, usage tracking |
 | [slack-bridge-deployment.md](docs/slack-bridge-deployment.md) | Read-only Slack → Ariadne bridge |
 

@@ -62,6 +62,20 @@ One command sets up the recipe, then builds it — in order:
    Your answers are written to `./spools.yaml`. **You specify the versions; the mechanism
    fetches them** — it never scrapes or guesses. (Re-running `create` seeds the prompts from
    the existing file, so you confirm/edit rather than start over.)
+
+   Beyond the setup-authored fields (`runtime`, `languages`, `corpus` pins), the recipe
+   carries three **hand-authored knowledge fields** that travel with the pack manifest —
+   this repo's `spools.yaml` is the reference:
+   - `runtime_components:` — component → version for the runtime edition (`spark: '4.0.0'`,
+     …). Powers the deterministic *"is X available on MY runtime"* availability join and
+     the pinned version facts that ride every answer.
+   - `name_aliases:` — multi-word product-name forms (`delta lake`, `apache spark`) the
+     router must treat as the environment's **own names**: they route questions to the
+     spool but never select documents (a product name matches READMEs and namespace
+     markers by construction, not relevant content).
+   - `surfaces:` — interaction-vocabulary keyword *stems* (serialization, parallelism, io,
+     memory, state, lifecycle) matched word-start-bounded. The build tags doc-grade docs
+     with them; the pack ships the tags. Refine stems freely — re-tagging is idempotent.
 2. **Consent prompt** — lists each repo at its resolved SHA. Type `y`. The resolved SHAs
    are pinned back into `spools.yaml` (trust-on-first-use).
 3. **Grounding gate** — verifies the corpus languages are SCIP-indexable. `[python, scala]`
@@ -69,9 +83,17 @@ One command sets up the recipe, then builds it — in order:
    rather than building a hollow, ungrounded pack.
 4. **Fetch → source add → discover/index** — clones the repos and runs `scip-python` +
    `scip-java`.
-5. **onboard** — prints a **cost preview and prompts** before any spend. Approve it; choose
-   **batch** for half-price embeddings (or pre-select up front: `create --batch`).
-6. Produces **`databricks-dbr17.3-lts.zip`**.
+5. **onboard** — prints a **cost preview and prompts** before any spend.
+6. **Themes** — clusters the spool's own docs (free) and summarizes each cluster (paid —
+   the cost is disclosed from the real prompts and gated by its own y/N). The pack ships
+   with its themes, so consumers never pay for them.
+7. Produces **`databricks-dbr17.3-lts.zip`**.
+
+One **live-vs-batch selector** covers the whole build: `create --batch` (or answering
+`batch` when prompted) routes *both* the onboard embeddings *and* the theme summaries
+through the Batch API at roughly half price; `--live` picks live for both; no flag → one
+prompt at create scope drives both. Batch mode fail-fasts on a missing theme-model API key
+**before** consent/fetch — never mid-build.
 
 Once `spools.yaml` is pinned, `uv run ariadne spools create --yes --batch` rebuilds it with
 no prompts at all (CI).
@@ -84,7 +106,7 @@ Verifies the checksum, then lands the docs under the reserved `spool:databricks`
 
 ### 3. Enable it
 Add to `ariadne.yaml`. The `runtime:` pin is **required** — an unpinned spool
-fails closed (it would otherwise silently accept any signed version):
+fails closed (it would otherwise silently accept any pack version):
 ```yaml
 spools:
   databricks:
@@ -104,13 +126,35 @@ changes; `spools disable databricks --project yourproject` removes them. Enablin
 against a not-yet-installed spool is refused loudly (it names the gap), not a
 silent no-op.
 
+The pack already ships the spool's **own** themes (built during `create`). To build or
+refresh them post-hoc — e.g. for a pack cut before themes shipped, or after refining the
+recipe — run:
+```bash
+uv run ariadne spools theme databricks --batch   # free clustering + batched (~half-price) summaries
+```
+The clustering is free; the paid summary step discloses its cost from the real prompts
+before anything is spent (omit `--batch` for live-priced summaries).
+
 ### 4. Verify
 ```bash
-uv run ariadne spools      # expect: registered  databricks  (runtime dbr17.3-lts, version 1.0.0)
+uv run ariadne spools      # expect: registered  databricks  (runtime dbr17.3-lts, version <pack version>)
 ```
 Then ask a cross-environment question via `ariadne_ask` / `ariadne_search` (or
-`uv run ariadne ask "…"`). Spool docs join the query scope under `spool:databricks`, ranked
-**below** your own code (the trust ladder: code first, official docs fill gaps).
+`uv run ariadne ask "…"`). Spool docs join the query scope under `spool:databricks`.
+
+Routing is a **bidirectional lens**: on questions about *your* code, your repo owns the
+ranking and the spool rides as a capped, clearly-labeled lens (the trust ladder: your code
+first); on questions the environment owns — its APIs, its products — the sides flip, the
+spool gets the full ranking, and your repo becomes the lens. The environment's *names*
+("Databricks", "spark", "delta lake") only mark the seam; they never decide the subject.
+
+Answers carry the environment's ground truth explicitly:
+- an **environment header** with the runtime pin and its component versions
+  (`spark 4.0.0, delta 4.0.0, databricks-sdk-py 0.121.0`);
+- a **pinned version facts** block when the question touches a versioned symbol
+  (`@Since` / deprecation data extracted from the corpus at build time);
+- a **provenance line** citing each corpus pin and its detected license
+  (`spark@fa33ea00 (Apache-2.0), …`).
 
 ## Good to know
 - **Build the spool with the same embedding model your projects use.** `install`

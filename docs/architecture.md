@@ -59,6 +59,14 @@ ariadne themes show <id>   # show one theme with members
 
 After generation, Ariadne walks the doc graph (imports + topic membership + semantic neighbors) via BFS to inject a "Related Documents" section into each doc. Scoped to current source + dependencies — search results don't bleed across unrelated codebases. Uses precomputed edges (O(N×K) where K is the BFS frontier ~10–50), not O(N²) regex scanning.
 
+### Environment spools (opt-in)
+
+A **spool** is a prebuilt, version-pinned knowledge pack for a runtime (Databricks is Phase 1): its corpus is cloned at pinned SHAs, SCIP-indexed, documented, and themed **once** on a build machine, then distributed as a checksum-verified zip. Installing costs no cloning, indexing, or LLM spend; enabled spools join the query scope under the reserved `spool:<name>` source id.
+
+At query time a deterministic **bidirectional lens** routes each question: repo-subject questions rank your code first with the spool as a capped, labeled lens; environment-subject questions flip the sides. The environment's *names* only mark the seam — they never decide the subject or select documents. Answers carry the runtime pin + component versions, pinned `@Since`/deprecation **version facts** extracted from the corpus, and a provenance line citing each corpus SHA + detected license.
+
+Build/install walkthrough: [building-a-databricks-spool.md](building-a-databricks-spool.md).
+
 ### Staleness model
 
 Files are checked at the start of every `generate` run and processed only if needed:

@@ -57,6 +57,15 @@
 | `ariadne callees <symbol>` | Show what a symbol calls |
 | `ariadne impact_radius <symbol>` | Show files affected by a change to a symbol |
 | `ariadne improve --dead-code` | Surface zero-reference symbols (requires SCIP indexes) |
+| **Environment spools** | |
+| `ariadne spools` | Status of each enabled spool — registered (target runtime) or a structured gap; exit 1 iff gaps |
+| `ariadne spools create [ENV]` | One command: interactive recipe setup (`spools.yaml`), then build — consent → fetch → index → onboard → themes → pack. `--batch`/`--live` pick the LLM mode for embeddings AND theme summaries; `--yes` builds a complete recipe with no prompts (CI); `--allow-ungrounded` is the docs-only escape hatch |
+| `ariadne spools theme NAME` | Build/refresh a spool's own themes post-hoc: free clustering, then paid summaries (cost disclosed from the real prompts first; `--batch` ≈ half price) |
+| `ariadne spools install PACK.zip` | Verify checksum + embedding-model match, then install the pack into the store + cache |
+| `ariadne spools enable NAME --project P` | Add cross-source themes between a project and an installed spool (`disable` removes them) |
+| `ariadne spools reconcile` | Refresh cross-source themes after project code changes |
+| `ariadne spools build` | Low-level: pack an already-onboarded source into a zip (`create` calls this) |
+| `ariadne spools acquire PACKFILE --dest DIR` | Clone a packfile's corpus repos at their pins (consent-gated; `create` calls this) |
 | **MCP** | |
 | `ariadne mcp` | Start the MCP server (stdio transport) |
 
