@@ -129,10 +129,17 @@ def _delete_semantic_within_ids(conn, ids: list[str]) -> None:
     conn.execute('DELETE FROM _within_ids')
     conn.executemany(
         'INSERT OR IGNORE INTO _within_ids VALUES (?)', [(i,) for i in ids])
+    # Drive the selection from the edge rows (one pass, two covered probes
+    # per row). The IN/IN form let the planner nest BOTH IN-operators as
+    # outer loops — an |ids|² pair-product against the unique index
+    # (measured at spool scale: unfinished after 50 min vs 4.8 s for this
+    # shape over ~800k edges / ~180k ids).
     conn.execute(
-        "DELETE FROM doc_graph WHERE edge_type = 'semantic_neighbor' "
-        "AND source_id IN (SELECT id FROM _within_ids) "
-        "AND target_id IN (SELECT id FROM _within_ids)")
+        'DELETE FROM doc_graph WHERE rowid IN ('
+        ' SELECT g.rowid FROM doc_graph g'
+        ' JOIN _within_ids s ON s.id = g.source_id'
+        ' JOIN _within_ids t ON t.id = g.target_id'
+        " WHERE g.edge_type = 'semantic_neighbor')")
     conn.execute('DROP TABLE _within_ids')
 
 
