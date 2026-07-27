@@ -788,6 +788,9 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
             <h1 class="title">Threading through the labyrinth…</h1>
             <p class="lede">Generating docs. You can close this — it keeps running.</p>
             <div class="runline" id="runLine"><span class="pip"></span> Working…</div>
+            <div style="margin-top:14px;height:8px;border-radius:6px;background:var(--inset);overflow:hidden">
+              <div id="buildBar" style="height:100%;width:0;border-radius:6px;background:var(--accent,#6aa2ff);transition:width .45s ease"></div>
+            </div>
           </div>
           <div id="gen-ready" style="display:none">
             <div class="ready">
@@ -1418,40 +1421,62 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
       goStep(2);
     } else { goStep(cur+1); }
   };
-  // The Generate step runs `ariadne onboard --approve` server-side as a
-  // detached background job; the browser keeps the job id in localStorage and
-  // polls status, so closing the tab (even for a 24h batch) and coming back
-  // re-attaches.
+  // The Generate step runs `ariadne onboard` server-side over MCP: the backend
+  // calls the ariadne_onboard tool and streams its per-phase progress to the
+  // browser as server-sent events. The job id is kept in localStorage so
+  // closing the tab (even for a 24h batch) and returning re-attaches the stream.
   function toggleGen(which){ ['gen-config','gen-running','gen-ready'].forEach(id=>{ const el=$(id); if(el) el.style.display=(id===which?'block':'none'); }); }
   function showBuilding(){ toggleGen('gen-running'); const nb=$('nextBtn'); if(nb)nb.style.display='none'; const bb=$('backBtn'); if(bb)bb.style.visibility='hidden'; }
-  function showReady(){ toggleGen('gen-ready'); const nb=$('nextBtn'); if(nb)nb.style.display='none'; }
+  function showReady(result){
+    toggleGen('gen-ready'); const nb=$('nextBtn'); if(nb)nb.style.display='none';
+    if(result){
+      const cov=Math.round(result.coverage_percent||0);
+      setText('readyMsg', result.docs_written+' docs · '+result.themes_found+' themes · '
+        +cov+'% coverage of '+result.files_indexed+' files. Queryable over MCP, CLI, and the web console.');
+    }
+  }
   function showBuildConfig(){ toggleGen('gen-config'); const nb=$('nextBtn'); if(nb)nb.style.display=''; }
   function setRun(msg){ const rl=$('runLine'); if(rl) rl.innerHTML='<span class="pip"></span> '+esc(msg); }
+  function setProgress(pct){ const b=$('buildBar'); if(b) b.style.width=Math.max(0,Math.min(100,pct))+'%'; }
   window.startBuild=async function(){
     if(!state.source){ banner('Add a source first.','err'); return; }
-    showBuilding(); setRun('Starting generation…');
+    showBuilding(); setRun('Starting generation…'); setProgress(0);
     try{
-      const types=(state.docTypes&&state.docTypes.length)?state.docTypes.join(','):null;
-      const r=await api('/api/onboard',{source:state.source, model:state.model, batch:state.batch, types});
+      const types=(state.docTypes&&state.docTypes.length)?state.docTypes:null;
+      const r=await api('/api/onboard',{source:state.source, model:state.model, batch:state.batch, types, concurrency:state.concurrency});
       state.jobId=r.job_id;
       try{ localStorage.setItem('ariadneOnboardJob', JSON.stringify({job_id:r.job_id, source:state.source})); }catch(e){}
-      pollBuild();
+      streamBuild();
     }catch(err){ banner('Could not start generation: '+err.message,'err'); showBuildConfig(); }
   };
-  function pollBuild(){
-    clearTimeout(state.buildTimer);
-    state.buildTimer=setTimeout(async()=>{
-      if(!state.jobId) return;
-      try{
-        const r=await fetch('/api/onboard/status?job_id='+encodeURIComponent(state.jobId));
-        if(r.status===404){ setRun('Lost track of this build (did the server restart?). A batch keeps running on the server and resumes there; otherwise start again.'); localStorage.removeItem('ariadneOnboardJob'); return; }
-        const s=await r.json();
-        if(s.tail&&s.tail.length) setRun(s.tail[s.tail.length-1]);
-        if(s.status==='done'){ localStorage.removeItem('ariadneOnboardJob'); showReady(); return; }
-        if(s.status==='error'){ setRun('Generation failed (exit '+s.returncode+'). Check the server logs.'); localStorage.removeItem('ariadneOnboardJob'); return; }
-        pollBuild();
-      }catch(err){ pollBuild(); }   // transient network hiccup — keep polling
-    }, 3000);
+  // Subscribe to the build's server-sent events: a `progress` per phase, then a
+  // single `done` (carrying the ready stats) or `error`. EventSource auto-
+  // reconnects on a transient drop; a 404 (job gone after a server restart)
+  // closes it and we surface the "come back" note.
+  function streamBuild(){
+    if(!state.jobId) return;
+    if(state.es){ try{ state.es.close(); }catch(e){} }
+    const es=new EventSource('/api/onboard/events?job_id='+encodeURIComponent(state.jobId));
+    state.es=es;
+    es.onmessage=(ev)=>{
+      let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
+      if(m.type==='progress'){
+        if(m.total) setProgress(Math.round(100*m.current/m.total));
+        setRun((m.total?('Phase '+m.current+'/'+m.total+': '):'')+(m.message||'Working…'));
+      } else if(m.type==='done'){
+        es.close(); localStorage.removeItem('ariadneOnboardJob');
+        setProgress(100); showReady(m.result);
+      } else if(m.type==='error'){
+        es.close(); localStorage.removeItem('ariadneOnboardJob');
+        setRun('Generation failed: '+(m.error||'unknown error')+'. Check the server logs.');
+      }
+    };
+    es.onerror=()=>{
+      if(es.readyState===EventSource.CLOSED){
+        setRun('Lost track of this build (did the server restart?). A batch keeps running server-side; otherwise start again.');
+        localStorage.removeItem('ariadneOnboardJob');
+      }
+    };
   }
 
   // ════ Browse… ════
@@ -1514,7 +1539,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     let saved=null; try{ saved=JSON.parse(localStorage.getItem('ariadneOnboardJob')||'null'); }catch(e){}
     if(saved && saved.job_id){
       state.jobId=saved.job_id; if(saved.source) state.source=saved.source;
-      cur=TOTAL; render(); showBuilding(); setRun('Reconnecting to your build…'); pollBuild();
+      cur=TOTAL; render(); showBuilding(); setRun('Reconnecting to your build…'); streamBuild();
     } else {
       onEnter(cur);   // initial step (Connect) → load the dependency picker, etc.
     }

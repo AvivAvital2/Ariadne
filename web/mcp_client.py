@@ -30,8 +30,19 @@ class MCPBridge:
     def __init__(self, session) -> None:
         self._session = session
 
-    async def call(self, tool: str, arguments: dict | None = None) -> dict:
-        result = await self._session.call_tool(tool, arguments or {})
+    async def call(
+        self, tool: str, arguments: dict | None = None,
+        *, progress_callback=None,
+    ) -> dict:
+        """Forward ``(tool, args)`` to an MCP session and return its structured dict.
+
+        ``progress_callback`` (optional) receives the tool's progress
+        notifications — ``(progress, total, message)`` — each time the server
+        calls ``ctx.report_progress``; the onboarding backend uses it to stream
+        build phases to the browser over SSE.
+        """
+        result = await self._session.call_tool(
+            tool, arguments or {}, progress_callback=progress_callback)
         if getattr(result, 'isError', False):
             raise MCPCallError(_first_text(result) or f'{tool} failed')
         data = getattr(result, 'structuredContent', None)

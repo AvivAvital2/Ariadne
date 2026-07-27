@@ -16,6 +16,8 @@ A single evolving test:
 """
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from web.mcp_client import MCPCallError
@@ -26,7 +28,9 @@ from web.server import (
     list_dirs,
     make_app,
     native_picker_command,
-_onboard_command)
+    _onboard_tool_args,
+    _run_onboard,
+)
 
 
 class _FakeBridge:
@@ -36,11 +40,16 @@ class _FakeBridge:
         self.calls: list[tuple[str, dict]] = []
         self.fail_on: set[str] = set()
 
-    async def call(self, tool: str, arguments: dict | None = None) -> dict:
+    async def call(self, tool: str, arguments: dict | None = None,
+                   *, progress_callback=None) -> dict:
         args = arguments or {}
         self.calls.append((tool, args))
         if tool in self.fail_on:
             raise MCPCallError(f'{tool} blew up')
+        if progress_callback is not None:
+            # mimic ariadne_onboard streaming ctx.report_progress
+            await progress_callback(1, 3, 'Describing catalog elements')
+            await progress_callback(2, 3, 'Generating documentation')
         return {'tool': tool, 'echo': args}
 
 
@@ -97,14 +106,39 @@ async def test_backend_bridges_to_mcp_tools(tmp_path):
     if sys.platform in ('darwin', 'win32') or sys.platform.startswith('linux'):
         assert cmd and cmd[0] in ('osascript', 'zenity', 'powershell')
     assert ('GET', '/api/pick-folder') in registered
-    assert _onboard_command({}) is None  # no source → no command
-    assert _onboard_command({'source': 'proj'}) == [
-        'onboard', '--source', 'proj', '--approve', '--live']
-    assert _onboard_command({
+
+    # ---- D7: the "Generate" step maps the build request to ariadne_onboard
+    # tool args, served as POST /api/onboard + an SSE events stream ----------
+    assert _onboard_tool_args({'source': 'proj'}) == {'source': 'proj'}
+    assert _onboard_tool_args({
         'source': 'proj', 'model': 'claude-opus-4-8', 'batch': True,
-        'types': ['explanation', 'qa'],
-    }) == [
-        'onboard', '--source', 'proj', '--approve',
-        '--model', 'claude-opus-4-8', '--batch', '--types', 'explanation,qa']
+        'types': ['explanation', 'qa'], 'concurrency': 6,
+    }) == {
+        'source': 'proj', 'model': 'claude-opus-4-8', 'batch': True,
+        'doc_types': ['explanation', 'qa'], 'concurrency': 6,
+    }
     assert ('POST', '/api/onboard') in registered
-    assert ('GET', '/api/onboard/status') in registered
+    assert ('GET', '/api/onboard/events') in registered
+
+    # ---- D8: _run_onboard relays MCP progress + the terminal result into a
+    # queue as SSE-shaped events (progress… then exactly one done) ----------
+    q: asyncio.Queue = asyncio.Queue()
+    await _run_onboard(bridge, {'source': 'proj'}, q)
+    events = []
+    while not q.empty():
+        events.append(q.get_nowait())
+    assert [e['type'] for e in events] == ['progress', 'progress', 'done']
+    assert events[0] == {'type': 'progress', 'current': 1, 'total': 3,
+                         'message': 'Describing catalog elements'}
+    assert events[-1]['result']['tool'] == 'ariadne_onboard'
+    assert ('ariadne_onboard', {'source': 'proj'}) in bridge.calls
+
+    # a tool failure surfaces as a single error event (the stream never hangs)
+    bridge.fail_on = {'ariadne_onboard'}
+    q_err: asyncio.Queue = asyncio.Queue()
+    await _run_onboard(bridge, {'source': 'proj'}, q_err)
+    err_events = []
+    while not q_err.empty():
+        err_events.append(q_err.get_nowait())
+    assert err_events[-1]['type'] == 'error'
+    assert 'ariadne_onboard' in err_events[-1]['error']

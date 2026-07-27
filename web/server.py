@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import sys
 import asyncio
+import json
 import uuid
-from collections import deque
 from contextlib import AsyncExitStack
 from pathlib import Path
 
@@ -23,12 +23,6 @@ from web.mcp_client import (
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / 'static'
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-# Onboard build jobs keep a bounded tail of their subprocess output: the drain
-# buffer caps at _JOB_OUTPUT_LINES, and status reports the last _JOB_TAIL_LINES.
-_JOB_OUTPUT_LINES = 400
-_JOB_TAIL_LINES = 12
 
 # Browser endpoint → MCP tool. Onboarding "Generate" (ariadne_onboard) is
 # added once that tool + its progress stream land.
@@ -168,70 +162,84 @@ async def _pick_folder(request: web.Request) -> web.Response:
     return web.json_response(await pick_folder(request.query.get('start')))
 
 
-def _onboard_command(body):
-    """The ``ariadne onboard`` argv for a build request, or ``None`` when no
-    source is given. ``--approve`` runs it non-interactively; scope + the
-    per-format excludes are already persisted to ariadne.yaml."""
-    source = body.get('source')
-    if not source:
-        return None
-    args = ['onboard', '--source', str(source), '--approve']
-    model = body.get('model')
-    if model:
-        args += ['--model', str(model)]
-    args.append('--batch' if body.get('batch') else '--live')
+def _onboard_tool_args(body: dict) -> dict:
+    """Map the browser build request → ``ariadne_onboard`` tool arguments.
+
+    Only the fields the user chose are forwarded; the tool applies its own
+    defaults for anything omitted (model, doc types, live/batch, concurrency).
+    """
+    args: dict = {'source': str(body['source'])}
+    if body.get('model'):
+        args['model'] = str(body['model'])
+    if body.get('batch'):
+        args['batch'] = True
     types = body.get('types')
     if types:
-        joined = ','.join(types) if isinstance(types, (list, tuple)) else str(types)
-        args += ['--types', joined]
+        args['doc_types'] = (
+            list(types) if isinstance(types, (list, tuple)) else [str(types)])
+    if body.get('concurrency') is not None:
+        args['concurrency'] = int(body['concurrency'])
     return args
 
 
-async def _drain_job(job):
-    """Stream the subprocess output into the job's capped buffer, then set the
-    terminal status from its exit code."""
-    proc = job['proc']
-    if proc.stdout is not None:
-        async for raw in proc.stdout:
-            line = raw.decode('utf-8', 'replace').rstrip()
-            if line:
-                job['output'].append(line)
-    job['returncode'] = await proc.wait()
-    job['status'] = 'done' if job['returncode'] == 0 else 'error'
+async def _run_onboard(bridge, args: dict, queue: asyncio.Queue) -> None:
+    """Run ``ariadne_onboard`` over MCP, relaying its progress notifications
+    and the terminal result into ``queue`` as SSE-shaped events.
+
+    Emits ``{'type': 'progress', current, total, message}`` per phase, then a
+    single ``{'type': 'done', 'result': {...}}`` or ``{'type': 'error', ...}``.
+    The terminal event always fires, so the SSE stream can never hang.
+    """
+    async def _progress(progress, total, message):
+        await queue.put({'type': 'progress', 'current': progress,
+                         'total': total, 'message': message})
+
+    try:
+        result = await bridge.call(
+            'ariadne_onboard', args, progress_callback=_progress)
+        await queue.put({'type': 'done', 'result': result})
+    except MCPCallError as exc:
+        await queue.put({'type': 'error', 'error': str(exc)})
+    except Exception as exc:  # never leave the SSE stream hanging
+        await queue.put({'type': 'error', 'error': str(exc)})
 
 
-async def _onboard_start(request):
-    """Spawn ``ariadne onboard`` as a detached background job and return its id;
-    the browser stores it and polls ``/api/onboard/status``."""
+async def _onboard_start(request: web.Request) -> web.Response:
+    """Start an ``ariadne_onboard`` build as a background MCP tool call and
+    return its job id; the browser subscribes to progress over
+    ``GET /api/onboard/events`` (SSE)."""
     body = await _read_json(request)
-    args = _onboard_command(body)
-    if args is None:
+    if not body.get('source'):
         return web.json_response({'error': 'source is required'}, status=400)
-    proc = await asyncio.create_subprocess_exec(
-        'uv', 'run', 'ariadne', *args,
-        cwd=str(REPO_ROOT),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
     job_id = uuid.uuid4().hex[:12]
-    job = {'id': job_id, 'proc': proc, 'status': 'running',
-           'output': deque(maxlen=_JOB_OUTPUT_LINES), 'returncode': None}
+    queue: asyncio.Queue = asyncio.Queue()
+    job = {'id': job_id, 'queue': queue}
     request.app['jobs'][job_id] = job
-    job['task'] = asyncio.create_task(_drain_job(job))   # job holds the ref alive
+    job['task'] = asyncio.create_task(
+        _run_onboard(request.app['bridge'], _onboard_tool_args(body), queue))
     return web.json_response({'job_id': job_id, 'status': 'running'})
 
 
-async def _onboard_status(request):
-    """Report a build job's status + a tail of its output for the runline."""
+async def _onboard_events(request: web.Request) -> web.StreamResponse:
+    """Server-sent-events stream of a build job's progress + terminal result."""
     job_id = request.query.get('job_id')
     job = request.app['jobs'].get(job_id) if job_id else None
     if job is None:
-        return web.json_response({'status': 'unknown'}, status=404)
-    return web.json_response({
-        'status': job['status'],
-        'returncode': job['returncode'],
-        'tail': list(job['output'])[-_JOB_TAIL_LINES:],
+        return web.json_response({'error': 'unknown job_id'}, status=404)
+    resp = web.StreamResponse(headers={
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no',
     })
+    await resp.prepare(request)
+    queue = job['queue']
+    while True:
+        event = await queue.get()
+        await resp.write(f'data: {json.dumps(event)}\n\n'.encode())
+        if event['type'] in ('done', 'error'):
+            break
+    request.app['jobs'].pop(job_id, None)
+    return resp
 
 
 def make_app(bridge=None, *, server_params=None) -> web.Application:
@@ -244,7 +252,7 @@ def make_app(bridge=None, *, server_params=None) -> web.Application:
     app = web.Application()
     app['jobs'] = {}
     app.router.add_post('/api/onboard', _onboard_start)
-    app.router.add_get('/api/onboard/status', _onboard_status)
+    app.router.add_get('/api/onboard/events', _onboard_events)
     app.router.add_get('/', _index)
     app.router.add_get('/api/browse', _browse)
     app.router.add_get('/api/pick-folder', _pick_folder)
