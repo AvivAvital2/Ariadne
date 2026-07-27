@@ -23,18 +23,26 @@ _HUMAN_DOC_RANK_WEIGHT = 0.8
 
 _STALE_DOC_RANK_WEIGHT = 0.6
 _OFFICIAL_DOC_RANK_WEIGHT = 0.9
-
-
-def provenance_weight(metadata):
+def provenance_weight(metadata, source_name=None):
     """Similarity multiplier from a doc's provenance metadata, shared by every
     ranking path so the calibration is identical wherever search runs:
     human-authored docs rank below code-derived, and a doc whose rst autodoc
-    target no longer resolves sinks further. 1.0 = no change."""
+    target no longer resolves sinks further. 1.0 = no change.
+
+    ``source_name`` is the doc's owning source: 'official' provenance from a
+    spool source is the pack's version-certified tier and takes NO discount —
+    the blanket down-weight sank a spool's certified docs below every unmarked
+    doc (themes, findings), inverting the spool trust ladder. A repo's own
+    'official'-tagged doc keeps the discount, and spool prose stays
+    discounted: only official is certified.
+    """
     weight = 1.0
     if metadata.get('provenance') == HUMAN_DOC_PROVENANCE:
         weight *= _HUMAN_DOC_RANK_WEIGHT
     if metadata.get('provenance') == OFFICIAL_DOC_PROVENANCE:
-        weight *= _OFFICIAL_DOC_RANK_WEIGHT
+        from spools import is_spool_source
+        if not is_spool_source(source_name):
+            weight *= _OFFICIAL_DOC_RANK_WEIGHT
     if metadata.get('stale_autodoc'):
         weight *= _STALE_DOC_RANK_WEIGHT
     return weight
@@ -90,7 +98,7 @@ class SearchMixin:
             else:
                 weight = 0.7 + 0.3 * (hits / served) if served > 0 else 1.0
             similarities[i] *= weight
-            similarities[i] *= provenance_weight(doc.metadata)
+            similarities[i] *= provenance_weight(doc.metadata, doc.source_name)
 
         top_indices = top_k_indices(similarities, k)
 
@@ -344,7 +352,7 @@ class SearchMixin:
         embeddings = np.stack([d.embedding for d in docs_with_embeddings])  # type: ignore[misc]
         similarities = batch_dot_similarity(query_embedding, embeddings)
         for i, doc in enumerate(docs_with_embeddings):
-            similarities[i] *= provenance_weight(doc.metadata)
+            similarities[i] *= provenance_weight(doc.metadata, doc.source_name)
         top_indices = top_k_indices(similarities, k)
 
         return [

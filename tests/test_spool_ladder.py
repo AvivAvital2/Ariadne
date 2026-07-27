@@ -60,6 +60,46 @@ class TestTrustLadder:
         assert scores['doc-official'] == np.float32(0.9)
         assert scores['doc-human'] == np.float32(0.8)
 
+        # Demand 3 — 'official' from a SPOOL source is the pack's certified
+        # tier: NO discount (the blanket 0.9 sank a spool's certified docs
+        # below every unmarked doc — themes, findings — inverting the spool
+        # trust ladder). A repo's own 'official'-tagged doc keeps the
+        # discount, and spool prose stays discounted: only official is
+        # certified.
+        assert provenance_weight(
+            {'provenance': 'official'}, source_name='spool:fakebricks',
+        ) == 1.0
+        assert provenance_weight(
+            {'provenance': 'official'}, source_name='src1',
+        ) == official_weight
+        assert provenance_weight(
+            {'provenance': 'human-doc'}, source_name='spool:fakebricks',
+        ) == human_weight
+
+        # Demand 4 — through the ranking path: a spool-certified doc at raw
+        # similarity 1.0 must no longer lose to a plain repo doc at 0.95.
+        matrix2 = EmbeddingMatrix(
+            matrix=np.stack([
+                np.array([0.95, 0.0], dtype=np.float32),
+                np.array([1.0, 0.0], dtype=np.float32),
+            ]),
+            ids=['doc-repo-plain', 'doc-spool-official'],
+            dim=2,
+            build_stamp='synthetic',
+        )
+        weights2 = {
+            'doc-repo-plain': provenance_weight({}, source_name='src1'),
+            'doc-spool-official': provenance_weight(
+                {'provenance': 'official'}, source_name='spool:fakebricks',
+            ),
+        }
+        ranked2 = matrix2.rank(
+            query, candidate_ids=matrix2.ids, limit=2, weights=weights2,
+        )
+        assert [doc_id for doc_id, _ in ranked2] == [
+            'doc-spool-official', 'doc-repo-plain',
+        ]
+
 
 class TestSpoolScope:
     def test_scope_unions_registered_spools(self, tmp_path):

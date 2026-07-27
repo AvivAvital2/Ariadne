@@ -284,7 +284,7 @@ class SearchMixin:
         candidate_ids = [d.id for d in tier1_docs]
         tier2_ids = [d.id for d in tier2_docs]
         from library.search import provenance_weight
-        weights = {d.id: provenance_weight(d.metadata) for d in lite_docs}
+        weights = {d.id: provenance_weight(d.metadata, d.source_name) for d in lite_docs}
 
         # Context-aware boosting: if working on a specific file, boost
         # docs for that file and its graph neighbors
