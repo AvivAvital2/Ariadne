@@ -10,9 +10,41 @@ const path = require('node:path');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const HOST = '127.0.0.1';
 
-// One live server per test, tracked here so afterEach can tear it down.
-let proc = null;
-let workspace = null;
+// Track EVERY spawned server so none can leak. A single missed teardown, a
+// second startAriadne before a stop, or a Cypress crash/Ctrl-C used to leave
+// DETACHED `ariadne serve` processes alive — and they piled up by the thousand.
+// We SIGKILL the whole process group (incl. the MCP child) and reap all
+// survivors when Cypress itself exits.
+const servers = new Set();   // each: { proc, workspace }
+let current = null;          // the server for the test in flight
+
+function killServer(s) {
+  if (!s) return;
+  if (s.proc && s.proc.pid) {
+    try { process.kill(-s.proc.pid, 'SIGKILL'); }        // whole group
+    catch (e) { try { s.proc.kill('SIGKILL'); } catch (_) { /* gone */ } }
+  }
+  if (s.workspace) {
+    try { fs.rmSync(s.workspace, { recursive: true, force: true }); } catch (e) { /* best effort */ }
+  }
+  servers.delete(s);
+}
+
+// Reap ALL servers if Cypress exits for ANY reason — normal end, crash, or
+// Ctrl-C. This is what stops leaks when a run is interrupted mid-spec.
+let reaped = false;
+function reapAll() {
+  if (reaped) return;
+  reaped = true;
+  for (const s of servers) {
+    if (s.proc && s.proc.pid) { try { process.kill(-s.proc.pid, 'SIGKILL'); } catch (e) { /* gone */ } }
+    if (s.workspace) { try { fs.rmSync(s.workspace, { recursive: true, force: true }); } catch (e) { /* best effort */ } }
+  }
+  servers.clear();
+}
+process.on('exit', reapAll);
+process.on('SIGINT', () => { reapAll(); process.exit(130); });
+process.on('SIGTERM', () => { reapAll(); process.exit(143); });
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -36,8 +68,9 @@ function ping(port) {
 module.exports = defineConfig({
   e2e: {
     // NOTE: no baseUrl on purpose. Cypress verifies a configured baseUrl at
-    // launch (before any hook) — that would fail because each test boots its
-    // own server. The support file sets baseUrl per test, after startup.
+    // launch (before any hook) — that would fail because each spec/test boots
+    // its own server. Specs hold the baseUrl in a closure var, set from the
+    // startAriadne task, and use absolute URLs.
     specPattern: 'cypress/e2e/**/*.cy.js',
     supportFile: 'cypress/support/e2e.js',
     fixturesFolder: false,
@@ -47,13 +80,18 @@ module.exports = defineConfig({
     taskTimeout: 120000,       // 2-min cap on cy.task (server start/stop)
     setupNodeEvents(on) {
       on('task', {
-        // Boot a FRESH, isolated Ariadne for one test: a new temp config dir
-        // (empty DB + empty cache) on a fresh port, plus a synthetic source
-        // directory for real-backend specs. No state leaks between tests.
+        // Boot a FRESH, isolated Ariadne: a new temp config dir (empty DB +
+        // empty cache) on a fresh port, plus a synthetic source directory for
+        // real-backend specs. No state leaks between tests.
         // Returns { baseUrl, sourcePath }.
         async startAriadne() {
+          // Defensive: if a prior server wasn't stopped (e.g. a spec used
+          // before() and a second start slipped in), kill it first. A single
+          // `proc` variable silently orphaned the previous server here.
+          if (current) killServer(current);
+
           const port = await freePort();
-          workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariadne-e2e-'));
+          const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariadne-e2e-'));
           fs.writeFileSync(path.join(workspace, 'ariadne.yaml'), 'sources: {}\n');
           // a tiny real project for source_add/discover/estimate to operate on
           const sourcePath = path.join(workspace, 'proj');
@@ -67,16 +105,20 @@ module.exports = defineConfig({
           const t0 = Date.now();
           let out = '';
           let exited = null;
-          proc = spawn('uv', ['run', 'ariadne', 'serve', '--host', HOST, '--port', String(port)], {
+          const proc = spawn('uv', ['run', 'ariadne', 'serve', '--host', HOST, '--port', String(port)], {
             cwd: REPO_ROOT,
             env: { ...process.env, ARIADNE_CONFIG: path.join(workspace, 'ariadne.yaml') },
             stdio: ['ignore', 'pipe', 'pipe'],
             detached: true,   // own process group → clean group kill (incl. the MCP child)
           });
-          const grab = (d) => { const s = d.toString(); out = (out + s).slice(-8000); process.stdout.write('[serve] ' + s); };
+          const s = { proc, workspace };
+          servers.add(s);
+          current = s;
+          proc.on('exit', (code, signal) => { exited = { code, signal }; servers.delete(s); });
+
+          const grab = (d) => { const t = d.toString(); out = (out + t).slice(-8000); process.stdout.write('[serve] ' + t); };
           proc.stdout.on('data', grab);
           proc.stderr.on('data', grab);
-          proc.on('exit', (code, signal) => { exited = { code, signal }; });
 
           // Poll for readiness with periodic progress logs; fail with the server's
           // output if it dies or never answers — so a stuck/broken server is
@@ -85,6 +127,7 @@ module.exports = defineConfig({
           let lastLog = 0;
           while (Date.now() < deadline) {
             if (exited) {
+              killServer(s);
               throw new Error(
                 `[e2e] ariadne serve EXITED before ready (code=${exited.code}, signal=${exited.signal}).\n`
                 + `--- server output ---\n${out || '(no output)'}`);
@@ -97,25 +140,15 @@ module.exports = defineConfig({
             if (waited >= lastLog + 5) { lastLog = waited; console.log(`[e2e] waiting for server to answer /  … ${waited}s`); }
             await new Promise((r) => setTimeout(r, 300));
           }
-          try { process.kill(-proc.pid, 'SIGKILL'); } catch (e) { /* gone */ }
+          killServer(s);
           throw new Error(
             `[e2e] ariadne serve NOT ready after 90s on http://${HOST}:${port}.\n`
             + `--- server output (tail) ---\n${out || '(no output — is `uv run ariadne serve` runnable from the repo root?)'}`);
         },
 
         async stopAriadne() {
-          if (proc && proc.pid) {
-            // SIGKILL the whole process group. ariadne serve's graceful shutdown
-            // currently crashes (anyio cancel-scope) and SURVIVES SIGTERM, so a
-            // polite signal leaves servers piling up across tests. Kill hard.
-            try { process.kill(-proc.pid, 'SIGKILL'); }
-            catch (e) { try { proc.kill('SIGKILL'); } catch (_) { /* gone */ } }
-            proc = null;
-          }
-          if (workspace) {
-            try { fs.rmSync(workspace, { recursive: true, force: true }); } catch (e) { /* best effort */ }
-            workspace = null;
-          }
+          killServer(current);
+          current = null;
           return null;
         },
       });
