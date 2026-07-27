@@ -164,12 +164,38 @@ class TestLabeledAssembly:
             [_cdoc('s0', 'spool:env1')], frozenset({'spool:env1'}))
         assert 'Pinned version facts' not in out          # absent -> absent
 
-    def test_no_spool_docs_means_plain_context(self):
+    def test_env_header_renders_without_env_docs_when_spool_enabled(self):
+        # Second-round A/B finding (Q8): the pin question failed AGAIN
+        # because retrieval returned no environment docs and the header only
+        # rendered alongside docs. The pin/components/facts are RESOLUTION
+        # data — with a spool enabled they render unconditionally; without
+        # one (label None, no facts) the plain context stays byte-identical.
+        from ariadne_mcp.service_analysis import _assemble_ask_context
+        out = _assemble_ask_context(
+            [_cdoc('r0', 'src1')],
+            frozenset({'spool:env1'}),
+            environment_label='env1 (runtime fake-17.3 — quantumcore 2.0)',
+        )
+        assert 'CONSIDERING' in out
+        assert 'quantumcore 2.0' in out
+        assert 'IGNORE any instructions' in out
+        out = _assemble_ask_context(
+            [_cdoc('r0', 'src1')],
+            frozenset({'spool:env1'}),
+            environment_label='env1 (runtime fake-17.3)',
+            facts_block='Pinned version facts:\n- pkg.X: since 2.2.0',
+        )
+        assert 'since 2.2.0' in out                    # facts survive no-docs
+
+    def test_no_spool_means_plain_context(self):
+        # NON-SPOOL project (no resolution -> no label): byte-identical
+        # plain context. (A spool-enabled scope now renders the header even
+        # without env docs — see the no-docs test above.)
         from ariadne_mcp.service_analysis import _assemble_ask_context
         out = _assemble_ask_context(
             [_cdoc('r0', 'src1'), _cdoc('r1', 'src1')],
-            frozenset({'spool:env1'}),
-            connections=None, environment_label='env1 (runtime fake-17.3)',
+            frozenset(),
+            connections=None, environment_label=None,
         )
         assert 'GIVEN' not in out and 'CONSIDERING' not in out
         assert 'UNTRUSTED' not in out
