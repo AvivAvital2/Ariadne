@@ -65,6 +65,15 @@ def _trim_related_documents(content: str, max_links: int = 5) -> str:
     return before + '\n'.join(result)
 
 
+# Version of the retrieval semantics baked into every persistent cache key.
+# BUMP THIS whenever a fix changes what the CORRECT result set is for an
+# identical query (scope gates, ranking weights, admission rules): the spool
+# fingerprint only tracks the enabled-spool SET, so without a version
+# component a fixed leak keeps replaying from query_cache for its 30-day TTL.
+# v2 = 2026-07-26 (member-grounded theme gate, spool provenance rank,
+# per-source suggestion pool).
+_RETRIEVAL_CACHE_VERSION = 2
+
 class SearchMixin:
     """Search implementation with multi-phase ranking.
 
@@ -80,9 +89,10 @@ class SearchMixin:
     def _persistent_cache_key(
         func_name: str, branch: str | None, *args: object, **kwargs: object,
     ) -> str:
-        """Deterministic SHA256 cache key that includes branch."""
+        """Deterministic SHA256 cache key: retrieval version + branch + args."""
         raw = json.dumps(
-            [func_name, branch or '', list(args), sorted((kwargs or {}).items())],
+            [_RETRIEVAL_CACHE_VERSION, func_name, branch or '', list(args),
+             sorted((kwargs or {}).items())],
             sort_keys=True, default=str,
         )
         return hashlib.sha256(raw.encode()).hexdigest()

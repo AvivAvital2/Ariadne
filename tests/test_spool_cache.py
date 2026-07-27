@@ -202,6 +202,59 @@ class TestAudienceCacheSpoolKeyed:
             assert hit is not None and 'spool ON' in hit.content
 
 
+class TestPersistentCacheVersioned:
+    def test_retrieval_version_invalidates_persistent_cache(
+        self, tmp_path, monkeypatch,
+    ):
+        # A persistent row cached under one retrieval version must NOT be
+        # replayed after the version bumps: a gate/ranking fix changes what
+        # the CORRECT result is for an identical key, and the spool
+        # fingerprint only tracks the enabled-spool set, not retrieval
+        # semantics — without a version component, a fixed leak keeps
+        # replaying from query_cache for its 30-day TTL.
+        (tmp_path / 'src1').mkdir()
+        cfg = _write_cfg(tmp_path, f'''
+            sources:
+              src1:
+                path: {tmp_path / 'src1'}
+        ''')
+        lib = Library(Path(cfg.db_path))
+        lib.add_document('explanation', 'user doc', 'body', source_name='src1')
+        svc = AriadneService()
+        svc._library = lib
+        svc._config = cfg
+
+        async def run():
+            r1 = await svc.search(query=None, branch='main', limit=10,
+                                  source='src1')
+            assert {d.title for d in r1.documents} == {'user doc'}
+
+            # The store changes; the persistent row still replays the OLD
+            # result — the cache working as designed while semantics are
+            # unchanged (only the in-memory layer is cleared).
+            lib.add_document('explanation', 'user doc 2', 'body',
+                             source_name='src1')
+            svc._query_cache.clear()
+            r2 = await svc.search(query=None, branch='main', limit=10,
+                                  source='src1')
+            assert {d.title for d in r2.documents} == {'user doc'}
+
+            # Bump the retrieval version (what a semantics fix does) ->
+            # the persistent row must MISS and the result recompute.
+            import ariadne_mcp.service_search as service_search_module
+            monkeypatch.setattr(
+                service_search_module, '_RETRIEVAL_CACHE_VERSION', 9999,
+                raising=False,
+            )
+            svc._query_cache.clear()
+            r3 = await svc.search(query=None, branch='main', limit=10,
+                                  source='src1')
+            assert {d.title for d in r3.documents} == {'user doc', 'user doc 2'}
+
+        asyncio.run(run())
+        lib.close()
+
+
 class TestFingerprint:
     def test_fingerprint_tracks_enable_disable_update(self, tmp_path):
         cfg_off = _write_cfg(tmp_path, 'sources: {}\n')
