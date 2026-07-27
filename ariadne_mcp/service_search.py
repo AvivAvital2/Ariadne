@@ -10,6 +10,17 @@ from ariadne_mcp.models import DocumentResult, SearchResponse, SectionResult
 _logger = logging.getLogger(__name__)
 
 
+def _is_catalog_bloat(title: str) -> bool:
+    """Low-value decompiled/boilerplate catalog docs (local-variable accessor
+    stubs like ``local 169``, ``@SerialVersionUID`` lines, anonymous-class
+    placeholders) that dilute a spool's signal. Demoted in ground ranking; the
+    deeper fix is excluding them at build-time catalog extraction."""
+    t = (title or '').strip()
+    if 'SerialVersionUID' in t or t.lower().startswith('anonymous class'):
+        return True
+    return t.startswith('local ') and t[len('local '):].strip().isdigit()
+
+
 def _trim_related_documents(content: str, max_links: int = 5) -> str:
     """Trim the '## Related Documents' section to reduce response bloat.
 
@@ -292,26 +303,57 @@ class SearchMixin:
         effective_query = query.strip() if query else ''
         spool_gap_hint_text = None
         if effective_query:
-            # Phase 3: Load only embeddings for ranking (no content loaded yet)
-            from spools import _GATE_MIN_STRONG_HITS, rank_with_scarcity_gate
-            
-            async def _rank(ids):
-                # HIGH-3: the scarcity check needs at least
-                # _GATE_MIN_STRONG_HITS candidates to judge "is code scarce";
-                # floor the window so a small caller limit (e.g. 1) can't
-                # shrink it below that and force the gate open.
-                return await self._rank_ids_by_embedding(ids, effective_query, max(limit * 2, _GATE_MIN_STRONG_HITS), weights)
-            
-            gated = await rank_with_scarcity_gate(_rank, candidate_ids, tier2_ids)
-            ranked_ids = gated.ranked
-            from spools import spool_gap_hint
-            spool_gap_hint_text = spool_gap_hint(
-                gate_opened=gated.gate_opened,
-                tier2_present=bool(tier2_ids),
-                spools_registered=bool(spool_sources),
-            )
+            if spool_sources:
+                # Anchored-ground ranking (designs/spool-anchored-retrieval.md):
+                # the user repo is the protected anchor (the subject); the spool
+                # is subordinate ground (context), admitted by BOTH query and
+                # anchor similarity, diversified + relevance-gated. Replaces the
+                # scarcity gate whenever a spool is registered — the spool is the
+                # environment the repo operates in, never a corpus that replaces
+                # it.
+                from spools import is_spool_source
+                anchor_ids = [d.id for d in lite_docs
+                              if not is_spool_source(d.source_name)]
+                ground_ids = [d.id for d in lite_docs
+                              if is_spool_source(d.source_name)]
+                # Fold catalog-bloat demotion into the provenance weights.
+                aweights = dict(weights)
+                for d in lite_docs:
+                    if is_spool_source(d.source_name) and _is_catalog_bloat(d.title):
+                        aweights[d.id] = aweights.get(d.id, 1.0) * 0.3
+                ordered = await self._anchored_rank_ids(
+                    anchor_ids, ground_ids, effective_query, limit, aweights,
+                )
+                # Encode the anchored order as descending scores so the
+                # downstream context-boost re-sort preserves it (the anchor
+                # floor sits at the top scores and can't be evicted by a
+                # boosted lower doc).
+                n = len(ordered)
+                ranked_ids = [(did, (n - i) / n if n else 0.0)
+                              for i, did in enumerate(ordered)]
+            else:
+                # No spool registered — unchanged scarcity-gate path
+                # (byte-identical to pre-anchored behavior for every non-spool
+                # project).
+                from spools import _GATE_MIN_STRONG_HITS, rank_with_scarcity_gate
 
-            # Apply context boost
+                async def _rank(ids):
+                    # HIGH-3: the scarcity check needs at least
+                    # _GATE_MIN_STRONG_HITS candidates to judge "is code
+                    # scarce"; floor the window so a small caller limit (e.g. 1)
+                    # can't shrink it below that and force the gate open.
+                    return await self._rank_ids_by_embedding(ids, effective_query, max(limit * 2, _GATE_MIN_STRONG_HITS), weights)
+
+                gated = await rank_with_scarcity_gate(_rank, candidate_ids, tier2_ids)
+                ranked_ids = gated.ranked
+                from spools import spool_gap_hint
+                spool_gap_hint_text = spool_gap_hint(
+                    gate_opened=gated.gate_opened,
+                    tier2_present=bool(tier2_ids),
+                    spools_registered=bool(spool_sources),
+                )
+
+            # Apply context boost (shared by both ranking paths)
             if context_boost_ids:
                 boosted = [(did, (score or 0) + (0.15 if did in context_boost_ids else 0.0))
                            for did, score in ranked_ids]
@@ -464,6 +506,83 @@ class SearchMixin:
         except Exception:
             _logger.debug('Embedding ranking failed, falling back to text matching', exc_info=True)
             return [(did, 0.0) for did in self._rank_by_query_ids(doc_ids, query, limit)]
+
+    async def _anchored_rank_ids(self, anchor_ids, ground_ids, query, limit, weights=None):
+        """Anchor-then-ground ranking: the user repo (``anchor_ids``) is the
+        protected subject; the spool (``ground_ids``) is subordinate context,
+        admitted by both query and anchor similarity, diversified and gated.
+        See ``designs/spool-anchored-retrieval.md``.
+
+        Falls back to flat embedding ranking over anchor+ground when the
+        embedding matrix is unavailable, so a missing matrix never regresses to
+        empty results.
+        """
+        import numpy as np
+
+        from library.anchored_retrieval import anchored_rank
+
+        query_embedding = await self.embedding_service.embed(query)
+        floor = max(1, limit // 2)          # the repo keeps at least half the slots
+        window_a = max(limit * 2, 20)       # per-side pre-rank windows keep the
+        window_g = max(limit * 5, 50)       # anchored combine O(window), not O(N)
+
+        def _norm(vec):
+            arr = np.asarray(vec, dtype=np.float32)
+            mag = float(np.linalg.norm(arr))
+            return arr / mag if mag else arr
+
+        def _pairs(ids, emb_fn):
+            out = []
+            for did in ids:
+                vec = emb_fn(did)
+                if vec is not None:
+                    out.append((did, _norm(vec)))
+            return out
+
+        matrix = None
+        try:
+            matrix = self._get_embedding_matrix()
+        except Exception:
+            _logger.debug('anchored rank: matrix load failed', exc_info=True)
+
+        if matrix is not None:
+            # Pre-rank each side by query similarity via the fast batch matrix,
+            # keeping only a small window per side. The anchor-similarity combine
+            # then runs over ~window docs, not the whole (~200k-doc) corpus.
+            top_anchor = matrix.rank(query_embedding, list(anchor_ids), window_a)
+            top_ground = matrix.rank(query_embedding, list(ground_ids), window_g)
+
+            def _emb(did):
+                row = matrix.id_to_row.get(did)
+                return matrix.M[row] if row is not None else None
+
+            anchor_pairs = _pairs([did for did, _ in top_anchor], _emb)
+            ground_pairs = _pairs([did for did, _ in top_ground], _emb)
+        elif len(anchor_ids) + len(ground_ids) > 2000:
+            # No matrix over a large corpus — can't anchor cheaply; degrade to a
+            # flat embedding ranking rather than hang. (The matrix is present in
+            # normal operation; this guards the degraded path.)
+            ranked = await self._rank_ids_by_embedding(
+                list(anchor_ids) + list(ground_ids), query, limit, weights)
+            return [did for did, _ in ranked]
+        else:
+            # Small candidate sets (tests / tiny stores) — embeddings from the DB.
+            emb_map = self.library.get_embeddings_for_ids(
+                list(anchor_ids) + list(ground_ids))
+
+            def _emb(did):
+                return emb_map.get(did)
+
+            anchor_pairs = _pairs(anchor_ids, _emb)
+            ground_pairs = _pairs(ground_ids, _emb)
+
+        if not anchor_pairs and not ground_pairs:
+            return (list(anchor_ids)[:floor] + list(ground_ids)
+                    + list(anchor_ids)[floor:])[:limit]
+        return anchored_rank(
+            _norm(query_embedding), anchor_pairs, ground_pairs,
+            limit=limit, anchor_floor=floor, weights=weights or {},
+        )
 
     def _rank_by_query_ids(self, doc_ids: list[str], query: str, limit: int) -> list[str]:
         """Fallback text ranking that returns doc IDs."""

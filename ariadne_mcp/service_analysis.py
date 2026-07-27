@@ -173,7 +173,7 @@ class AnalysisMixin:
         # baseline only; PM queries see matching audience_response rows
         # plus the dev baseline as adapter context).
         search_result = await self.search(
-            query=question, branch=branch, limit=5, role=role, source=source,
+            query=question, branch=branch, limit=8, role=role, source=source,
         )
         badge = _doc_only_badge(search_result.documents[:3])
         if not search_result.documents:
@@ -186,13 +186,19 @@ class AnalysisMixin:
         # 2. Assemble context from top docs. CRIT-6: spool-origin docs are
         # fenced as untrusted reference (§5) so injected instructions in
         # remotely-fetched content can't drive the synthesis LLM.
-        top_docs = search_result.documents[:3]
         # Resolve the enabled-spool set once: its source ids fence spool docs
-        # in the synthesis context (CRIT-6) and its fingerprint keys the PM
-        # audience cache (CRIT-11).
+        # in the synthesis context (CRIT-6), split the balanced anchor+ground
+        # context, and its fingerprint keys the PM audience cache (CRIT-11).
         from spools import resolve_spools
         _spool_resolution = resolve_spools(self.config)
         _spool_fp = _spool_resolution.fingerprint()
+        # Balanced context: the repo (anchor) is the subject, the spool is the
+        # environment. Take the top of EACH so the synthesis receives both
+        # halves — a globally-truncated top-k skews to the repo floor and
+        # starves the ground, which made WITH-spool answers underperform.
+        top_docs = _balanced_ask_docs(
+            search_result.documents, _spool_resolution.scope_sources(),
+        )
         context = _assemble_ask_context(
             top_docs, _spool_resolution.scope_sources(),
         )
@@ -827,6 +833,23 @@ def _assemble_ask_context(documents, spool_sources=frozenset(), *, char_limit=30
         else:
             parts.append(f'## {doc.title}\n{content}')
     return '\n\n---\n\n'.join(parts)
+
+
+def _balanced_ask_docs(documents, spool_sources, *, anchor_n=4, ground_n=4):
+    """Split the ranked search results into repo (anchor) and spool (ground)
+    and return the top of EACH — the repo is the subject, the spool is the
+    environment it operates in. A plain top-k truncation of the anchored
+    results skews to the repo floor and starves the ground; taking the top of
+    each half guarantees the synthesis sees both, so WITH-spool answers can
+    actually combine the two. When no ground is present (a CONTROL question or
+    no spool), this is just the top repo docs — no irrelevant ground is
+    injected, preserving no-harm."""
+    spool_sources = frozenset(spool_sources)
+    anchor, ground = [], []
+    for doc in documents:
+        bucket = ground if getattr(doc, 'source_name', None) in spool_sources else anchor
+        bucket.append(doc)
+    return anchor[:anchor_n] + ground[:ground_n]
 
 
 def _doc_only_badge(docs):

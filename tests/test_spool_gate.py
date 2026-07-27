@@ -186,3 +186,133 @@ class TestScarcityGateSearchIntegration:
             assert titles[0].startswith('Code')
         finally:
             lib.close()
+
+
+class TestAnchoredGroundSearchIntegration:
+    """The anchored-ground model at the search-service level (the #10 fix):
+    with a spool enabled the repo (anchor) keeps its floor and a relevant spool
+    doc surfaces as ground, even when many spool docs would flood the top-k.
+    See ``designs/spool-anchored-retrieval.md``.
+    """
+
+    async def test_repo_anchor_not_crowded_out_and_relevant_ground_surfaces(
+        self, tmp_path, monkeypatch,
+    ):
+        e_q = np.array([1.0, 1.0, 0.0], dtype=np.float32)  # hybrid query
+        lib = Library(tmp_path / 'anchored.db')
+        try:
+            # Repo (anchor) docs — no spool source.
+            lib.add_document(
+                'explanation', 'RepoTopic A', 'repo body a',
+                embedding=np.array([0.0, 1.0, 0.0], dtype=np.float32),
+                metadata={'provenance': CODE_PROVENANCE},
+            )
+            lib.add_document(
+                'explanation', 'RepoTopic B', 'repo body b',
+                embedding=np.array([0.1, 1.0, 0.0], dtype=np.float32),
+                metadata={'provenance': CODE_PROVENANCE},
+            )
+            # One relevant spool doc (close to query AND anchor)...
+            lib.add_document(
+                'explanation', 'GroundRelevant', 'ground body',
+                embedding=np.array([1.0, 1.0, 0.0], dtype=np.float32),
+                metadata={'provenance': OFFICIAL_DOC_PROVENANCE},
+                source_name='spool:databricks', _allow_reserved_source=True,
+            )
+            # ...and many flooding spool docs (query-ish but anchor-distant).
+            for i in range(10):
+                lib.add_document(
+                    'catalog', f'GroundNoise {i}', f'noise {i}',
+                    embedding=np.array([1.0, 0.0, 0.0], dtype=np.float32),
+                    metadata={'provenance': OFFICIAL_DOC_PROVENANCE},
+                    source_name='spool:databricks', _allow_reserved_source=True,
+                )
+
+            class _FakeEmbed:
+                async def embed(self, *_a, **_k):
+                    return e_q
+
+            class _FakeResolution:
+                def scope_sources(self):
+                    return frozenset({'spool:databricks'})
+
+                def fingerprint(self):
+                    return 'fp'
+
+            svc = AriadneService()
+            svc._library = lib
+            svc._embedding_service = _FakeEmbed()
+            monkeypatch.setattr(svc, '_resolve_scope', lambda *a, **k: lib)
+            monkeypatch.setattr(
+                'spools.resolve_spools', lambda *a, **k: _FakeResolution())
+
+            resp = await svc._search_uncached(query='hybrid', limit=4)
+            titles = [d.title for d in resp.documents]
+            # Repo anchor kept its floor despite 11 spool docs...
+            assert any(t.startswith('RepoTopic') for t in titles), titles
+            # ...and the relevant spool doc surfaced as ground context.
+            assert 'GroundRelevant' in titles, titles
+        finally:
+            lib.close()
+
+    async def test_matrix_path_prelimits_and_anchors_without_flooding(
+        self, tmp_path, monkeypatch,
+    ):
+        # With a real embedding matrix built (the production path that hung
+        # before the O(window) fix), the anchored ranking must return promptly,
+        # keep the repo floor, and surface the relevant spool doc — not let 20
+        # flooding spool docs crowd out the repo.
+        from library.embedding_matrix import (
+            build_doc_embedding_matrix, matrix_dir_for,
+        )
+
+        def _e(*xs):
+            a = np.zeros(3, dtype=np.float32)
+            for i, x in enumerate(xs):
+                a[i] = x
+            return a
+
+        e_q = _e(1.0, 1.0, 0.0)
+        lib = Library(tmp_path / 'matrix.db')
+        try:
+            ra = lib.add_document(
+                'explanation', 'RepoTopic A', 'a', embedding=_e(0, 1, 0),
+                metadata={'provenance': CODE_PROVENANCE})
+            rb = lib.add_document(
+                'explanation', 'RepoTopic B', 'b', embedding=_e(0.1, 1, 0),
+                metadata={'provenance': CODE_PROVENANCE})
+            gr = lib.add_document(
+                'explanation', 'GroundRelevant', 'g', embedding=_e(1, 1, 0),
+                metadata={'provenance': OFFICIAL_DOC_PROVENANCE},
+                source_name='spool:databricks', _allow_reserved_source=True)
+            for i in range(20):
+                lib.add_document(
+                    'catalog', f'GroundNoise {i}', 'n', embedding=_e(1, 0, 0),
+                    metadata={'provenance': OFFICIAL_DOC_PROVENANCE},
+                    source_name='spool:databricks', _allow_reserved_source=True)
+            build_doc_embedding_matrix(lib, matrix_dir_for(lib))
+
+            class _FakeEmbed:
+                async def embed(self, *_a, **_k):
+                    return e_q
+
+            class _FakeResolution:
+                def scope_sources(self):
+                    return frozenset({'spool:databricks'})
+
+                def fingerprint(self):
+                    return 'fp'
+
+            svc = AriadneService()
+            svc._library = lib
+            svc._embedding_service = _FakeEmbed()
+            monkeypatch.setattr(svc, '_resolve_scope', lambda *a, **k: lib)
+            monkeypatch.setattr(
+                'spools.resolve_spools', lambda *a, **k: _FakeResolution())
+
+            resp = await svc._search_uncached(query='hybrid', limit=4)
+            titles = [d.title for d in resp.documents]
+            assert any(t.startswith('RepoTopic') for t in titles), titles
+            assert 'GroundRelevant' in titles, titles
+        finally:
+            lib.close()
