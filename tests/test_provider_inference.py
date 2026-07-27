@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import pytest
 
+from cli.generate import resolve_provider
+from config import Config
+
 
 def test_infer_provider_for_gpt_models():
     from cli.generate import infer_provider_from_model
@@ -85,3 +88,36 @@ def test_resolve_provider_unknown_model_defaults_to_openai():
     assert resolve_provider(
         cli_provider=None, cfg_provider=None, model='custom-model-xyz',
     ) == 'openai'
+
+
+def test_configured_provider_is_none_when_unset(tmp_path):
+    """``config.provider`` keeps its 'openai' effective default (direct
+    consumers rely on a string), but ``configured_provider`` is None when the
+    user set no ``provider:`` — so ``resolve_provider`` can infer from the model
+    instead of mistaking the default for an explicit choice."""
+    p = tmp_path / 'ariadne.yaml'
+    p.write_text('model: claude-opus-4-8\nsources: {}\n')
+    cfg = Config(config_path=p)
+    assert cfg.configured_provider is None
+    assert cfg.provider == 'openai'   # effective default preserved
+
+
+def test_configured_provider_returns_explicit_value(tmp_path):
+    p = tmp_path / 'ariadne.yaml'
+    p.write_text('provider: anthropic\nsources: {}\n')
+    cfg = Config(config_path=p)
+    assert cfg.configured_provider == 'anthropic'
+
+
+def test_claude_model_unset_provider_resolves_anthropic(tmp_path):
+    """The container-onboard scenario: a Claude model chosen at call time with
+    no ``provider:`` in config must resolve to anthropic, not fail-fast against
+    the 'openai' default. Regression for the Provider-mismatch onboard failure."""
+    p = tmp_path / 'ariadne.yaml'
+    p.write_text('sources: {}\n')   # nothing set; model comes from the call
+    cfg = Config(config_path=p)
+    assert resolve_provider(
+        cli_provider=None,
+        cfg_provider=cfg.configured_provider,
+        model='claude-opus-4-8',
+    ) == 'anthropic'

@@ -77,7 +77,7 @@ async def chat_complete(
 
     provider_name = resolve_provider(
         cli_provider=None,
-        cfg_provider=getattr(cfg, 'provider', None),
+        cfg_provider=getattr(cfg, 'configured_provider', None),
         model=model,
     )
 

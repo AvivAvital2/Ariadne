@@ -122,7 +122,7 @@ def resolve_batch_strategy(args, cfg):
     model = getattr(args, 'model', None) or cfg.model
     provider = resolve_provider(
         cli_provider=getattr(args, 'provider', None),
-        cfg_provider=getattr(cfg, 'provider', None),
+        cfg_provider=getattr(cfg, 'configured_provider', None),
         model=model,
     )
     key_env = 'OPENAI_API_KEY' if provider == 'openai' else 'ANTHROPIC_API_KEY'
@@ -548,7 +548,7 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
 
     provider = resolve_provider(
         cli_provider=args.provider,
-        cfg_provider=getattr(cfg, 'provider', None),
+        cfg_provider=getattr(cfg, 'configured_provider', None),
         model=model,
     )
 

@@ -283,6 +283,11 @@ class Config:
         """
         self._config: dict[str, Any] = dict(DEFAULTS)
         self._config_path: Path | None = None
+        # Keys the user set EXPLICITLY (file top-level or under ``defaults:``),
+        # so accessors can distinguish an explicit value from the DEFAULTS seed
+        # above (e.g. configured_provider: an unset provider must infer from the
+        # model, not read the seeded 'openai').
+        self._explicit_keys: set[str] = set()
 
         if config_path:
             self._load_from_path(config_path)
@@ -328,8 +333,10 @@ class Config:
                 for dk, dv in value.items():
                     if dk in DEFAULTS:
                         self._config[dk] = dv
+                        self._explicit_keys.add(dk)
             else:
                 self._config[key] = value
+                self._explicit_keys.add(key)
 
         self._validate()
 
@@ -553,6 +560,19 @@ class Config:
         Defaults to ``"openai"`` for backwards-compat.
         """
         return self._from_defaults('provider', 'openai')
+
+    @property
+    def configured_provider(self) -> str | None:
+        """The provider the user EXPLICITLY set, or ``None`` if unset.
+
+        ``provider`` above always returns a string ('openai' default) because
+        ``_config`` is seeded from DEFAULTS — so it can't tell "user chose
+        openai" from "defaulted". ``resolve_provider`` needs that: given ``None``
+        it infers the provider from the *model* (``claude-*`` → anthropic), so a
+        Claude model needs no manual ``provider: anthropic``; only an
+        explicit-but-conflicting provider fails fast.
+        """
+        return self._from_defaults('provider', None) if 'provider' in self._explicit_keys else None
 
     @property
     def db_path(self) -> str:

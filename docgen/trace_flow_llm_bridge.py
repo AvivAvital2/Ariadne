@@ -337,7 +337,7 @@ def _completion_from_config() -> Callable[[str], str | None]:
     model = cfg.model
     provider = resolve_provider(
         cli_provider=None,
-        cfg_provider=getattr(cfg, 'provider', None),
+        cfg_provider=getattr(cfg, 'configured_provider', None),
         model=model,
     )
     api_key = (

@@ -281,12 +281,18 @@ async def cmd_sync(args: argparse.Namespace) -> int:
                     'expires_at': expires_at.isoformat(),
                 }
 
+                from cli.generate import resolve_provider
                 _scip_cfg = cfg.get_source_scip_config(source_name)
                 config = OrchestratorConfig(
                     source_path=source_path,
                     db_path=args.db or Path(cfg.db_path),
                     staleness_db_path=Path(cfg.staleness_db_path),
                     model=cfg.model,
+                    # provider follows the MODEL (claude-* → anthropic) unless
+                    # ariadne.yaml sets it explicitly — else OrchestratorConfig
+                    # defaults to 'openai' and 404's every Anthropic request.
+                    provider=resolve_provider(
+                        cli_provider=None, cfg_provider=cfg.configured_provider, model=cfg.model),
                     doc_types=('explanation', 'architecture', 'catalog', 'qa', 'gotcha', 'diagram'),
                     force_regenerate=True,
                     source_config=_scip_cfg,
@@ -503,6 +509,7 @@ async def cmd_sync(args: argparse.Namespace) -> int:
             console.print()
             console.print('Regenerating documentation for changed files...')
 
+            from cli.generate import resolve_provider
             from docgen.orchestrator import DocGenOrchestrator, OrchestratorConfig
 
             _scip_cfg = cfg.get_source_scip_config(source_name)
@@ -511,11 +518,13 @@ async def cmd_sync(args: argparse.Namespace) -> int:
                 db_path=args.db or Path(cfg.db_path),
                 staleness_db_path=Path(cfg.staleness_db_path),
                 model=cfg.model,
-                # Without ``provider=``, OrchestratorConfig falls back
-                # to ``'openai'`` regardless of what ``ariadne.yaml``
-                # sets — silently routing Anthropic models to OpenAI's
-                # endpoint and 404'ing every request. Pass it through.
-                provider=cfg.provider,
+                # provider follows the MODEL (claude-* → anthropic) unless
+                # ariadne.yaml sets it explicitly — resolve_provider infers it
+                # from cfg.model when unset (cfg.provider's 'openai' default
+                # otherwise silently 404's Anthropic models). An explicit
+                # conflicting provider fail-fasts.
+                provider=resolve_provider(
+                    cli_provider=None, cfg_provider=cfg.configured_provider, model=cfg.model),
                 doc_types=('explanation', 'architecture', 'catalog', 'qa', 'gotcha', 'diagram'),
                 force_regenerate=True,
                 source_config=_scip_cfg,
