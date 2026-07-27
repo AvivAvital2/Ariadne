@@ -117,6 +117,8 @@ def _detect_language(path: Path) -> str | None:
         return 'scala'
     if ext == '.java':
         return 'java'
+    if ext == '.go':
+        return 'go'
     if ext == '.rst':
         return 'rst'
     if path.name == 'Dockerfile' or path.name.startswith('Dockerfile.') or ext == '.dockerfile':

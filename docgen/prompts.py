@@ -717,6 +717,7 @@ LANGUAGE_FENCE: dict[str, str] = {
     'scala': 'scala',
     'java': 'java',
     'rst': 'rst',
+    'go': 'go',
 }
 
 LANGUAGE_FRAMING: dict[str, str] = {
@@ -729,6 +730,7 @@ LANGUAGE_FRAMING: dict[str, str] = {
     'scala': 'Scala',
     'java': 'Java',
     'rst': 'reStructuredText',
+    'go': 'Go',
 }
 
 LANGUAGE_DOC_TYPES: dict[str, tuple[DocType, ...]] = {
@@ -743,6 +745,7 @@ LANGUAGE_DOC_TYPES: dict[str, tuple[DocType, ...]] = {
     'scala':      ('explanation', 'architecture', 'qa', 'catalog', 'gotcha', 'diagram'),
     'java':       ('explanation', 'architecture', 'qa', 'catalog', 'gotcha', 'diagram'),
     'rst':        ('explanation', 'architecture', 'qa', 'gotcha'),
+    'go':         ('explanation', 'architecture', 'qa', 'catalog', 'gotcha', 'diagram'),
 }
 
 
