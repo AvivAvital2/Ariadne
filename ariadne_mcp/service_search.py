@@ -75,7 +75,9 @@ def _trim_related_documents(content: str, max_links: int = 5) -> str:
 # routed result set). v4 = entity-cap + reserved semantic fill in
 # select_spool_docs (fuse/expert-only result sets change). v5 =
 # surface-scoped fallback (no-crisp result sets change where tags exist).
-_RETRIEVAL_CACHE_VERSION = 5
+# v6 = matrix-recovery accessor: semantic fill/ordering return where a stale
+# matrix left them dark — matrix-less cached rows must not replay.
+_RETRIEVAL_CACHE_VERSION = 6
 
 class SearchMixin:
     """Search implementation with multi-phase ranking.
