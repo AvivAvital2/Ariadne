@@ -298,20 +298,54 @@ def make_app(bridge=None, *, server_params=None, mcp_url=None) -> web.Applicatio
 
 
 async def _startup_connect(app: web.Application) -> None:
-    stack = AsyncExitStack()
-    url = app.get('_mcp_url')
-    if url:
-        app['bridge'] = await connect_http(stack, url)
-    else:
-        params = app['_server_params'] or stdio_server_params()
-        app['bridge'] = await connect_stdio(stack, params)
-    app['_mcp_stack'] = stack
+    """Open the MCP connection in one long-lived task (see ``_mcp_lifecycle``).
+
+    aiohttp runs ``on_startup`` and ``on_cleanup`` in different tasks, but the
+    MCP client opens an anyio cancel scope that must be exited in the task it
+    was entered in. So the whole connection lifetime is owned by a single
+    background task instead of being entered here and closed from the cleanup
+    task — otherwise shutdown raises "Attempted to exit cancel scope in a
+    different task than it was entered in" and the server can't stop cleanly.
+    """
+    app['_mcp_ready'] = asyncio.Event()
+    app['_mcp_stop'] = asyncio.Event()
+    app['_mcp_task'] = asyncio.create_task(_mcp_lifecycle(app))
+    await app['_mcp_ready'].wait()
+    error = app.get('_mcp_error')
+    if error is not None:
+        raise error
+
+
+async def _mcp_lifecycle(app: web.Application) -> None:
+    """Own the MCP connection for the server's lifetime, in this one task.
+
+    Opens the bridge, publishes it on ``app['bridge']``, then parks until
+    shutdown — so the connect context managers are entered and exited in the
+    same task, never across the aiohttp startup/cleanup task boundary.
+    """
+    try:
+        async with AsyncExitStack() as stack:
+            url = app.get('_mcp_url')
+            if url:
+                app['bridge'] = await connect_http(stack, url)
+            else:
+                params = app['_server_params'] or stdio_server_params()
+                app['bridge'] = await connect_stdio(stack, params)
+            app['_mcp_ready'].set()
+            await app['_mcp_stop'].wait()
+    except Exception as exc:  # surface a startup failure to _startup_connect
+        app['_mcp_error'] = exc
+        app['_mcp_ready'].set()
 
 
 async def _cleanup_disconnect(app: web.Application) -> None:
-    stack = app.get('_mcp_stack')
-    if stack is not None:
-        await stack.aclose()
+    """Signal the lifecycle task to close the MCP connection, then wait for it."""
+    stop = app.get('_mcp_stop')
+    task = app.get('_mcp_task')
+    if stop is not None:
+        stop.set()
+    if task is not None:
+        await task
 
 
 def serve(host: str = '127.0.0.1', port: int = 8765, *,
