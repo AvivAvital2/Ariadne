@@ -178,6 +178,34 @@ def test_source_group_evolves_through_contract(monkeypatch, tmp_path):
     # Omitting the flag leaves the default (off), not None-clobbered.
     assert cfg.get_source_config('delta').skip_dependency_detection is False
 
+    # ---- D9: `remove --purge` also deletes the source's DB data ------
+    # Plain `remove` is config-only; `--purge` additionally clears the
+    # source's documents from the library DB, leaving other sources intact.
+    from library import Library
+
+    src_z = tmp_path / 'repo_zeta'
+    src_z.mkdir()
+    assert _run(['source', 'add', 'zeta', '--path', str(src_z)]) == 0
+    db_path = _fresh_config(cfg_path).db_path
+    with Library(db_path) as lib:
+        lib.add_document('catalog', 'z title', 'z body',
+                         source_files=['zeta/f.py'],
+                         metadata={'qualified_name': 'zeta.pkg.z'},
+                         doc_id='zeta-d1', source_name='zeta')
+        lib.add_document('catalog', 'keep title', 'keep body',
+                         source_files=['epsilon/f.py'],
+                         metadata={'qualified_name': 'epsilon.pkg.k'},
+                         doc_id='eps-d1', source_name='epsilon')
+
+    assert _run(['source', 'remove', 'zeta', '--purge', '--yes']) == 0
+    # Config entry gone…
+    assert _fresh_config(cfg_path).get_source_config('zeta') is None
+    # …AND its documents purged from the DB, other sources untouched.
+    with Library(db_path) as lib:
+        remaining = {m.source_name for m in lib.list_documents_lite()}
+    assert 'zeta' not in remaining
+    assert 'epsilon' in remaining
+
 
 def test_source_add_honors_explicit_config_over_package_fallthrough(monkeypatch, tmp_path):
     """`source add` with an explicit $ARIADNE_CONFIG must bootstrap THERE,

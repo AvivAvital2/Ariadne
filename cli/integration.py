@@ -99,6 +99,8 @@ def register_commands(subparsers):
     src_rm.add_argument('name', nargs='?', help='Source name to remove')
     src_rm.add_argument('--yes', '-y', action='store_true',
                         help='Skip the confirmation prompt')
+    src_rm.add_argument('--purge', action='store_true',
+                        help='Also delete the source data (documents, chunks, SCIP rows) from the library DB and rebuild the embedding matrix')
 
 
 def cmd_manifest(args: argparse.Namespace) -> int:
@@ -720,6 +722,28 @@ def _cmd_source_remove(args: argparse.Namespace) -> int:
         return 1
 
     console.print(f'[green]Removed source [bold]{name}[/bold].[/green]')
+    if getattr(args, 'purge', False):
+        from library import Library
+        from library.embedding_matrix import (
+            ARTIFACT_NAME, META_NAME, ensure_matrix, matrix_dir_for,
+        )
+        from library.purge import purge_source
+        with Library(cfg.db_path) as library:
+            summary = purge_source(library, name)
+            if summary.total == 0:
+                console.print(f'[dim]No indexed DB data for {name!r}.[/dim]')
+            else:
+                console.print(
+                    f'[green]Purged {summary.total} DB row(s) for '
+                    f'[bold]{name}[/bold][/green] '
+                    f'({summary.counts.get("documents", 0)} documents).'
+                )
+                matrix_dir = matrix_dir_for(library)
+                if (matrix_dir / ARTIFACT_NAME).exists():
+                    (matrix_dir / ARTIFACT_NAME).unlink()
+                    (matrix_dir / META_NAME).unlink(missing_ok=True)
+                    ensure_matrix(library)
+                    console.print('[dim]Rebuilt the embedding matrix.[/dim]')
     return 0
 
 
