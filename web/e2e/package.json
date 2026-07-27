@@ -1,0 +1,13 @@
+{
+  "name": "ariadne-web-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cypress E2E for the Ariadne web UI (Ask console + onboarding wizard).",
+  "scripts": {
+    "cy:run": "cypress run",
+    "cy:open": "cypress open"
+  },
+  "devDependencies": {
+    "cypress": "^13.15.0"
+  }
+}
