@@ -433,6 +433,20 @@ def _run_log_handlers(db_path: Path, verbose: bool):
         if getattr(h, '_ariadne_run_log', False):
             root.removeHandler(h)
 
+    # Raising root to INFO (below) for the file handler would also leak INFO to
+    # any pre-existing console handler (e.g. the NOTSET StreamHandler that
+    # basicConfig installs), flooding stderr and corrupting the progress bar.
+    # Pin such console handlers to WARNING for the run — INFO detail lives in
+    # the file, not the console. (--debug adds its own DEBUG console stream.)
+    pinned_console: list[tuple[logging.Handler, int]] = []
+    if not verbose:
+        for h in root.handlers:
+            if (isinstance(h, logging.StreamHandler)
+                    and not isinstance(h, logging.FileHandler)
+                    and h.level < logging.WARNING):
+                pinned_console.append((h, h.level))
+                h.setLevel(logging.WARNING)
+
     fmt = logging.Formatter('%(asctime)s %(name)s %(levelname)s %(message)s')
     file_handler = logging.FileHandler(log_path, encoding='utf-8')
     file_handler._ariadne_run_log = True
@@ -461,6 +475,8 @@ def _run_log_handlers(db_path: Path, verbose: bool):
                 h.close()
             except Exception:
                 pass
+        for h, lvl in pinned_console:
+            h.setLevel(lvl)
         root.setLevel(prior_level)
 
 
