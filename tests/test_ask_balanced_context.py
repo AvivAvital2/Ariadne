@@ -81,6 +81,27 @@ class TestEnvironmentLabel:
         from ariadne_mcp.service_analysis import _environment_label
         assert _environment_label(SimpleNamespace(registered={})) is None
 
+    def test_provenance_line_pins_and_licenses(self):
+        # Board rows 12+13 (anti-gap-fill provenance): 'which exact corpus
+        # commit?' and 'what license?' answer from RESOLUTION data — short
+        # shas from the manifest, license names from attribution when the
+        # build detected them; tolerant when absent.
+        from ariadne_mcp.service_analysis import _environment_provenance
+        registration = SimpleNamespace(manifest=SimpleNamespace(
+            corpus_shas={'quantumcore': 'abc123def4567890',
+                         'mesh-sdk': '9876543210fedcba'},
+            attribution=[
+                {'repo': 'quantumcore', 'license_name': 'Apache-2.0'},
+                {'repo': 'mesh-sdk'},
+            ]))
+        resolution = SimpleNamespace(registered={'env1': registration})
+        line = _environment_provenance(resolution)
+        assert 'quantumcore@abc123de (Apache-2.0)' in line
+        assert 'mesh-sdk@98765432' in line
+        assert 'license texts ship' in line.lower()
+        assert _environment_provenance(
+            SimpleNamespace(registered={})) is None
+
     def test_components_ride_the_label(self):
         # A/B eval finding (Q8): 'which versions ship in our runtime?' —
         # the product answered 'cannot answer' while the manifest HELD
@@ -163,6 +184,20 @@ class TestLabeledAssembly:
         out = _assemble_ask_context(
             [_cdoc('s0', 'spool:env1')], frozenset({'spool:env1'}))
         assert 'Pinned version facts' not in out          # absent -> absent
+
+    def test_provenance_line_rides_the_env_header(self):
+        from ariadne_mcp.service_analysis import _assemble_ask_context
+        for primary in ('repo', 'spool'):
+            out = _assemble_ask_context(
+                [_cdoc('s0', 'spool:env1'), _cdoc('r0', 'src1')],
+                frozenset({'spool:env1'}),
+                environment_label='env1 (runtime fake-17.3)',
+                provenance_line='Corpus pins: quantumcore@abc123de (Apache-2.0)',
+                primary=primary,
+            )
+            assert 'quantumcore@abc123de' in out
+            env_start = out.index('environment reference')
+            assert out.index('quantumcore@abc123de') > env_start
 
     def test_env_header_renders_without_env_docs_when_spool_enabled(self):
         # Second-round A/B finding (Q8): the pin question failed AGAIN

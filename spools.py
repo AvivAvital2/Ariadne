@@ -295,7 +295,9 @@ class SpoolManifest:
             'extraction_coverage_version': self.extraction_coverage_version,
             'attribution': [
                 {'repo': r['repo'], 'sha': r['sha'],
-                 'files': [dict(f) for f in r['files']]}
+                 'files': [dict(f) for f in r['files']],
+                 **({'license_name': r['license_name']}
+                    if r.get('license_name') else {})}
                 for r in self.attribution
             ],
         }
@@ -346,7 +348,9 @@ class SpoolManifest:
                      'files': tuple(
                          {'name': str(f.get('name', '')),
                           'sha256': str(f.get('sha256', ''))}
-                         for f in (r.get('files') or ()))}
+                         for f in (r.get('files') or ())),
+                     **({'license_name': str(r['license_name'])}
+                        if r.get('license_name') else {})}
                     for r in (data.get('attribution') or ())),
             )
         except (ValueError, TypeError) as exc:

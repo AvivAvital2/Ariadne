@@ -816,6 +816,27 @@ class TestSpoolPack:
                      if m.source_name == 'spool:fakebricks']
             assert [m.id for m in metas] == [doc.id]
 
+    def test_attribution_detects_license_names(self, tmp_path):
+        # Provenance row: the build detects the license IDENTIFIER from the
+        # shipped license text (Apache-2.0/MIT/BSD families); unknown texts
+        # carry no name rather than a guess.
+        from spool_pack import _license_name
+        assert _license_name(
+            'Apache License\nVersion 2.0, January 2004\n') == 'Apache-2.0'
+        assert _license_name(
+            'MIT License\n\nPermission is hereby granted, free of charge, '
+            'to any person...') == 'MIT'
+        assert _license_name('Some custom EULA text') is None
+
+        root = tmp_path / 'corpus'
+        (root / 'repo1').mkdir(parents=True)
+        (root / 'repo1' / '.ariadne-corpus-sha').write_text('abc\n')
+        (root / 'repo1' / 'LICENSE').write_text(
+            'Apache License\nVersion 2.0, January 2004\n')
+        from spool_pack import _gather_attribution
+        attribution, _blobs = _gather_attribution(root)
+        assert attribution[0]['license_name'] == 'Apache-2.0'
+
     def test_surface_tags_travel_with_pack(self, tmp_path):
         # Slice 3: build tags the corpus's doc-grade docs from the recipe's
         # surface vocabularies, the manifest carries the vocabularies (the

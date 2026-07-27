@@ -285,6 +285,14 @@ def _copy_surface_tags(src, dest, source_name):
         dconn.commit()
 
 
+def _license_name(text) -> str | None:
+    """The license IDENTIFIER for a license text, via the same marker table
+    the license gate uses (never a guess — unknown texts carry no name)."""
+    from spools import classify_license
+    _category, name = classify_license(text)
+    return name
+
+
 def _gather_attribution(source_root):
     """Scan corpus clones under ``source_root`` (each marked with the fetch's
     ``.ariadne-corpus-sha``) for their top-level LICENSE/NOTICE files, so the
@@ -303,6 +311,7 @@ def _gather_attribution(source_root):
         repo = repo_dir.name
         sha = marker.read_text(encoding='utf-8').strip()
         files = []
+        license_name = None
         for entry in sorted(repo_dir.iterdir()):
             low = entry.name.lower()
             if not entry.is_file() or not any(
@@ -312,8 +321,14 @@ def _gather_attribution(source_root):
             data = entry.read_bytes()
             blobs[f'licenses/{repo}/{entry.name}'] = data
             files.append({'name': entry.name, 'sha256': _sha256(data)})
+            if license_name is None and low.startswith('licen'):
+                license_name = _license_name(
+                    data.decode('utf-8', errors='ignore'))
         if files:
-            records.append({'repo': repo, 'sha': sha, 'files': tuple(files)})
+            record = {'repo': repo, 'sha': sha, 'files': tuple(files)}
+            if license_name:
+                record['license_name'] = license_name
+            records.append(record)
     return tuple(records), blobs
 
 
