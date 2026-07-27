@@ -1,0 +1,1527 @@
+<!DOCTYPE html>
+<!--
+  Ariadne - New Knowledge Base wizard (exploration mock, single self-contained file).
+  Opens directly in any browser (same spirit as graph_viewer.py).
+  Fuses three CLI steps into one guided flow:
+      ariadne source add  →  ariadne discover  →  ariadne onboard
+  Colors + fonts sampled from the Ariadne logo. The gold thread = your progress
+  through the labyrinth toward the knowledge core.
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ariadne · New Knowledge Base</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#03070f; --panel:#071630; --panel-2:#0a1d3c; --inset:#040c1c;
+  --line:#14315a; --line-soft:#0d2344;
+  --text:#f2f6fd; --muted:#bccae2; --faint:#8194b6;
+  --gold:#e7b834; --gold-bright:#fecd56; --gold-soft:rgba(231,184,52,.12); --gold-line:rgba(231,184,52,.4);
+  --cyan:#37cee4; --cyan-soft:rgba(55,206,228,.12); --cyan-line:rgba(55,206,228,.4);
+  --cream:#f0f0c0; --green:#3fd6a0; --red:#ff7a8a;
+  --display:"Jost","Century Gothic","Futura",sans-serif;
+  --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  --shadow:0 18px 50px -18px rgba(0,0,0,.7);
+}
+[data-theme="light"]{
+  --bg:#ffffff; --panel:#ffffff; --panel-2:#f7f9fd; --inset:#f4f6fb;
+  --line:#e4e8f1; --line-soft:#eef1f7;
+  --text:#0f1b35; --muted:#46546f; --faint:#76849f;
+  --gold:#b9810e; --gold-bright:#dca015; --gold-soft:rgba(185,129,14,.10); --gold-line:rgba(185,129,14,.34);
+  --cyan:#0e8ba0; --cyan-soft:rgba(14,139,160,.10); --cyan-line:rgba(14,139,160,.34);
+  --cream:#8a7a2a; --green:#0a8f63; --red:#c43d50;
+  --shadow:0 14px 40px -18px rgba(40,60,110,.18);
+}
+[data-theme="light"] .rail .laby-bg{opacity:.14;filter:invert(1) hue-rotate(180deg) saturate(.75)}
+[data-theme="light"] .btn.primary{color:#241a04}
+[data-theme="light"] .step-item.done .meta .t{color:var(--muted)}
+[data-theme="light"] .core .orb,[data-theme="light"] .ready .big{box-shadow:0 0 22px rgba(185,129,14,.28)}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{
+  font-family:var(--sans); color:var(--text); font-size:14px; line-height:1.55;
+  background:
+    radial-gradient(900px 600px at 85% 110%, rgba(55,206,228,.06), transparent 60%),
+    radial-gradient(800px 600px at 12% -10%, rgba(231,184,52,.06), transparent 55%),
+    var(--bg);
+  -webkit-font-smoothing:antialiased; overflow:hidden;
+}
+.mono{font-family:var(--mono)} .serif{font-family:var(--display)}
+code{font-family:var(--mono);font-size:.92em}
+::selection{background:var(--gold-soft)}
+
+.wizard{display:grid;grid-template-columns:314px minmax(0,1fr);height:100dvh;max-height:100dvh;overflow:hidden}
+@media(max-width:760px){.wizard{grid-template-columns:1fr}}
+
+/* ════════ LEFT RAIL ════════ */
+.rail{position:relative;background:linear-gradient(180deg,var(--panel-2),var(--bg));border-right:1px solid var(--line);padding:30px 34px;display:flex;flex-direction:column;overflow:hidden}
+.rail .laby-bg{position:absolute;left:50%;bottom:-70px;transform:translateX(-50%);width:420px;opacity:.10;pointer-events:none;filter:saturate(1.1)}
+.brand{display:flex;align-items:center;gap:13px;position:relative;z-index:1}
+.brand .mk{width:42px;height:42px;border-radius:10px;border:1px solid var(--line)}
+.brand .wm{height:23px;width:auto}
+[data-theme="light"] .brand .wm{filter:invert(1)}
+.brand .w{font-family:var(--display);font-weight:400;font-size:22px;letter-spacing:.34em}
+.brand .w b{color:var(--gold)}
+.rail .kicker{margin:26px 0 6px;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--faint);position:relative;z-index:1}
+.rail h2{font-family:var(--display);font-weight:400;font-size:20px;letter-spacing:.02em;line-height:1.35;position:relative;z-index:1;margin-bottom:30px}
+
+/* step list with the thread */
+.steps{position:relative;z-index:1;flex:1}
+.steps::before{content:"";position:absolute;left:13px;top:var(--track-top,14px);height:var(--track-h,200px);width:2px;background:var(--line)}
+.steps .fill{position:absolute;left:13px;top:14px;width:2px;background:linear-gradient(180deg,var(--gold-bright),var(--gold));box-shadow:0 0 12px var(--gold);transition:height .5s cubic-bezier(.4,0,.2,1);border-radius:2px}
+.step-item{position:relative;display:flex;gap:16px;padding:0 0 26px 0;cursor:pointer}
+.step-item .node{width:28px;height:28px;border-radius:50%;flex:none;background:var(--inset);border:2px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--faint);z-index:1;transition:.3s}
+.step-item .meta .t{font-family:var(--display);font-size:14.5px;font-weight:600;color:var(--muted);transition:.2s;letter-spacing:.02em}
+.step-item .meta .d{font-size:11.5px;color:var(--faint);margin-top:1px}
+.step-item .meta .cli{font-family:var(--mono);font-size:10.5px;color:var(--faint);opacity:.7;margin-top:4px}
+.step-item.done .node{background:var(--gold);border-color:var(--gold);color:#1a1206;box-shadow:0 0 14px var(--gold-soft)}
+.step-item.current .node{border-color:var(--gold);color:var(--gold-bright);box-shadow:0 0 0 4px var(--gold-soft),0 0 16px var(--gold-soft)}
+.step-item.current .meta .t{color:var(--text)}
+.step-item.done .meta .t{color:#c7d3ea}
+
+.core{position:relative;z-index:1;display:flex;align-items:center;gap:13px;padding-top:18px;border-top:1px solid var(--line)}
+.core .orb{width:34px;height:34px;border-radius:50%;flex:none;background:radial-gradient(circle at 50% 45%,var(--cream),#9c8a3a 70%,transparent);box-shadow:0 0 22px rgba(240,240,192,.4);display:flex;align-items:center;justify-content:center;font-size:15px}
+.core .t{font-family:var(--display);font-size:13.5px;color:var(--cream)}
+.core .d{font-size:11px;color:var(--faint)}
+
+/* ════════ STAGE ════════ */
+.stage{display:flex;flex-direction:column;overflow:hidden;min-width:0;min-height:0}
+.stage-top{display:flex;align-items:center;padding:20px 40px;border-bottom:1px solid var(--line)}
+.stage-top .crumb{font-size:12px;color:var(--faint);letter-spacing:.04em}
+.stage-top .crumb b{color:var(--muted);font-weight:600}
+.stage-top .x{width:34px;height:34px;border:1px solid var(--line);border-radius:9px;color:var(--muted);background:var(--panel);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:15px}
+.stage-top .x:hover{border-color:var(--gold-line);color:var(--text)}
+.stage-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:40px 40px 30px}
+.stage-body::-webkit-scrollbar{width:10px}.stage-body::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
+.wrap{max-width:none}
+.eyebrow{display:flex;align-items:center;gap:10px;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);margin-bottom:12px;font-weight:600}
+.eyebrow .tag{font-family:var(--mono);text-transform:none;letter-spacing:0;color:var(--faint);background:var(--inset);border:1px solid var(--line);border-radius:6px;padding:2px 8px;font-size:10.5px;font-weight:500}
+h1.title{font-family:var(--display);font-weight:400;font-size:31px;letter-spacing:.05em;line-height:1.18;margin-bottom:9px}
+p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
+
+.step{display:none;max-width:680px} .step.on{display:block;animation:rise .4s ease-out}
+.step[data-step="3"],.step[data-step="4"],.step[data-step="5"]{max-width:none}
+#gen-running,#gen-ready{max-width:880px;margin:0 auto}
+.p4{display:grid;grid-template-columns:328px minmax(0,3fr) minmax(0,2fr);gap:20px;align-items:start;margin-top:20px}
+.p4-main{min-width:0}
+.p4-model{position:sticky;top:8px;min-width:0}
+.p4mh{font-size:13px;font-weight:600;padding:0 2px 9px;display:flex;align-items:center;gap:6px}
+.p4mh .tip{border-bottom:none;color:var(--cyan);cursor:help}
+.p4mh .tipbox{text-transform:none;letter-spacing:normal;font-weight:400;width:240px}
+.p4-model .modellist{margin-bottom:0}
+.p4-model .ml{display:grid;grid-template-columns:1fr auto;column-gap:8px;row-gap:2px;padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer;transition:.12s}
+.p4-model .ml:last-child{border-bottom:none}
+.p4-model .ml:hover{background:var(--panel)}
+.p4-model .ml.on{background:var(--gold-soft);box-shadow:inset 3px 0 0 var(--gold)}
+.p4-model .ml .mn{grid-area:1/1;font-weight:600;font-size:13px}
+.p4-model .ml .mp{grid-area:1/2;justify-self:end;font-family:var(--mono);font-size:10.5px;color:var(--faint);white-space:nowrap}
+.p4-model .ml .mv{grid-area:2/1;font-size:11px;color:var(--muted);line-height:1.35}
+.p4-model .ml .me{grid-area:2/2;justify-self:end;font-family:var(--mono);font-size:13px;color:var(--gold);font-weight:600}
+.p4-model .ml.on .me{color:var(--gold-bright)}
+.p4-model .provhdr{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--cyan);font-weight:700;padding:9px 12px 6px;border-top:1px solid var(--line);background:var(--inset)}
+.p4-model .provhdr:first-child{border-top:none}
+@media(max-width:1100px){.p4{grid-template-columns:1fr}.p4-model,.p4-side{position:static}}
+.p4-side{border:1px solid var(--line);border-radius:14px;background:var(--panel);overflow:hidden;position:sticky;top:8px}
+.p4-side .sidehead{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;border-bottom:1px solid var(--line);font-size:13px;font-weight:600;background:var(--inset)}
+.p4-side .sidehead .dtsum{font-family:var(--sans);font-size:11.5px;font-weight:500;color:var(--cyan)}
+.p4-side .exp{border:none;border-radius:0;max-height:540px;overflow-y:auto}
+.p4-side .exp .r .dir{width:auto;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p4-side .exp .bar{display:none}
+.p4-side .exp .files{width:auto;font-size:11px;flex:none}
+.p4-side .exp .cost{width:auto;flex:none}
+.p4-side .exp .r.leaf{padding-left:14px}
+.p4-side .exp .children .r.leaf{padding-left:30px}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+/* form bits */
+.field{margin-bottom:22px}
+.field label{display:block;font-size:13px;font-weight:600;margin-bottom:7px}
+.field .hint{font-size:12px;color:var(--faint);font-weight:400;margin-left:8px}
+.input{display:flex;align-items:center;gap:10px;background:var(--inset);border:1px solid var(--line);border-radius:11px;padding:12px 14px;transition:.15s}
+.input:focus-within{border-color:var(--gold-line);box-shadow:0 0 0 3px var(--gold-soft)}
+.input .pre{color:var(--faint);font-family:var(--mono);font-size:13px}
+.input input{flex:1;background:transparent;border:none;outline:none;color:var(--text);font-family:var(--mono);font-size:13.5px}
+.input .btn-mini{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:5px 11px;cursor:pointer;background:var(--panel)}
+.input .btn-mini:hover{border-color:var(--gold-line);color:var(--text)}
+
+.detected{display:flex;align-items:center;gap:12px;background:var(--cyan-soft);border:1px solid var(--cyan-line);border-radius:11px;padding:13px 15px;font-size:13px;margin-bottom:22px}
+.detected .ic{color:var(--cyan);font-size:16px}
+.detected b{color:var(--text)}
+.detected .muted{color:var(--muted)}
+
+.toggle{display:flex;align-items:center;gap:12px;padding:13px 15px;border:1px solid var(--line);border-radius:11px;background:var(--panel);margin-bottom:14px;cursor:pointer}
+.toggle .sw{width:40px;height:23px;border-radius:20px;background:var(--inset);border:1px solid var(--line);position:relative;flex:none;transition:.2s}
+.toggle .sw::after{content:"";position:absolute;top:2px;left:2px;width:17px;height:17px;border-radius:50%;background:var(--faint);transition:.2s}
+.toggle.on .sw{background:var(--gold-soft);border-color:var(--gold-line)}
+.toggle.on .sw::after{left:19px;background:var(--gold);box-shadow:0 0 8px var(--gold)}
+.toggle .tl{flex:1}.toggle .tl .t{font-weight:600;font-size:13px}.toggle .tl .d{font-size:11.5px;color:var(--faint)}
+
+.chipset{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px}
+.tchip{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:12px;background:var(--inset);border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:var(--muted)}
+.tchip .rm{color:var(--faint);cursor:pointer}.tchip .rm:hover{color:var(--red)}
+.tchip.add{cursor:pointer;border-style:dashed;color:var(--faint)} .tchip.add:hover{border-color:var(--cyan-line);color:var(--cyan)}
+.chipinput{font-family:var(--mono);font-size:12px;background:var(--inset);border:1px solid var(--cyan-line);border-radius:8px;padding:6px 10px;color:var(--text);outline:none;width:188px}
+.chipinput::placeholder{color:var(--faint)}
+.depmenu{position:absolute;top:38px;left:0;z-index:20;min-width:248px;background:var(--panel);border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow);padding:6px}
+.depmenu[hidden]{display:none}
+.depmenu .dmh{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);padding:8px 10px 5px}
+.depmenu .dmi{font-family:var(--mono);font-size:12.5px;padding:8px 10px;border-radius:7px;cursor:pointer;color:var(--text);display:flex;align-items:center}
+.depmenu .dmi:hover{background:var(--inset)}
+.depmenu .dmi.off{color:var(--faint);cursor:default}
+.depmenu .dmi.off:hover{background:transparent}
+.depmenu .dmi .added{margin-left:auto;color:var(--green);font-family:var(--sans);font-size:11px}
+
+.adv{margin-top:6px;border-top:1px solid var(--line);padding-top:14px;font-size:12.5px;color:var(--faint);cursor:pointer}
+
+/* discover panel */
+.langbar{display:flex;height:14px;border-radius:7px;overflow:hidden;margin:6px 0 14px;border:1px solid var(--line)}
+.langbar i{height:100%}
+.leg{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:24px}
+.leg span{display:flex;align-items:center;gap:6px}.leg .d{width:9px;height:9px;border-radius:2px}
+.plan{border:1px solid var(--line);border-radius:12px;overflow:visible;margin-bottom:18px}
+.tip{position:relative;display:inline-block;cursor:help;border-bottom:1px dotted var(--faint)}
+.tip .tipbox{position:absolute;top:142%;left:0;z-index:30;width:300px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:11px 13px;font-size:12px;font-weight:400;color:var(--muted);line-height:1.55;opacity:0;visibility:hidden;transform:translateY(-4px);transition:.15s}
+.tip:hover .tipbox{opacity:1;visibility:visible;transform:none}
+.tip .tipbox b{color:var(--text);font-weight:600}
+.tip .tipbox .dim{color:var(--faint)}
+.tip .tipbox::after{content:"";position:absolute;bottom:100%;left:18px;border:6px solid transparent;border-bottom-color:var(--line)}
+.plan .row{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid var(--line);font-size:13px}
+.plan .row:last-child{border-bottom:none}
+.plan .row .lang{font-weight:600;width:120px}
+.plan .row .arrow{color:var(--faint)}
+.plan .row .kind{font-family:var(--mono);font-size:12px;color:var(--cyan)}
+.plan .row .note{margin-left:auto;color:var(--faint);font-size:11.5px}
+.plan .row .ok{color:var(--green)}
+.plan .row .cap{font-size:13px;color:var(--cyan);font-weight:600}
+.plan .row .cap.struct{color:var(--muted);font-weight:500}
+/* Material Icon Theme glyphs */
+.mi{width:16px;height:16px;flex:none;display:inline-block;vertical-align:-3px}
+.plan .prow .mi{width:19px;height:19px;margin-right:1px;vertical-align:-4px}
+.plan .pkg .mi{width:15px;height:15px;margin-right:5px;vertical-align:-3px}
+.dtmatrix .h .mi{width:16px;height:16px;margin-bottom:3px}
+.p4-side .exp .r .mi{width:16px;height:16px;margin-right:7px;vertical-align:-3px}
+.plan .prow .lang .mi{width:16px;height:16px;margin-right:4px;vertical-align:-3px}
+.plan .prow{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px}
+.plan .prow:hover{background:var(--panel)}
+.plan .prow .disc{width:12px;text-align:center;color:var(--faint);font-size:9px;flex:none}
+.plan .prow .lang{font-weight:600;width:170px;flex:none;display:flex;align-items:center}
+.plan .prow .arrow{color:var(--faint)}
+.plan .prow .cap{color:var(--cyan);font-weight:600}
+.plan .prow .cap.struct{color:var(--muted);font-weight:500}
+.plan .prow .pmeta{margin-left:auto;color:var(--faint);font-size:11.5px}
+.plan .pkgs{display:none;border-bottom:1px solid var(--line);background:var(--inset);padding:4px 0}
+.plan .pkgs.open{display:block}
+.plan .pkgs .detect{font-size:12px;color:var(--muted);padding:8px 16px 6px 40px}
+.plan .pkgs .detect code{color:var(--cyan);font-family:var(--mono)}
+.plan .pkgs .pkghdr{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--cyan);font-weight:700;padding:6px 16px 4px 40px}
+.plan .pkgs .pkghdr .pkghdrsub{text-transform:none;letter-spacing:0;font-weight:400;color:var(--faint)}
+.plan .pkgs .pkghdr .tip{border-bottom:none;color:var(--cyan);cursor:help}
+.plan .pkgs .pkghdr .tipbox{text-transform:none;letter-spacing:normal;font-weight:400;width:280px}
+.plan .pkgs .pkg{display:flex;align-items:center;gap:9px;padding:5px 16px 5px 40px;font-family:var(--mono);font-size:12.5px;color:var(--text)}
+.plan .pkgs .pkg .pkgic{color:var(--gold);flex:none}
+.plan .pkgs .pkg .pm2{margin-left:auto;font-family:var(--sans);font-size:11px;color:var(--faint)}
+.plan .pkgs .pkg.dim{color:var(--faint)}
+.plan .pkgs .pkg.dim .mi{opacity:.5}
+.plan > div:last-child{border-bottom:none}
+.note-managed{font-size:12.5px;color:var(--muted);background:var(--inset);border:1px solid var(--line);border-radius:10px;padding:12px 15px;line-height:1.6}
+.note-managed div{padding:2px 0}
+.note-managed b{color:var(--text);font-weight:600}
+.okmark{color:var(--green);font-weight:700;margin-right:5px}
+.note-managed code{color:var(--cyan)}
+
+/* explorer */
+.cost-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:18px;border:1px solid var(--line);border-radius:13px;padding:16px 18px;background:linear-gradient(135deg,var(--panel),var(--inset))}
+.cost-head .l .k{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+.cost-head .l .v{font-family:var(--display);font-size:32px;font-weight:700;color:var(--gold-bright)}
+.cost-head .l .v small{display:block;font-family:var(--sans);font-size:12px;color:var(--faint);font-weight:500;margin-top:1px}
+.cost-head .l .costnote{font-size:11.5px;color:var(--faint);margin-top:5px}
+.cost-head .r{text-align:right;font-size:12px;color:var(--faint);display:flex;flex-direction:column;align-items:flex-end;gap:7px}
+.cost-head .r .free{color:var(--green);font-weight:600}
+.exp{border:1px solid var(--line);border-radius:13px;overflow:hidden}
+.exp .r{display:flex;align-items:center;gap:13px;padding:12px 16px;border-bottom:1px solid var(--line);cursor:pointer;transition:.12s}
+.exp .r:last-child{border-bottom:none}
+.exp .r:hover{background:var(--panel)}
+.exp .r .cb{width:18px;height:18px;border-radius:5px;border:2px solid var(--gold-line);flex:none;display:flex;align-items:center;justify-content:center;color:#1a1206;font-size:11px;background:var(--gold)}
+.exp .r.off .cb{background:transparent;border-color:var(--line);color:transparent}
+.exp .r.off{opacity:.5}
+.exp .r.off .dir{text-decoration:line-through}
+.exp .r .dir{font-family:var(--mono);font-size:13px;width:160px}
+.exp .r .files{font-size:12px;color:var(--faint);width:78px}
+.exp .r .bar{flex:1;height:7px;background:var(--inset);border-radius:5px;overflow:hidden}
+.exp .r .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--cyan),var(--gold))}
+.exp .r .cost{font-family:var(--mono);font-size:12.5px;width:64px;text-align:right;color:var(--muted)}
+.exp .disc{width:12px;text-align:center;color:var(--faint);font-size:9px;flex:none}
+.exp .r.gdir{cursor:pointer}
+.exp .r.leaf{padding-left:46px}
+.exp .r.leaf .dir{color:var(--muted)}
+.exp .r.leaf .cost{margin-left:auto}
+.exp .children{display:none;margin-left:22px;border-left:2px solid var(--line)}
+.exp .children.open{display:block}
+.exp .rootsep{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:9px 16px 4px;font-weight:600;border-top:1px solid var(--line);margin-top:2px}
+.exp .children .r{border-top:1px dashed var(--line)}
+.doctypes{margin-top:18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
+.dt{font-size:11.5px;border:1px solid var(--line);border-radius:20px;padding:4px 11px;background:var(--inset);color:var(--muted)}
+.dt.on{border-color:var(--gold-line);color:var(--gold);background:var(--gold-soft)}
+.dtmatrix{border:1px solid var(--line);border-radius:12px;overflow:visible;margin-top:8px}
+/* doc-type accordion (#1): each row is a doc type — the head shows its value +
+   details (files · formats · cost) + on/off; expanding lists EVERY applicable
+   format as wrapping chips, so there's no fixed language-column cap. */
+.dtmatrix .dtrow{border-bottom:1px solid var(--line)}
+.dtmatrix .dtrow:last-child{border-bottom:none}
+.dtmatrix .dtrow.off{opacity:.5}
+.dtmatrix .dthead{display:flex;align-items:center;gap:11px;padding:12px 16px;cursor:pointer}
+.dtmatrix .dthead:hover{background:var(--panel)}
+.dtmatrix .dchev{color:var(--faint);font-size:11px;flex:none;width:10px;text-align:center;transition:transform .15s}
+.dtmatrix .dtrow.open .dchev{transform:rotate(90deg)}
+.dtmatrix .dthead .dcb{margin-top:0}
+.dtmatrix .dthead .ic{font-size:15px;flex:none;width:18px;text-align:center}
+.dtmatrix .dthead .dt-txt{flex:1;min-width:0}
+.dtmatrix .dthead .nm{font-weight:600;font-size:13.5px}
+.dtmatrix .dthead .ds{font-size:12px;color:var(--muted);line-height:1.4;margin-top:2px}
+.dtmatrix .dtmeta{display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex:none;text-align:right}
+.dtmatrix .dtmeta .dtf{font-size:10.5px;color:var(--faint);white-space:nowrap}
+.dtmatrix .dtmeta .tprice{font-family:var(--mono);font-size:12.5px;color:var(--gold-bright);font-weight:700}
+.dtmatrix .dtfmts{display:none;flex-wrap:wrap;gap:7px;padding:0 16px 13px 45px}
+.dtmatrix .dtrow.open .dtfmts{display:flex}
+.dtmatrix .fchip{font-size:11.5px;border:1px solid var(--gold-line);border-radius:8px;padding:4px 10px;background:var(--gold-soft);color:var(--gold);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;cursor:pointer;user-select:none;transition:opacity .12s ease,border-color .12s ease}
+.dtmatrix .fchip small{color:var(--faint);font-weight:400}
+.dtmatrix .fchip .fpr{color:var(--cream);font-weight:600}
+.dtmatrix .fchip .fck{font-size:10px;font-weight:700;line-height:1}
+.dtmatrix .fchip:hover{border-color:var(--gold)}
+.dtmatrix .fchip.fx{opacity:.45;text-decoration:line-through;background:transparent;border-style:dashed}
+.dtmatrix .fchip.fx small{text-decoration:line-through}
+.dtmatrix .fnone{font-size:11.5px;color:var(--faint);padding:4px 0}
+.dtmatrix .dtrow.off .dcb{background:transparent;border-color:var(--line);color:transparent}
+.dtlabel{margin-top:22px;font-size:13px;font-weight:600}
+.collapsed{display:none}
+.collapsible{cursor:pointer;user-select:none}
+.chev{display:inline-block;color:var(--faint);font-size:11px;margin-right:5px;transition:color .15s}
+.cost-head.collapsible:hover .chev,.dtlabel.collapsible:hover .chev{color:var(--gold)}
+
+/* generate */
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:6px}
+.seg button{background:transparent;border:none;color:var(--muted);font-family:var(--sans);font-weight:600;font-size:13px;padding:10px 18px;cursor:pointer;display:flex;flex-direction:column;align-items:flex-start;gap:1px}
+.seg button small{font-weight:400;font-size:11px;color:var(--faint)}
+.seg button.on{background:var(--cyan-soft);color:var(--text)}
+.seg button.on small{color:var(--cyan)}
+.opts{display:flex;flex-direction:column;gap:10px}
+.opt{border:1px solid var(--line);border-radius:12px;padding:13px 16px;background:var(--panel);cursor:pointer;transition:.14s}
+.opt:hover{border-color:var(--cyan-line)}
+.opt.on{border-color:var(--gold-line);background:var(--gold-soft);box-shadow:0 0 0 1px var(--gold-line)}
+.opt .ohead{display:flex;align-items:center;gap:10px}
+.opt .oname{font-weight:600;font-size:14px}
+.opt .orec{font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--cyan);border:1px solid var(--cyan-line);border-radius:20px;padding:2px 8px}
+.opt .obadge{font-size:10.5px;border-radius:20px;padding:2px 9px;color:var(--gold);border:1px solid var(--gold-line)}
+.opt .obadge.alt{color:var(--cyan);border-color:var(--cyan-line)}
+.opt .oprice{margin-left:auto;font-family:var(--mono);font-size:13px;color:var(--gold)}
+.opt .odesc{font-size:12px;color:var(--muted);margin-top:5px;line-height:1.5}
+.opt code{color:var(--cyan)}
+.genest{font-size:13px;color:var(--muted);margin-top:14px}
+.genest b{color:var(--gold)}
+.provnote{font-size:12px;color:var(--muted);background:var(--cyan-soft);border:1px solid var(--cyan-line);border-radius:10px;padding:11px 14px;margin-top:16px;line-height:1.55}
+.provnote .pn-ic{color:var(--cyan);font-weight:700;margin-right:5px}
+.provnote b{color:var(--text);font-weight:600}
+.provnote code{color:var(--cyan)}
+.embnote{font-size:12px;color:var(--muted);margin-top:10px;background:var(--cyan-soft);border:1px solid var(--cyan-line);border-radius:10px;padding:9px 13px}
+.embnote b{color:var(--text)} .embnote code{color:var(--cyan)}
+.review{border:1px solid var(--line);border-radius:13px;overflow:hidden;margin:4px 0 18px}
+.review .rrow{display:grid;grid-template-columns:96px 1fr auto;gap:14px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);font-size:13.5px}
+.review .rrow:last-child{border-bottom:none}
+.review .rk{color:var(--faint);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:600}
+.review .rv{color:var(--text)}
+.review .redit{color:var(--cyan);font-size:12px;cursor:pointer;white-space:nowrap}
+.review .redit:hover{text-decoration:underline}
+.cbtotal{display:flex;align-items:center;justify-content:space-between;gap:16px;border:1px solid var(--gold-line);background:var(--gold-soft);border-radius:13px;padding:16px 18px;margin-bottom:18px}
+.cbtotal .cbk{font-weight:600;font-size:13.5px}
+.cbtotal .cbk small{display:block;color:var(--faint);font-weight:400;font-size:11.5px;margin-top:2px}
+.cbtotal .cbtotalv{font-family:var(--display);font-size:28px;font-weight:400;color:var(--gold-bright);white-space:nowrap}
+.estbadge{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--cyan);border:1px solid var(--cyan-line);border-radius:20px;padding:1px 8px;margin-left:8px;vertical-align:middle}
+.howtip{position:relative;display:inline-block;font-size:12px;color:var(--cyan);cursor:help;border-bottom:1px dotted var(--cyan-line)}
+.howtip .howbox{position:absolute;top:140%;right:0;z-index:30;width:330px;background:var(--panel);border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow);padding:13px 15px;font-size:12px;font-weight:400;color:var(--muted);line-height:1.55;opacity:0;visibility:hidden;transform:translateY(-4px);transition:.15s;text-align:left}
+.howtip:hover .howbox{opacity:1;visibility:visible;transform:none}
+.howtip .howbox b{color:var(--text);font-weight:600}
+.modelpick{display:flex;flex-wrap:wrap;gap:8px;position:relative}
+.mchip{border:1px solid var(--line);border-radius:11px;background:var(--panel);padding:10px 14px;cursor:pointer;transition:.14s;min-width:152px}
+.mchip:hover{border-color:var(--cyan-line)}
+.mchip.on{border-color:var(--gold-line);background:var(--gold-soft)}
+.mchip .mn{font-weight:600;font-size:13px}
+.mchip .mv{font-size:11.5px;color:var(--muted);margin-top:3px}
+.mchip.on .mv{color:var(--text)}
+.mchip .mr{font-size:11px;color:var(--faint);font-family:var(--mono);margin-top:4px}
+.mchip.on .mr{color:var(--gold)}
+.modelmenu{position:absolute;top:66px;left:0;z-index:25;min-width:248px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:6px}
+.modelmenu[hidden]{display:none}
+.modelmenu .mmh{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);padding:8px 10px 4px;font-weight:700}
+.modelmenu .mmi{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--text)}
+.modelmenu .mmi:hover{background:var(--inset)}
+.modelmenu .mmi span{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.modellist{border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:18px}
+.ml{display:grid;grid-template-columns:128px 1fr 92px 80px;align-items:center;gap:12px;padding:11px 15px;border-bottom:1px solid var(--line);cursor:pointer;transition:.12s}
+.ml:last-child{border-bottom:none}
+.ml:hover{background:var(--panel)}
+.ml.on{background:var(--gold-soft);box-shadow:inset 3px 0 0 var(--gold)}
+.ml .mn{font-weight:600;font-size:13px}
+.ml .mv{font-size:12px;color:var(--muted)}
+.ml .mp{font-family:var(--mono);font-size:11.5px;color:var(--faint);text-align:right}
+.ml .me{font-family:var(--mono);font-size:13px;color:var(--gold);font-weight:600;text-align:right}
+.ml.mlhead{cursor:default;background:var(--inset);font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+.ml.mlhead:hover{background:var(--inset)}
+.ml.mlhead span{color:var(--faint)}
+.dtsum{font-family:var(--display);font-weight:400;font-size:19px;color:var(--cyan);letter-spacing:.02em}
+.phaseplan{border:1px solid var(--line);border-radius:12px;padding:6px 0;margin:20px 0}
+.phaseplan .p{display:flex;align-items:center;gap:13px;padding:11px 18px;font-size:13px}
+.phaseplan .p .ic{width:22px;color:var(--gold)}
+.phaseplan .p .nm{flex:1}
+.phaseplan .p .ct{color:var(--faint);font-size:12px}
+.phaseplan .p .pbar{width:140px;height:6px;background:var(--inset);border-radius:5px;overflow:hidden}
+.phaseplan .p .pbar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--cyan),var(--gold));transition:width 1.1s ease}
+.review-split{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;margin-top:8px}
+.review-split .review,.review-split .phaseplan{margin:0}
+.rev-h{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600;margin:0 2px 9px}
+@media(max-width:900px){.review-split{grid-template-columns:1fr}}
+.phaseplan.run .p .pbar i{width:100%}
+.runline{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted);margin-top:6px}
+.overall{margin:6px 0 18px}
+.overall .orow{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);margin-bottom:7px}
+.overall .obar{height:10px;border-radius:6px;background:var(--inset);overflow:hidden;border:1px solid var(--line)}
+.overall .obar i{display:block;height:100%;width:8%;background:linear-gradient(90deg,var(--cyan),var(--gold));transition:width 2.6s ease;border-radius:6px}
+.retrynote{font-size:12px;color:var(--faint);margin-top:12px;line-height:1.5}
+.runline .pip{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);animation:blink 1.4s infinite}
+@keyframes blink{50%{opacity:.4}}
+
+.ready{text-align:center;padding:20px 0}
+.ready .big{width:74px;height:74px;border-radius:50%;margin:0 auto 18px;background:radial-gradient(circle at 50% 45%,var(--cream),#9c8a3a 72%,transparent);box-shadow:0 0 40px rgba(240,240,192,.5);display:flex;align-items:center;justify-content:center;font-size:30px}
+.ready h2{font-family:var(--display);font-size:26px;margin-bottom:8px}
+.ready p{color:var(--muted);margin-bottom:24px}
+.readystats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;max-width:560px;margin:0 auto 28px}
+.readystats .s{border:1px solid var(--line);border-radius:11px;padding:14px;background:var(--panel)}
+.readystats .s .v{font-family:var(--display);font-size:24px;font-weight:700}
+.readystats .s .v.gold{color:var(--gold)}.readystats .s .v.cyan{color:var(--cyan)}.readystats .s .v.green{color:var(--green)}
+.readystats .s .k{font-size:11.5px;color:var(--faint);margin-top:2px}
+.cta-row{display:flex;gap:12px;justify-content:center}
+
+/* footer */
+.stage-foot{display:flex;align-items:center;gap:14px;padding:18px 40px;border-top:1px solid var(--line);background:var(--inset)}
+.btn{font-family:var(--sans);font-weight:600;font-size:14px;border-radius:11px;padding:12px 22px;cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--text);transition:.14s;display:inline-flex;align-items:center;gap:9px;text-decoration:none}
+.btn:hover{border-color:var(--gold-line)}
+.btn.ghost{background:transparent;color:var(--muted)}
+.btn.primary{background:linear-gradient(135deg,var(--gold-bright),var(--gold));color:#1a1206;border:none}
+.btn.primary:hover{filter:brightness(1.05)}
+.btn.cyan{background:var(--cyan-soft);border-color:var(--cyan-line);color:var(--cyan)}
+.foot-spacer{flex:1}
+.foot-total{display:flex;align-items:center;gap:16px;margin-right:6px}
+.foot-total .ft-k{font-size:11.5px;color:var(--faint);text-align:right;line-height:1.35;font-weight:600}
+.foot-total .ft-k small{display:block;font-size:10px;font-weight:400;opacity:.85}
+.foot-total .ft-v{font-family:var(--display);font-size:24px;font-weight:500;color:var(--gold-bright);white-space:nowrap}
+.adv-wrap{position:relative;display:flex}
+.adv-pop{position:absolute;bottom:calc(100% + 12px);right:0;width:330px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:14px 16px;z-index:40}
+.adv-pop[hidden]{display:none}
+.adv-pop .adv-h{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600;margin-bottom:10px}
+.adv-row{display:flex;align-items:flex-start;gap:14px;justify-content:space-between}
+.adv-row .adv-k{font-weight:600;font-size:13px}
+.adv-row .adv-d{font-size:11px;color:var(--faint);margin-top:3px;line-height:1.45}
+.stepper{display:flex;align-items:center;border:1px solid var(--line);border-radius:8px;overflow:hidden;flex:none}
+.stepper button{background:var(--inset);border:none;color:var(--text);width:30px;height:30px;cursor:pointer;font-size:15px;line-height:1}
+.stepper button:hover{background:var(--panel-2);color:var(--gold)}
+.stepper span{min-width:36px;text-align:center;font-family:var(--mono);font-size:13px}
+.foot-cost b{color:var(--gold);font-family:var(--mono)}
+/* ===== Step 4 - controls strip + doc/files split (merged layout) ===== */
+.controls{display:flex;gap:14px;align-items:stretch;flex-wrap:wrap;position:sticky;top:0;z-index:20;background:var(--bg);margin:0 -40px 18px;padding:16px 40px 14px}
+.ctl{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:12px 15px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.ctl .clbl{font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--faint);font-weight:600;display:flex;align-items:center;gap:6px}
+.ctl.model{flex:0.72;min-width:216px}
+.ctl.speed{flex:1.08;min-width:354px}
+/* Concurrency: "Live only" sits below the stepper so that cube stays narrow.
+   Cross-cutting themes capped ~30% narrower (desc wraps) — both free up width
+   that the flex-grow Model/Speed cubes absorb automatically. */
+#concCtl{flex:none}
+#concCtl .conc-note{font-size:11px;color:var(--faint);font-weight:400;letter-spacing:0;text-transform:none}
+.controls .toggle{flex:0 1 290px;min-width:0;margin-bottom:0}
+.ctl.total{min-width:188px;border-color:var(--gold-line);background:linear-gradient(160deg,var(--gold-soft),transparent)}
+.ctl.total .amt{font-family:var(--display);font-size:27px;color:var(--gold-bright);font-weight:600;letter-spacing:.01em;line-height:1.1}
+.ctl.total .sub{font-size:10.5px;color:var(--faint)}
+.dd{position:relative}
+.dd .ddbtn{display:flex;align-items:center;gap:10px;width:100%;border:1px solid var(--line);border-radius:9px;background:var(--inset);padding:9px 12px;cursor:pointer;transition:.14s}
+.dd .ddbtn:hover{border-color:var(--gold-line)}
+.dd .ddbtn .nm{font-weight:600;font-size:15px;letter-spacing:.01em}
+.dd .ddbtn .rate{margin-left:auto;font-family:var(--mono);font-size:12.5px;color:var(--gold)}
+.dd .ddbtn .chev{color:var(--faint);transition:.2s}
+.dd.open .ddbtn .chev{transform:rotate(180deg)}
+.dd #modelSeg{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:30;display:none;max-height:360px;overflow:auto;margin-bottom:0;background:var(--panel);box-shadow:var(--shadow)}
+.dd.open #modelSeg{display:block}
+.dd #modelSeg .ml{display:grid;grid-template-columns:1fr auto;column-gap:10px;row-gap:3px;padding:11px 13px}
+.dd #modelSeg .ml .mn{grid-area:1/1;font-weight:600;font-size:14px}
+.dd #modelSeg .ml .mp{grid-area:1/2;justify-self:end;font-family:var(--mono);font-size:11.5px;color:var(--muted);white-space:nowrap}
+.dd #modelSeg .ml .mv{grid-area:2/1;font-size:11.5px;color:var(--muted)}
+.dd #modelSeg .ml .me{grid-area:2/2;justify-self:end;font-family:var(--mono);font-size:13.5px;color:var(--gold);font-weight:600}
+.ctl.speed .opts{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.ctl.speed .opt{padding:10px 13px}
+.ctl.speed .opt .ohead{justify-content:space-between}
+.ctl.speed .opt .obadge{display:none}
+.ctl.speed .opt .oname{font-size:13.5px}
+.ctl.speed .opt .odesc{margin-top:4px;font-size:11px;line-height:1.45}
+.ctl.speed .opt .oprice{margin-left:0;font-size:12.5px;white-space:nowrap;font-weight:600}
+.ctl.speed .opt .odesc b{display:block;color:var(--text);margin-bottom:4px}
+.ctl.speed .opt .okv{display:block;font-size:11px;line-height:1.6}
+.ctl.speed .opt .okv .k{color:var(--faint)}
+.controls #themesToggle{margin:0;width:300px;flex:none;align-self:stretch}
+.p4split{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:22px;align-items:stretch;margin-top:4px;min-height:0}
+.pane{border:1px solid var(--line);border-radius:14px;background:var(--panel);overflow:hidden;display:flex;flex-direction:column}
+.pane .ph{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line);background:var(--inset)}
+.pane .ph .pt{font-family:var(--display);font-size:15px;font-weight:500}
+.pane .ph .pmeta{margin-left:auto;font-size:11.5px;color:var(--cyan)}
+.pane .pbody{overflow:auto;flex:1;min-height:0}
+.pane .dtmatrix{border:none}
+.pane .exp{border:none;border-radius:0}
+.pane .exp .r .dir{width:auto;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pane .exp .files{width:auto;font-size:11px;flex:none}
+.pane .exp .cost{width:auto;flex:none}
+.pane .exp .bar{flex:none;width:120px}
+.pane .exp .price{font-family:var(--mono);font-size:11.5px;color:var(--gold);font-weight:600;width:52px;text-align:right;flex:none}
+.pane .exp .r.off .price{color:var(--faint);font-weight:400}
+.exp .r.langoff{opacity:.5}
+.exp .r.langoff .cb{background:transparent;border-color:var(--line);color:transparent}
+.exp .r.langoff .dir{text-decoration:line-through}
+.exp .r.langoff .price{color:var(--faint);font-weight:400}
+.pane .exp .r .mi{width:16px;height:16px;margin-right:7px;vertical-align:-3px}
+@media(max-width:1180px){.p4split{grid-template-columns:1fr}.controls{flex-direction:column}.controls #themesToggle{width:auto}}
+/* ── Preview/Generate: sticky cost bar + Miller-column file browser ── */
+/* The cost ribbon (#levers/.controls is position:sticky;top:0) is moved into
+   #previewBar on step 3. A normal wrapper is only as tall as the ribbon, so the
+   sticky releases the moment you scroll past it. display:contents drops the
+   wrapper's own box → the ribbon's containing block becomes the whole (tall)
+   step, so it stays pinned to the top while the file browser scrolls below. */
+#previewBar{display:contents}
+.browser{display:flex;flex-direction:column;min-height:240px}
+.btoolbar{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line)}
+.btoolbar .crumb{flex:1;min-width:0;font:12px/1.5 var(--mono);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btoolbar .crumb .up{cursor:pointer;color:var(--cyan)}
+.btoolbar .tbtn{font-family:var(--sans);font-size:11.5px;font-weight:500;color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:5px 11px;cursor:pointer;background:var(--panel);white-space:nowrap}
+.btoolbar .tbtn:hover{border-color:var(--cyan-line);color:var(--cyan)}
+/* Miller columns: grow to fill, add columns on drill, scroll when over width. */
+.bcols{display:flex;flex:1;min-height:0}
+/* Equal-division columns: 3 parts to start, subdividing to at most 6 as you
+   drill (then the leftmost slide off). They always fill the pane width. */
+.bcol{flex:1 1 0;min-width:0;overflow-y:auto;max-height:54vh;border-right:1px solid var(--line)}
+.bcol:last-child{border-right:none}
+.bcol.placeholder{background:repeating-linear-gradient(135deg,transparent,transparent 9px,var(--inset) 9px,var(--inset) 10px)}
+.bcol.placeholder .bempty{color:var(--faint);opacity:.7}
+.brow{display:flex;align-items:center;gap:9px;padding:8px 11px;border-bottom:1px solid var(--line-soft);font-size:13.5px}
+.brow:hover{background:var(--panel)}
+.brow.sel{background:var(--gold-soft)}
+.brow.off{opacity:.5}
+.brow.off .bname{text-decoration:line-through}
+.brow .cb{width:16px;height:16px;border-radius:4px;border:2px solid var(--gold-line);background:var(--gold);color:#1a1206;display:flex;align-items:center;justify-content:center;font-size:10px;flex:none;cursor:pointer}
+.brow.off .cb{background:transparent;border-color:var(--line);color:transparent}
+.brow.partial .cb{background:transparent;border-color:var(--gold-line);color:var(--muted)}   /* partial selection → greyed checkmark */
+.brow.auto .cb{border-style:dashed}   /* auto-excluded (default policy / glob) — visually distinct from a user exclusion */
+.brow .mi{width:17px;height:17px;flex:none}
+.brow .bname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.brow.isfile .bname{font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+.brow .bcost{font-family:var(--mono);font-size:12.5px;color:var(--gold-bright);font-weight:700;text-align:right}
+.brow.off .bcost{color:var(--faint);font-weight:400}
+.brow .bchev{color:var(--faint);font-size:13px;cursor:pointer}
+.bempty{padding:16px;color:var(--faint);font-size:12.5px}
+/* loading feedback — the estimate walks + token-counts every file (seconds on
+   big repos), so show progress instead of an empty / stale browser. */
+.bloading{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:44px;text-align:center}
+.bloading .bl-msg{font-family:var(--display);font-size:16px;color:var(--text);display:flex;flex-direction:column;gap:7px}
+.bloading .bl-msg .bl-sub{font-family:var(--sans);font-size:12px;color:var(--faint);max-width:360px;line-height:1.5}
+.bloading .loadbar{width:min(380px,72%)}
+.loadbar{height:7px;border-radius:5px;background:var(--inset);overflow:hidden;position:relative}
+.loadbar i{position:absolute;top:0;left:-42%;width:42%;height:100%;border-radius:5px;background:linear-gradient(90deg,transparent,var(--gold),transparent);animation:loadslide 1.1s ease-in-out infinite}
+.brefresh{height:3px;flex:none;background:var(--inset);overflow:hidden;position:relative}
+.brefresh i{position:absolute;top:0;left:-35%;width:35%;height:100%;background:linear-gradient(90deg,transparent,var(--cyan),transparent);animation:loadslide 1s ease-in-out infinite}
+@keyframes loadslide{from{left:-42%}to{left:100%}}
+.cvload{animation:cvpulse 1.1s ease-in-out infinite}
+@keyframes cvpulse{0%,100%{opacity:1}50%{opacity:.35}}
+/* exclusions: globs + force-include share one wrapping row */
+.exrow{display:flex;flex-wrap:wrap;align-items:center;gap:9px 16px}
+.exrow .exlbl{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:600}
+.exrow .exlbl.force{color:var(--cyan)}
+.chipset.inline{margin:0;display:inline-flex}
+.tchip .save{font-family:var(--mono);font-size:10.5px;font-weight:600;color:var(--green)}
+.tchip .save.add{color:var(--gold)}
+/* a control greyed but kept in place (concurrency under Batch) */
+.ctl.disabled{opacity:.45}
+.ctl.disabled .stepper button{pointer-events:none}
+/* doc-type row toggles (clickable, affect price) */
+.dtmatrix .drow{cursor:pointer}
+.dtmatrix .drow.off{opacity:.42}
+.dtmatrix .dcb{width:16px;height:16px;border-radius:4px;border:2px solid var(--gold-line);background:var(--gold);color:#1a1206;display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex:none;margin-top:2px}
+.dtmatrix .drow.off .dcb{background:transparent;border-color:var(--line);color:transparent}
+</style>
+</head>
+<body>
+<!-- vscode-icons (iconify @iconify-json/vscode-icons 1.2.58, MIT) - inlined sprite -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+<symbol id="mi-scala" viewBox="0 0 32 32"><defs><linearGradient id="mi-scala-SVGxuZ1Vd8S" x1="-134.907" x2="-134.896" y1="204.572" y2="204.572" gradientTransform="matrix(1538 0 0 -961.25 207495 196661)" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#e62d2a"/><stop offset=".6" stop-color="#df3f3d"/><stop offset=".8" stop-color="#df3f3d"/><stop offset="1" stop-color="#e62d2a"/></linearGradient><linearGradient id="mi-scala-SVGSywV0BWL" x1="-134.907" x2="-134.896" y1="203.781" y2="203.781" gradientTransform="matrix(1538 0 0 -961.25 207495 195892)" href="#mi-scala-SVGxuZ1Vd8S"/><linearGradient id="mi-scala-SVGpRg1QdBw" x1="-134.907" x2="-134.896" y1="205.363" y2="205.363" gradientTransform="matrix(1538 0 0 -961.25 207495 197430)" href="#mi-scala-SVGxuZ1Vd8S"/></defs><path fill="#7f0c1d" d="M7.384 19.231v2.154c0 .363 7.833.971 12.937 2.154c2.465-.571 4.295-1.277 4.295-2.154v-2.154c0-.877-1.83-1.582-4.295-2.154c-5.1 1.183-12.937 1.791-12.937 2.154m0-8.616v2.154c0 .363 7.833.971 12.937 2.154c2.465-.571 4.295-1.277 4.295-2.154v-2.154c0-.877-1.83-1.582-4.295-2.154c-5.1 1.183-12.937 1.791-12.937 2.154"/><path fill="url(#mi-scala-SVGxuZ1Vd8S)" d="M7.384 14.923v6.462c0-.538 17.232-1.615 17.232-4.308v-6.462c0 2.692-17.232 3.769-17.232 4.308"/><path fill="url(#mi-scala-SVGSywV0BWL)" d="M7.384 6.308v6.462c0-.538 17.232-1.615 17.232-4.308V2c0 2.692-17.232 3.769-17.232 4.308"/><path fill="url(#mi-scala-SVGpRg1QdBw)" d="M7.384 23.538V30c0-.538 17.232-1.615 17.232-4.308v-6.461c0 2.692-17.232 3.769-17.232 4.308"/></symbol>
+<symbol id="mi-java" viewBox="0 0 32 32"><path fill="#5382a1" d="M12.7 23.56s-1.07.622.761.833a16 16 0 0 0 5.8-.246a10 10 0 0 0 1.539.753c-5.481 2.349-12.405-.136-8.1-1.339m-.674-3.067s-1.2.888.633 1.078a22.6 22.6 0 0 0 7.481-.359a3.3 3.3 0 0 0 1.152.7c-6.627 1.938-14.009.153-9.266-1.421"/><path fill="#e76f00" d="M17.673 15.294a2.05 2.05 0 0 1-.355 2.954s3.429-1.77 1.854-3.987c-1.471-2.067-2.6-3.095 3.508-6.636c0 0-9.586 2.394-5.007 7.669"/><path fill="#5382a1" d="M24.922 25.827s.792.652-.872 1.157c-3.164.958-13.168 1.248-15.948.038c-1-.435.874-1.038 1.464-1.164a3.8 3.8 0 0 1 .966-.108c-1.111-.783-7.181 1.537-3.083 2.2c11.176 1.812 20.372-.816 17.473-2.124m-11.711-8.508s-5.089 1.209-1.8 1.648a38 38 0 0 0 6.731-.072a53 53 0 0 0 4.221-.555a9 9 0 0 0-1.28.685c-5.17 1.358-15.153.726-12.283-.665a9.6 9.6 0 0 1 4.407-1.042m9.133 5.104c5.253-2.73 2.824-5.353 1.129-5a4 4 0 0 0-.6.161a.96.96 0 0 1 .449-.346c3.354-1.179 5.933 3.478-1.083 5.322a.5.5 0 0 0 .106-.138"/><path fill="#e76f00" d="M19.172 1.906s2.909 2.91-2.759 7.386c-4.546 3.59-1.037 5.637 0 7.975c-2.653-2.394-4.6-4.5-3.294-6.463c1.917-2.879 7.229-4.275 6.056-8.9"/><path fill="#5382a1" d="M13.727 29.818c5.042.323 12.786-.179 12.969-2.565c0 0-.353.9-4.167 1.623a41.5 41.5 0 0 1-12.76.2s.645.533 3.959.746"/></symbol>
+<symbol id="mi-typescript" viewBox="0 0 32 32"><path fill="#007acc" d="M23.827 8.243a4.4 4.4 0 0 1 2.223 1.281a6 6 0 0 1 .852 1.143c.011.045-1.534 1.083-2.471 1.662c-.034.023-.169-.124-.322-.35a2.01 2.01 0 0 0-1.67-1c-1.077-.074-1.771.49-1.766 1.433a1.3 1.3 0 0 0 .153.666c.237.49.677.784 2.059 1.383c2.544 1.095 3.636 1.817 4.31 2.843a5.16 5.16 0 0 1 .416 4.333a4.76 4.76 0 0 1-3.932 2.815a11 11 0 0 1-2.708-.028a6.53 6.53 0 0 1-3.616-1.884a6.3 6.3 0 0 1-.926-1.371a3 3 0 0 1 .327-.208c.158-.09.756-.434 1.32-.761l1.024-.6l.214.312a4.8 4.8 0 0 0 1.35 1.292a3.3 3.3 0 0 0 3.458-.175a1.545 1.545 0 0 0 .2-1.974c-.276-.395-.84-.727-2.443-1.422a8.8 8.8 0 0 1-3.349-2.055a4.7 4.7 0 0 1-.976-1.777a7.1 7.1 0 0 1-.062-2.268a4.33 4.33 0 0 1 3.644-3.374a9 9 0 0 1 2.691.084m-8.343 1.483l.011 1.454h-4.63v13.148H7.6V11.183H2.97V9.755a14 14 0 0 1 .04-1.466c.017-.023 2.832-.034 6.245-.028l6.211.017Z"/></symbol>
+<symbol id="mi-vue" viewBox="0 0 32 32"><path fill="#41b883" d="M24.4 3.925H30l-14 24.15L2 3.925h10.71l3.29 5.6l3.22-5.6Z"/><path fill="#41b883" d="m2 3.925l14 24.15l14-24.15h-5.6L16 18.415L7.53 3.925Z"/><path fill="#35495e" d="M7.53 3.925L16 18.485l8.4-14.56h-5.18L16 9.525l-3.29-5.6Z"/></symbol>
+<symbol id="mi-python" viewBox="0 0 32 32"><defs><linearGradient id="mi-python-SVGg4rxgcri" x1="-133.268" x2="-133.198" y1="-202.91" y2="-202.84" gradientTransform="matrix(189.38 0 0 189.81 25243.061 38519.17)" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#387eb8"/><stop offset="1" stop-color="#366994"/></linearGradient><linearGradient id="mi-python-SVG5ouQmWbV" x1="-133.575" x2="-133.495" y1="-203.203" y2="-203.133" gradientTransform="matrix(189.38 0 0 189.81 25309.061 38583.42)" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffe052"/><stop offset="1" stop-color="#ffc331"/></linearGradient></defs><path fill="url(#mi-python-SVGg4rxgcri)" d="M15.885 2.1c-7.1 0-6.651 3.07-6.651 3.07v3.19h6.752v1H6.545S2 8.8 2 16.005s4.013 6.912 4.013 6.912H8.33v-3.361s-.13-4.013 3.9-4.013h6.762s3.772.06 3.772-3.652V5.8s.572-3.712-6.842-3.712Zm-3.732 2.137a1.214 1.214 0 1 1-1.183 1.244v-.02a1.214 1.214 0 0 1 1.214-1.214Z"/><path fill="url(#mi-python-SVG5ouQmWbV)" d="M16.085 29.91c7.1 0 6.651-3.08 6.651-3.08v-3.18h-6.751v-1h9.47S30 23.158 30 15.995s-4.013-6.912-4.013-6.912H23.64V12.4s.13 4.013-3.9 4.013h-6.765S9.2 16.356 9.2 20.068V26.2s-.572 3.712 6.842 3.712h.04Zm3.732-2.147A1.214 1.214 0 1 1 21 26.519v.03a1.214 1.214 0 0 1-1.214 1.214z"/></symbol>
+<symbol id="mi-markdown" viewBox="0 0 32 32"><path fill="none" stroke="#755838" d="M2.5 7.955h27v16.091h-27z"/><path fill="#755838" d="M5.909 20.636v-9.272h2.727l2.728 3.409l2.727-3.409h2.727v9.272h-2.727v-5.318l-2.727 3.409l-2.728-3.409v5.318zm17.046 0l-4.091-4.5h2.727v-4.772h2.727v4.772h2.727z"/></symbol>
+<symbol id="mi-yaml" viewBox="0 0 32 32"><path fill="#ffe885" d="M2 12.218c.755 0 1.51-.008 2.264 0l.053.038l2.761 2.758c.891-.906 1.8-1.794 2.7-2.7c.053-.052.11-.113.192-.1h1.823a1.4 1.4 0 0 1 .353.019c-.7.67-1.377 1.369-2.069 2.05L5.545 18.8c-.331.324-.648.663-.989.975c-.754.022-1.511.007-2.266.007c1.223-1.209 2.431-2.433 3.658-3.637c-1.321-1.304-2.63-2.62-3.948-3.927m10.7 0h1.839v7.566c-.611 0-1.222.012-1.832-.008v-4.994c-1.6 1.607-3.209 3.2-4.811 4.8c-.089.08-.166.217-.305.194c-.824-.006-1.649 0-2.474 0Q8.916 16 12.7 12.218m2.258.002c.47-.009.939 0 1.409 0c.836.853 1.69 1.689 2.536 2.532q1.268-1.267 2.539-2.532h1.4q-.008 3.784 0 7.567c-.471 0-.943.006-1.414 0q.008-2.387 0-4.773c-.844.843-1.676 1.7-2.526 2.536c-.856-.835-1.687-1.695-2.532-2.541c0 1.594-.006 3.188.006 4.781c-.472 0-.943.005-1.415 0q-.003-3.79-.003-7.57m8.301-.003c.472 0 .944-.007 1.416 0q-.007 3.083 0 6.166h3.782c.063.006.144-.012.191.045c.448.454.907.9 1.353 1.354q-3.371.007-6.741 0q.007-3.782-.001-7.565"/></symbol>
+<symbol id="mi-json" viewBox="0 0 32 32"><path fill="#f5de19" d="M4.014 14.976a2.5 2.5 0 0 0 1.567-.518a2.38 2.38 0 0 0 .805-1.358a15.3 15.3 0 0 0 .214-2.944q.012-2.085.075-2.747a5.2 5.2 0 0 1 .418-1.686a3 3 0 0 1 .755-1.018A3.05 3.05 0 0 1 9 4.125A6.8 6.8 0 0 1 10.544 4h.7v1.96h-.387a2.34 2.34 0 0 0-1.723.468a3.4 3.4 0 0 0-.425 2.092a36 36 0 0 1-.137 4.133a4.7 4.7 0 0 1-.768 2.06A4.6 4.6 0 0 1 6.1 16a3.8 3.8 0 0 1 1.992 1.754a8.9 8.9 0 0 1 .618 3.865q0 2.435.05 2.9a1.76 1.76 0 0 0 .504 1.181a2.64 2.64 0 0 0 1.592.337h.387V28h-.7a5.7 5.7 0 0 1-1.773-.2a2.97 2.97 0 0 1-1.324-.93a3.35 3.35 0 0 1-.681-1.63a24 24 0 0 1-.165-3.234a16.5 16.5 0 0 0-.214-3.106a2.4 2.4 0 0 0-.805-1.361a2.5 2.5 0 0 0-1.567-.524Zm23.972 2.035a2.5 2.5 0 0 0-1.567.524a2.4 2.4 0 0 0-.805 1.361a16.5 16.5 0 0 0-.212 3.109a24 24 0 0 1-.169 3.234a3.35 3.35 0 0 1-.681 1.63a2.97 2.97 0 0 1-1.324.93a5.7 5.7 0 0 1-1.773.2h-.7V26.04h.387a2.64 2.64 0 0 0 1.592-.337a1.76 1.76 0 0 0 .506-1.186q.05-.462.05-2.9a8.9 8.9 0 0 1 .618-3.865A3.8 3.8 0 0 1 25.9 16a4.6 4.6 0 0 1-1.7-1.286a4.7 4.7 0 0 1-.768-2.06a36 36 0 0 1-.137-4.133a3.4 3.4 0 0 0-.425-2.092a2.34 2.34 0 0 0-1.723-.468h-.387V4h.7a6.8 6.8 0 0 1 1.54.125a3.05 3.05 0 0 1 1.149.581a3 3 0 0 1 .755 1.018a5.2 5.2 0 0 1 .418 1.686q.062.662.075 2.747a15.3 15.3 0 0 0 .212 2.947a2.38 2.38 0 0 0 .805 1.355a2.5 2.5 0 0 0 1.567.518Z"/></symbol>
+<symbol id="mi-console" viewBox="0 0 32 32"><path fill="#d9b400" d="M29.4 27.6H2.5V4.5h26.9Zm-25.9-1h24.9V5.5H3.5Z"/><path fill="#d9b400" d="m6.077 19.316l-.555-.832l4.844-3.229l-4.887-4.071l.641-.768l5.915 4.928zM12.7 18.2h7.8v1h-7.8zM2.5 5.5h26.9v1.9H2.5z"/></symbol>
+<symbol id="mi-database" viewBox="0 0 32 32"><path fill="#ffda44" d="M8.562 15.256A21.2 21.2 0 0 0 16 16.449a21.2 21.2 0 0 0 7.438-1.194c1.864-.727 2.525-1.535 2.525-2V9.7a10.4 10.4 0 0 1-2.084 1.076A22.3 22.3 0 0 1 16 12.078a22.4 22.4 0 0 1-7.879-1.3A10.3 10.3 0 0 1 6.037 9.7v3.55c0 .474.663 1.278 2.525 2.006m0 6.705a15.6 15.6 0 0 0 2.6.741a25 25 0 0 0 4.838.453a25 25 0 0 0 4.838-.452a15.6 15.6 0 0 0 2.6-.741c1.864-.727 2.525-1.535 2.525-2v-3.39a10.7 10.7 0 0 1-1.692.825A23.5 23.5 0 0 1 16 18.74a23.5 23.5 0 0 1-8.271-1.348a11 11 0 0 1-1.692-.825v3.393c0 .466.663 1.271 2.525 2.001M16 30c5.5 0 9.963-1.744 9.963-3.894v-2.837a10.5 10.5 0 0 1-1.535.762l-.157.063A23.5 23.5 0 0 1 16 25.445a23.4 23.4 0 0 1-8.271-1.351l-.157-.063a10.5 10.5 0 0 1-1.535-.762v2.837C6.037 28.256 10.5 30 16 30"/><ellipse cx="16" cy="5.894" fill="#ffda44" rx="9.963" ry="3.894"/></symbol>
+<symbol id="mi-file" viewBox="0 0 32 32"><path fill="#c5c5c5" d="M20.414 2H5v28h22V8.586ZM7 28V4h12v6h6v18Z"/></symbol>
+<symbol id="mi-sbt" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="#0e3a51"/><path fill="#15a9ce" d="M12.64 15.72a1.625 1.625 0 0 0 1.624 1.624h15.668c.042-.444.068-.89.068-1.344a14 14 0 0 0-.144-1.9H14.264a1.625 1.625 0 0 0-1.624 1.62"/><path fill="#92d13d" d="M17.624 8.795a1.624 1.624 0 1 0 0 3.248h11.8a14 14 0 0 0-1.437-3.248Z"/><path fill="#de3423" d="M29.572 19.379H10.9a1.624 1.624 0 0 0 0 3.248h17.433a14 14 0 0 0 1.239-3.248"/></symbol>
+<symbol id="mi-docker" viewBox="0 0 32 32"><path fill="#3a4e55" d="M18.191 13.071H20.7v2.566h1.27a5.5 5.5 0 0 0 1.744-.292a4.5 4.5 0 0 0 .848-.383a3.15 3.15 0 0 1-.589-1.623a3.43 3.43 0 0 1 .616-2.416l.264-.305l.314.253a4 4 0 0 1 1.575 2.538a3.84 3.84 0 0 1 2.913.271l.345.2l-.181.354a3.63 3.63 0 0 1-3.648 1.74c-2.173 5.413-6.9 7.976-12.642 7.976A7.96 7.96 0 0 1 6.3 20.211l-.025-.043l-.226-.459a7.3 7.3 0 0 1-.579-3.693l.035-.38h2.143v-2.565h2.51v-2.51h5.02v-2.51h3.012v5.02Z"/><path fill="#00aada" d="M26.324 14.021a3.31 3.31 0 0 0-1.418-2.821a3.07 3.07 0 0 0 .289 3.821a5.28 5.28 0 0 1-3.225 1.037H5.883a6.8 6.8 0 0 0 .667 3.737l.183.335a6 6 0 0 0 .379.569q.992.064 1.829.045a9 9 0 0 0 2.669-.389a.193.193 0 1 1 .126.365q-.135.047-.281.088a8.4 8.4 0 0 1-1.845.3c.044 0-.046.007-.046.007l-.082.007a22 22 0 0 1-2.008-.006l-.01.007a7.88 7.88 0 0 0 6.063 2.41c5.56 0 10.276-2.465 12.365-8c1.482.152 2.906-.226 3.553-1.49a3.5 3.5 0 0 0-3.122-.022"/><path fill="#27b9ec" d="M26.324 14.021a3.31 3.31 0 0 0-1.418-2.821a3.07 3.07 0 0 0 .289 3.821a5.28 5.28 0 0 1-3.225 1.037H6.836a5.22 5.22 0 0 0 2.106 4.686a9 9 0 0 0 2.669-.389a.193.193 0 1 1 .126.365q-.135.047-.281.088a9 9 0 0 1-1.894.314l-.019-.022c1.892.971 4.636.967 7.782-.241a21.87 21.87 0 0 0 9.1-6.889l-.1.048"/><path fill="#088cb9" d="M5.913 17.732a6.4 6.4 0 0 0 .637 2.061l.183.335a6 6 0 0 0 .379.569q.992.064 1.829.045a9 9 0 0 0 2.669-.389a.193.193 0 1 1 .126.365q-.135.047-.281.088a8.8 8.8 0 0 1-1.891.307h-.1q-.438.025-.922.026c-.351 0-.709-.007-1.1-.026a7.9 7.9 0 0 0 6.076 2.413c4.76 0 8.9-1.807 11.3-5.8Z"/><path fill="#039cc7" d="M6.98 17.732a4.83 4.83 0 0 0 1.961 3.01a9 9 0 0 0 2.669-.389a.193.193 0 1 1 .126.365q-.135.047-.281.088a9 9 0 0 1-1.9.307c1.892.971 4.628.957 7.773-.252a20.6 20.6 0 0 0 5.377-3.13Z"/><path fill="#00acd3" d="M9.889 13.671h.172v1.813h-.172zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813H9.23v-1.813Zm-.33 0h.179v1.813H8.9v-1.813Zm-.33 0h.179v1.813H8.57zm-.323 0h.172v1.813h-.17v-1.813Zm-.181-.181h2.175v2.176H8.066V13.49Zm4.335-2.329h.172v1.813H12.4zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813h-.179zm-.33 0h.178v1.813h-.178zm-.323 0h.172v1.813h-.172zm-.181-.181h2.176v2.176h-2.175z"/><path fill="#26c2ee" d="M12.4 13.671h.172v1.813H12.4zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813h-.179zm-.33 0h.178v1.813h-.178zm-.323 0h.172v1.813h-.172zm-.181-.181h2.176v2.176h-2.175z"/><path fill="#00acd3" d="M14.909 13.671h.172v1.813h-.172zm-.33 0h.179v1.813h-.178zm-.33 0h.179v1.813h-.178zm-.33 0h.181v1.813h-.179v-1.813Zm-.33 0h.179v1.813h-.179zm-.323 0h.172v1.813h-.172zm-.181-.181h2.176v2.176h-2.174V13.49Z"/><path fill="#26c2ee" d="M14.909 11.161h.172v1.813h-.172zm-.33 0h.179v1.813h-.178zm-.33 0h.179v1.813h-.178zm-.33 0h.181v1.813h-.179v-1.813Zm-.33 0h.179v1.813h-.179zm-.323 0h.172v1.813h-.172zm-.181-.181h2.176v2.176h-2.174v-2.177Zm4.335 2.691h.172v1.813h-.172zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813H16.1zm-.323 0h.172v1.813h-.172zm-.177-.181h2.176v2.176H15.6z"/><path fill="#00acd3" d="M17.42 11.161h.172v1.813h-.172zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813H16.1zm-.323 0h.172v1.813h-.172zm-.181-.181h2.176v2.176H15.6v-2.177Z"/><path fill="#26c2ee" d="M17.42 8.65h.172v1.813h-.172zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813H16.1zm-.323 0h.172v1.813h-.172zm-.177-.181h2.176v2.176H15.6z"/><path fill="#00acd3" d="M19.93 13.671h.17v1.813h-.17zm-.33 0h.178v1.813H19.6zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813h-.179zm-.33 0h.179v1.813h-.179zm-.323 0h.172v1.813h-.172zm-.181-.181h2.176v2.176h-2.175z"/><path fill="#d5eef2" d="M12.616 19.193a.6.6 0 1 1-.6.6a.6.6 0 0 1 .6-.6"/><path fill="#3a4e55" d="M12.616 19.363a.4.4 0 0 1 .156.029a.175.175 0 1 0 .241.236a.43.43 0 1 1-.4-.265M2 17.949h27.92c-.608-.154-1.923-.362-1.707-1.159c-1.105 1.279-3.771.9-4.444.267c-.749 1.087-5.111.674-5.415-.173c-.939 1.1-3.85 1.1-4.789 0c-.3.847-4.666 1.26-5.415.173c-.673.631-3.338 1.012-4.444-.267c.217.8-1.1 1.005-1.707 1.159"/><path fill="#c0dbe1" d="M14.211 23.518a5.3 5.3 0 0 1-2.756-2.711a9.2 9.2 0 0 1-1.987.3q-.436.024-.917.025q-.554 0-1.168-.033a7.94 7.94 0 0 0 6.145 2.43q.344 0 .683-.013"/><path fill="#d5eef2" d="M12.007 21.773a5.2 5.2 0 0 1-.552-.966a9.2 9.2 0 0 1-1.987.3a6.3 6.3 0 0 0 2.539.664"/></symbol>
+<symbol id="mi-folder" viewBox="0 0 32 32"><path fill="#c09553" d="M27.5 5.5h-9.3l-2.1 4.2H4.4v16.8h25.2v-21Zm0 4.2h-8.2l1.1-2.1h7.1Z"/></symbol>
+<symbol id="mi-folder-scala" viewBox="0 0 32 32"><path fill="#14622a" d="M27.5 5.5h-9.3l-2.1 4.2H4.4v16.8h25.2v-21Zm0 4.2h-8.2l1.1-2.1h7.1Z"/><path fill="#06cc14" d="M19.146 30.989a1 1 0 0 1-.207-.025a1.04 1.04 0 0 1-.726-1.213l2.709-14.431a1.04 1.04 0 0 1 .444-.683a.9.9 0 0 1 .7-.122a1.043 1.043 0 0 1 .727 1.213L20.077 30.16a1.03 1.03 0 0 1-.442.681a.9.9 0 0 1-.489.148m5.432-2.045h-.068a.93.93 0 0 1-.668-.377a1.1 1.1 0 0 1 .1-1.419l4.658-4.553l-4.638-4.239a1.1 1.1 0 0 1-.141-1.416a.94.94 0 0 1 .661-.4a.9.9 0 0 1 .709.237l5.47 5a1.1 1.1 0 0 1 .144 1.416a1 1 0 0 1-.142.163l-5.447 5.324a.92.92 0 0 1-.638.264m-8.155.003a.9.9 0 0 1-.639-.267l-5.452-5.327a1 1 0 0 1-.132-.153a1.094 1.094 0 0 1 .141-1.414l5.471-5a.88.88 0 0 1 .7-.238a.94.94 0 0 1 .665.4a1.1 1.1 0 0 1-.14 1.417L12.4 22.6l4.659 4.551a1.09 1.09 0 0 1 .1 1.419a.93.93 0 0 1-.669.377Z"/></symbol>
+<symbol id="mi-folder-python" viewBox="0 0 32 32"><defs><linearGradient id="mi-folder-python-SVGOAXdgbWL" x1="-132.23" x2="-132.18" y1="235.872" y2="235.822" gradientTransform="matrix(189.38 0 0 -189.81 25054.681 44783.902)" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#387eb8"/><stop offset="1" stop-color="#366994"/></linearGradient><linearGradient id="mi-folder-python-SVG2td0AdDw" x1="-132.549" x2="-132.492" y1="236.178" y2="236.128" gradientTransform="matrix(189.38 0 0 -189.81 25120.681 44848.152)" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffe052"/><stop offset="1" stop-color="#ffc331"/></linearGradient></defs><path fill="#58af7b" d="M27.4 5.5h-9.3L16 9.7H4.3v16.8h25.2v-21Zm0 4.2h-8.2l1.1-2.1h7.1Z"/><path fill="url(#mi-folder-python-SVGOAXdgbWL)" d="M20.918 11.009c-5.072 0-4.751 2.206-4.751 2.206v2.293h4.823v.719h-6.744S11 15.825 11 21s2.866 4.968 2.866 4.968h1.655v-2.412a2.72 2.72 0 0 1 2.786-2.884h4.83a2.583 2.583 0 0 0 2.694-2.626v-4.378S26.24 11 20.944 11Zm-2.666 1.536a.872.872 0 1 1-.845.894v-.014a.87.87 0 0 1 .867-.873Z"/><path fill="url(#mi-folder-python-SVG2td0AdDw)" d="M21.061 31c5.071 0 4.75-2.214 4.75-2.214V26.5h-4.822v-.72h6.765S31 26.145 31 21s-2.866-4.968-2.866-4.968h-1.677v2.384a2.72 2.72 0 0 1-2.786 2.884h-4.832a2.586 2.586 0 0 0-2.7 2.627v4.408S15.734 31 21.03 31zm2.665-1.544a.872.872 0 1 1 .845-.894v.022a.87.87 0 0 1-.867.872z"/></symbol>
+<symbol id="mi-folder-resource" viewBox="0 0 32 32"><path fill="#ba5656" d="M27.5 5.5h-9.3l-2.1 4.2H4.4v16.8h25.2v-21Zm0 4.2h-8.2l1.1-2.1h7.1Z"/><rect width="21" height="21" x="10" y="10" fill="#414141" rx="2.761" ry="2.761"/><path fill="#c2c2c2" d="M13.937 11.925h13.125a2.013 2.013 0 0 1 2.013 2.013v13.125a2.01 2.01 0 0 1-2.012 2.012H13.937a2.013 2.013 0 0 1-2.013-2.013V13.938a2.013 2.013 0 0 1 2.013-2.013"/><path fill="#414141" d="M13.937 13.325h13.126a.61.61 0 0 1 .612.612v13.126a.613.613 0 0 1-.613.613H13.938a.613.613 0 0 1-.613-.613V13.937a.61.61 0 0 1 .612-.612"/><path fill="#c2c2c2" d="M25.754 21.2h-1.1a4.2 4.2 0 0 1-.741 1.769l.78.78a.7.7 0 1 1-.99.99l-.786-.786a4.2 4.2 0 0 1-1.761.712v1.129a.7.7 0 0 1-1.4 0v-1.141a4.2 4.2 0 0 1-1.728-.735l-.82.82a.7.7 0 1 1-.99-.99l.826-.826a4.2 4.2 0 0 1-.707-1.723h-1.171a.7.7 0 1 1 0-1.4h1.174a4.2 4.2 0 0 1 .707-1.722l-.826-.826a.7.7 0 1 1 .99-.99l.819.82a4.2 4.2 0 0 1 1.729-.735v-1.14a.7.7 0 0 1 1.4 0v1.129a4.2 4.2 0 0 1 1.762.713l.786-.787a.7.7 0 0 1 .99.99l-.781.781a4.2 4.2 0 0 1 .741 1.768h1.1a.7.7 0 0 1 0 1.4Z"/><circle cx="20.5" cy="20.5" r="2.822" fill="#414141"/><circle cx="20.5" cy="20.5" r="1.121" fill="#c2c2c2"/></symbol>
+<symbol id="mi-folder-src" viewBox="0 0 32 32"><path fill="#14622a" d="M27.5 5.5h-9.3l-2.1 4.2H4.4v16.8h25.2v-21Zm0 4.2h-8.2l1.1-2.1h7.1Z"/><path fill="#06cc14" d="M19.146 30.989a1 1 0 0 1-.207-.025a1.04 1.04 0 0 1-.726-1.213l2.709-14.431a1.04 1.04 0 0 1 .444-.683a.9.9 0 0 1 .7-.122a1.043 1.043 0 0 1 .727 1.213L20.077 30.16a1.03 1.03 0 0 1-.442.681a.9.9 0 0 1-.489.148m5.432-2.045h-.068a.93.93 0 0 1-.668-.377a1.1 1.1 0 0 1 .1-1.419l4.658-4.553l-4.638-4.239a1.1 1.1 0 0 1-.141-1.416a.94.94 0 0 1 .661-.4a.9.9 0 0 1 .709.237l5.47 5a1.1 1.1 0 0 1 .144 1.416a1 1 0 0 1-.142.163l-5.447 5.324a.92.92 0 0 1-.638.264m-8.155.003a.9.9 0 0 1-.639-.267l-5.452-5.327a1 1 0 0 1-.132-.153a1.094 1.094 0 0 1 .141-1.414l5.471-5a.88.88 0 0 1 .7-.238a.94.94 0 0 1 .665.4a1.1 1.1 0 0 1-.14 1.417L12.4 22.6l4.659 4.551a1.09 1.09 0 0 1 .1 1.419a.93.93 0 0 1-.669.377Z"/></symbol>
+<symbol id="mi-folder-typescript" viewBox="0 0 32 32"><path fill="#007acc" d="M27.5 5.5h-9.3l-2.1 4.2H4.4v16.8h25.2v-21Zm0 4.2h-8.2l1.1-2.1h7.1Z"/><path fill="#fff" d="M27.249 17.436a3.56 3.56 0 0 1 1.787 1.03a4.7 4.7 0 0 1 .685.916c.009.036-1.234.871-1.987 1.338c-.027.018-.136-.1-.259-.281a1.62 1.62 0 0 0-1.343-.808c-.866-.059-1.424.395-1.42 1.152a1.05 1.05 0 0 0 .122.535c.191.395.544.631 1.656 1.111c2.046.88 2.922 1.461 3.466 2.286a4.15 4.15 0 0 1 .331 3.484a3.83 3.83 0 0 1-3.162 2.264a8.8 8.8 0 0 1-2.178-.023a5.25 5.25 0 0 1-2.908-1.515a5 5 0 0 1-.744-1.1a2 2 0 0 1 .263-.168c.127-.073.608-.349 1.062-.612l.821-.476l.172.254a3.8 3.8 0 0 0 1.087 1.038a2.65 2.65 0 0 0 2.781-.141a1.24 1.24 0 0 0 .159-1.583c-.222-.318-.676-.585-1.964-1.143a7.1 7.1 0 0 1-2.69-1.656a3.8 3.8 0 0 1-.785-1.429a5.7 5.7 0 0 1-.05-1.824a3.48 3.48 0 0 1 2.931-2.713a7.2 7.2 0 0 1 2.167.064m-6.71 1.193l.009 1.17h-3.72V30.37H14.2V19.8h-3.72v-1.148a11 11 0 0 1 .032-1.18c.014-.018 2.277-.027 5.022-.023l4.995.014Z"/><path fill="#007acc" d="M26.173 31a8.4 8.4 0 0 1-1.309-.087a5.74 5.74 0 0 1-3.177-1.665c-.49-.543-1.028-1.271-.8-1.661a1.15 1.15 0 0 1 .437-.341c.131-.075.611-.351 1.062-.613l1.205-.7l.422.621a3.5 3.5 0 0 0 .913.885a2.21 2.21 0 0 0 2.239-.073a.58.58 0 0 0 .213-.5a.6.6 0 0 0-.129-.455a4.9 4.9 0 0 0-1.762-.976a7.5 7.5 0 0 1-2.85-1.77a4.3 4.3 0 0 1-.9-1.629a6.1 6.1 0 0 1-.057-2.046a3.98 3.98 0 0 1 3.312-3.09a7.6 7.6 0 0 1 2.372.069a4.06 4.06 0 0 1 2.016 1.162a5 5 0 0 1 .8 1.128c.09.35.11.433-2.2 1.864l-.158.1l-.193-.033c-.161-.031-.31-.122-.555-.484a1.15 1.15 0 0 0-.981-.6a.96.96 0 0 0-.732.189a.63.63 0 0 0-.178.483a.6.6 0 0 0 .072.324c.117.241.348.424 1.419.888c2.142.922 3.069 1.543 3.675 2.461a4.66 4.66 0 0 1 .379 3.916a4.28 4.28 0 0 1-3.53 2.566a7 7 0 0 1-1.025.067m-4.237-3.007a6 6 0 0 0 .46.615a4.76 4.76 0 0 0 2.637 1.365a8.5 8.5 0 0 0 2.011.022a3.38 3.38 0 0 0 2.8-1.964a3.68 3.68 0 0 0-.284-3.051c-.489-.74-1.31-1.273-3.256-2.111c-1.114-.482-1.624-.775-1.9-1.343a1.5 1.5 0 0 1-.171-.743a1.56 1.56 0 0 1 .48-1.182a1.88 1.88 0 0 1 1.45-.446a2.08 2.08 0 0 1 1.657.945c.462-.3.952-.623 1.261-.836a7 7 0 0 0-.4-.474a3.1 3.1 0 0 0-1.554-.892a6.9 6.9 0 0 0-1.964-.058a3.02 3.02 0 0 0-2.553 2.344a5.4 5.4 0 0 0 .044 1.6a3.3 3.3 0 0 0 .674 1.23a6.66 6.66 0 0 0 2.529 1.542c1.393.6 1.879.9 2.166 1.307a1.72 1.72 0 0 1-.227 2.211a3.12 3.12 0 0 1-3.326.21A4.3 4.3 0 0 1 23.3 27.2l-.438.255Zm-4.629 2.855H13.72v-10.57H10v-1.626c0-1.24.007-1.381.175-1.523a.2.2 0 0 1 .041-.033c.21-.129.9-.13 5.314-.121l5.47.012l.032 3.29h-3.726Zm-2.632-.955h1.677v-10.57h3.716l-.013-1.383l-4.524-.013c-2.207 0-3.844 0-4.568.01c0 .182-.007.423-.007.714v.671h3.72Z"/></symbol>
+<symbol id="mi-folder-docs" viewBox="0 0 32 32"><path fill="#c05454" d="M27.5 5.5h-9.3l-2.1 4.2H4.4v16.8h25.2v-21Zm0 4.2h-8.2l1.1-2.1h7.1Z"/><path fill="gray" d="M15.266 11.311v18.375h14.449v-15.1h-3.6v-3.275zm12.146.813l.008 1.158h1.252l-1.26-1.16Z"/><path fill="#c5c5c5" d="M27.028 10H15.281a1.316 1.316 0 0 0-1.312 1.313v18.375A1.316 1.316 0 0 0 15.281 31h14.438a1.316 1.316 0 0 0 1.313-1.312V13.642Zm.394 2.133l1.247 1.148h-1.247ZM15.281 29.688V11.313h10.828v3.281h3.609v15.094Z"/><path fill="#c5c5c5" d="M16.594 19.372h11.813v1.313H16.594zm1.842-6.8a1.4 1.4 0 0 0-.558-.394a2.05 2.05 0 0 0-.82-.131h-1.28v3.839h1.28a1.66 1.66 0 0 0 1.313-.492a1.8 1.8 0 0 0 .361-.591a3 3 0 0 0 .1-.82a3 3 0 0 0-.1-.788a1.6 1.6 0 0 0-.296-.623m-.459 1.837a1 1 0 0 1-.164.394a.8.8 0 0 1-.3.262a1.1 1.1 0 0 1-.492.1H16.6v-2.429h.459a.87.87 0 0 1 .722.3a1.2 1.2 0 0 1 .164.361a2.6 2.6 0 0 1 .066.525a2.2 2.2 0 0 1-.035.488Zm4.002-1.837a1.4 1.4 0 0 0-.525-.427a1.7 1.7 0 0 0-.755-.164a2 2 0 0 0-.788.164a1.7 1.7 0 0 0-.525.427a2.2 2.2 0 0 0-.3.623a2.94 2.94 0 0 0 0 1.509a1.8 1.8 0 0 0 .3.623a1.13 1.13 0 0 0 .525.427a1.9 1.9 0 0 0 .788.164a1.42 1.42 0 0 0 1.214-.525a2.1 2.1 0 0 0 .427-1.444a2.8 2.8 0 0 0-.1-.755a1.33 1.33 0 0 0-.261-.622M21.29 14.9a.7.7 0 0 1-.623.328a.64.64 0 0 1-.623-.328a1.87 1.87 0 0 1-.2-.952a1.8 1.8 0 0 1 .2-.952a.806.806 0 0 1 1.247 0a1.87 1.87 0 0 1 .2.952a1.8 1.8 0 0 1-.201.952m3.41-.031a.7.7 0 0 1-.131.164a.7.7 0 0 1-.2.131a.6.6 0 0 1-.263.033a.575.575 0 0 1-.558-.3a1.8 1.8 0 0 1-.2-.952v-.262c0-.1.033-.2.033-.3c.033-.1.033-.2.066-.263a.53.53 0 0 1 .131-.23a1 1 0 0 1 .2-.164a.6.6 0 0 1 .263-.066a.57.57 0 0 1 .427.164a1.1 1.1 0 0 1 .23.394l.755-.2a1.6 1.6 0 0 0-.23-.525a1.6 1.6 0 0 0-.328-.328a1.88 1.88 0 0 0-1.608-.033a1.55 1.55 0 0 0-.492.427a1.3 1.3 0 0 0-.164.656a2.7 2.7 0 0 0-.066.722a5 5 0 0 0 .066.722a1.8 1.8 0 0 0 .262.623a1.2 1.2 0 0 0 .492.427a1.7 1.7 0 0 0 .755.164a1.6 1.6 0 0 0 .919-.262a1.6 1.6 0 0 0 .328-.328a3.3 3.3 0 0 0 .263-.492l-.788-.2a.9.9 0 0 1-.162.278m-8.106 12.936h8.203v1.313h-8.203zm0-2.533h11.813v1.313H16.594zm0-3h11.813v1.313H16.594zm.055-5.8h11.813v1.313H16.649z"/></symbol>
+<symbol id="mi-folder-target" viewBox="0 0 32 32"><defs><linearGradient id="mi-folder-target-SVGpSsxrdrd" x1="20.698" x2="17.514" y1="23.259" y2="34.062" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#f1f1f2"/><stop offset=".391" stop-color="#eaebec"/><stop offset="1" stop-color="#e6e7e8"/></linearGradient><linearGradient id="mi-folder-target-SVGZ8izfdlD" x1="29.221" x2="30.358" y1="11.689" y2="36.594" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#e6e7e8"/><stop offset=".482" stop-color="#dbdcde"/><stop offset="1" stop-color="#d7d8da"/></linearGradient><linearGradient id="mi-folder-target-SVGu2Vpjckn" x1="26.177" x2="16.325" y1="9.571" y2="19.482" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff57e"/><stop offset="1" stop-color="#fdbf0f"/></linearGradient><linearGradient id="mi-folder-target-SVGiKVnueaF" x1="28.842" x2="30.965" y1="10.318" y2="21.502" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fbe574"/><stop offset="1" stop-color="#efab14"/></linearGradient></defs><path fill="#bc9f55" d="M27.5 5.5h-9.3l-2.1 4.2H4.4v16.8h25.2v-21Zm0 4.2h-8.2l1.1-2.1h7.1Z"/><path fill="url(#mi-folder-target-SVGpSsxrdrd)" d="M14.38 11.061L28.329 10v21L14.38 28.726z"/><path fill="url(#mi-folder-target-SVGZ8izfdlD)" d="m28.329 10l2.653 1.44l.038 16.793L28.329 31z"/><path fill="url(#mi-folder-target-SVGu2Vpjckn)" d="M28.329 17.783c-2.6-.518-4.338 3.293-6.394 4.865c-3.636 2.78-5.809-2.283-7.555-6.306V11.06c4.65-.513 9.3-.549 13.949-1.061z"/><path fill="url(#mi-folder-target-SVGiKVnueaF)" d="m31 22.909l-.017-11.474L28.329 10v7.775c1.752.139.94 4.956 2.671 5.134"/><path fill="#fdbf0f" d="m27.194 22.328l.06.108a3 3 0 0 0 .23-.272l-.07-.1a3 3 0 0 1-.22.264m.409-.56l.081.079a2 2 0 0 0 .151-.367l-.092-.052a2 2 0 0 1-.143.339Zm.291-1.127l-.1.031a1.5 1.5 0 0 1 .022.26v.121l.1.014q.005-.068.005-.135a2 2 0 0 0-.027-.292Zm-.123-.394a1.4 1.4 0 0 0-.207-.319l-.064.1a1.2 1.2 0 0 1 .187.288ZM27.3 19.7a1 1 0 0 0-.3-.125l-.018.134a1 1 0 0 1 .273.115Zm-.909-.089l.025.131a1 1 0 0 1 .284-.059v-.136a1.1 1.1 0 0 0-.308.067Zm-.525.325l-.029.026l.056.113l.028-.026a2 2 0 0 1 .223-.172l-.042-.123a2 2 0 0 0-.234.185Zm-.509.52l.063.105q.118-.132.233-.251l-.06-.108q-.115.124-.234.257Zm-.455.531l.066.1q.114-.137.225-.267l-.065-.1q-.11.132-.228.27Zm-.448.539l.066.1l.224-.269l-.066-.1Zm-.454.531l.064.1q.116-.132.228-.264l-.065-.1q-.108.133-.227.264m-.465.506l.06.108q.12-.125.236-.251l-.062-.106q-.111.125-.23.249Zm-.483.471l.055.113q.126-.115.247-.233L23.3 22.8q-.12.121-.244.234Zm-.5.424l.049.118q.132-.1.259-.208l-.052-.115q-.127.106-.257.206Zm-.528.366l.041.124q.138-.085.271-.178l-.045-.121q-.132.092-.267.176Zm-.549.3l.032.128q.143-.067.282-.142l-.037-.126q-.137.073-.278.14Zm-.568.222l.023.132q.148-.047.291-.1l-.027-.131q-.142.053-.288.099Zm-.582.143l.013.135q.151-.026.3-.062l-.018-.134q-.147.035-.295.061m-.519.059h-.069v.136h.072q.116-.006.229-.018l-.008-.135q-.111.011-.225.017Zm-.67.075a3 3 0 0 0 .3.051l.008-.135a2 2 0 0 1-.291-.05Zm-.584-.208a3 3 0 0 0 .289.121l.025-.131a3 3 0 0 1-.281-.118ZM18 24.086q.134.095.272.177l.04-.124q-.135-.08-.266-.173Zm-.517-.42q.125.115.254.22l.051-.116q-.127-.1-.25-.216ZM17 23.175q.116.13.237.253l.059-.109q-.119-.121-.234-.249Zm-.449-.544q.108.141.221.277l.066-.1q-.111-.134-.218-.274Zm-.42-.586q.1.15.207.3l.071-.095l-.2-.294Zm-.394-.619q.094.156.194.313l.069-.088q-.1-.155-.192-.31Zm-.369-.645q.087.161.182.326l.078-.084q-.094-.164-.18-.323Zm-.347-.668q.081.163.171.337l.081-.078q-.09-.173-.169-.334Zm-.325-.689q.071.16.16.347l.084-.073a16 16 0 0 1-.158-.345Zm-.212-.776l-.088.062s.051.135.147.362l.083-.072q-.072-.168-.108-.263c-.036-.095-.037-.09-.037-.09Zm12.354-.491l.068.424v.021l.017.012l.352.246l.02-.09l-1 .162l.049.078l.584-.832Zm-.527.873l1-.162l.121-.02l-.1-.07l-.352-.246l.021.033l-.068-.424l-.019-.121l-.07.1l-.584.832l-.068.1Z"/></symbol>
+<symbol id="mi-folder-test" viewBox="0 0 32 32"><path fill="#b70b0b" d="M27.5 5.5h-9.3l-2.1 4.2H4.4v16.8h25.2v-21Zm0 4.2h-8.2l1.1-2.1h7.1Z"/><path fill="#fac6c5" d="M28.3 27.423c-1.729-.4-2.332-2.482-1.329-4.583a8.95 8.95 0 0 1 2.217-2.779l.314-.26l.009.357a6.7 6.7 0 0 0 .748 2.425a14 14 0 0 1 .625 1.631a3.2 3.2 0 0 1-.073 1.958a2.67 2.67 0 0 1-1.111 1.087a2.8 2.8 0 0 1-1.4.164m.351-3.565c.124-.143.155-.332.164-1l.011-.825l-.2.158a1.68 1.68 0 0 0-.635 1.4c.07.214.286.448.411.446a.5.5 0 0 0 .249-.179m-15.527 7.087a3.85 3.85 0 0 1-3.031-4.563c.254-1.07.2-1.008 5.726-6.787l5.2-5.442l.738.7l.738.7l-3 3.132l-3 3.132l2.508-.054l2.508-.054l1.773-1.85l1.773-1.85l.735.707l.735.707l-5.213 5.43c-4.783 4.982-5.257 5.452-5.743 5.692a3.9 3.9 0 0 1-2.452.393Zm14.662-12.484c-.138-.082-1.546-1.4-3.129-2.921l-2.879-2.772l-.009-.421a.86.86 0 0 1 .194-.673A.99.99 0 0 1 23 11.3a69 69 0 0 1 6.277 6.023a1 1 0 0 1-1.492 1.133Z"/><path fill="#fac6c5" d="M11.578 26.851a2.1 2.1 0 0 0 2.579 2.614c.191-.2 2.407-2.515 7.387-7.737c-2.505.054-2.475-.055-4.98 0c-5.015 5.195-5.114 5.157-4.986 5.123"/></symbol>
+<symbol id="mi-folder-cypress" viewBox="0 0 500 500"><defs><linearGradient id="mi-folder-cypress-SVGn2MHwese" x2="1" y1="500.019" y2="500.019" gradientTransform="rotate(-74.61 -56582.086 43258.207)scale(-173.67 173.67)" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#58d09e"/><stop offset="1"/></linearGradient><linearGradient id="mi-folder-cypress-SVGVbV6qbuh" x2="1" y1="500.066" y2="500.066" gradientTransform="matrix(136.419 107.5 107.5 -136.419 -53573.749 68567.906)" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#58d09e"/><stop offset="1" stop-color="#d2d2d2"/></linearGradient></defs><path fill="#31ad79" d="M460.672 85.3H282.547l-32.813 65.625H66.922v262.5h393.75zm-32.813 65.625H299.734l17.188-32.812h110.937Z"/><path d="M307.469 156.641c85.984-3.063 158.312 64.3 161.406 150.328a155.9 155.9 0 0 1-150.188 161.39c-85.984 3.062-158.312-64.3-161.406-150.328c-3.094-86.016 64.2-158.344 150.188-161.391Z"/><path fill="#d2d2d2" d="M396.672 263.031L367.328 336.7l-29.547-73.672h-24.187l41.453 100.563l-29.484 70.922l21.125 4.172l72.828-175.656h-22.844Z"/><path fill="#d2d2d2" d="M267.656 281.672c12.266 0 22.266 6.484 27.391 17.812l.406.875l20.609-6.938l-.453-1.047c-7.969-19.266-26.344-31.25-47.953-31.25c-15.188 0-27.531 4.844-37.734 14.75c-10.141 9.859-15.266 22.25-15.266 36.844c0 14.484 5.125 26.812 15.266 36.656c10.2 9.922 22.547 14.75 37.734 14.75c21.609 0 39.984-11.984 47.953-31.234l.453-1.047l-20.641-6.953l-.391.922c-4.594 11.125-14.828 17.766-27.375 17.766a28.93 28.93 0 0 1-21.469-8.8a30.4 30.4 0 0 1-8.7-22.047a30.86 30.86 0 0 1 8.7-22.234a28.87 28.87 0 0 1 21.47-8.825"/><path fill="url(#mi-folder-cypress-SVGn2MHwese)" d="M382.734 421.672a129.45 129.45 0 0 0 45.75-169.516l18.734-9.687a150.205 150.205 0 0 1-53.125 196.891z"/><path fill="#58d09e" d="M167.172 352.188a149 149 0 0 1-5.391-39.828c0-61.641 39.031-118.016 97.141-140.25l7.625 19.562c-50.016 19.141-83.609 67.641-83.609 120.687a128.2 128.2 0 0 0 4.625 34.266z"/><path fill="#58d09e" d="M257.906 172.594a153.2 153.2 0 0 1 39.375-9.484c61.812-6.437 122.422 26.172 150.781 81.172l-18.813 9.562c-24.422-47.344-76.562-75.406-129.766-69.859a131 131 0 0 0-33.875 8.141l-7.7-19.531Z"/><path fill="url(#mi-folder-cypress-SVGVbV6qbuh)" d="m329.656 424.578l-5.141 12.375a6.85 6.85 0 0 1-6 4.2a117 117 0 0 1-5.266.125c-60.609-.031-114.234-42.422-127.516-100.812l-20.625 4.625a150.57 150.57 0 0 0 52.692 83.721a153.24 153.24 0 0 0 95.234 33.422h.313c2.031 0 4.047-.047 6.063-.125a28.07 28.07 0 0 0 24.687-17.188l6.719-16.172l-21.156-4.172Z"/></symbol>
+<symbol id="mi-readthedocs" viewBox="0 0 32 32"><path fill="#dedede" d="M14.61 15.5a.67.67 0 0 0-.09 1.31s1.64.54 4.42.77c2.24.18 4.77-.16 4.77-.16a.67.67 0 0 0-.04-1.34q-.07 0-.13.02s-2.48.3-4.5.14a19 19 0 0 1-4.1-.7q-.16-.06-.33-.04m0-3.33a.67.67 0 0 0-.09 1.31s1.64.54 4.42.77c2.24.18 4.77-.16 4.77-.16a.67.67 0 0 0-.04-1.34q-.07 0-.13.02s-2.48.3-4.5.14a19 19 0 0 1-4.1-.7a1 1 0 0 0-.33-.04m0-3.33a.67.67 0 0 0-.09 1.31s1.64.54 4.42.77c2.24.18 4.77-.16 4.77-.16a.67.67 0 0 0-.04-1.34q-.07 0-.13.02s-2.48.3-4.5.14a19 19 0 0 1-4.1-.7q-.16-.06-.33-.04m0-3.32a.67.67 0 0 0-.09 1.3s1.64.55 4.42.77c2.24.19 4.77-.15 4.77-.15a.67.67 0 0 0-.04-1.34l-.13.01s-2.48.3-4.5.14a19 19 0 0 1-4.1-.7a1 1 0 0 0-.33-.03M9.95 2c-3.5.03-4.8 1.1-4.8 1.1v26.12s1.26-1.1 5.36-.93s4.94 1.6 9.98 1.7s6.3-.77 6.3-.77l.07-26.63s-2.26.64-6.67.68c-4.41.03-5.47-1.13-9.52-1.26zm2.92 1.7s2.12.7 6.04.9c3.3.17 6.62-.32 6.62-.32v23.67s-1.68.88-5.88.58c-3.25-.23-6.83-1.46-6.83-1.46zm-2.04.62a.68.68 0 0 1 0 1.35s-1.1 0-1.77.08a5 5 0 0 0-1.88.52a.67.67 0 0 1-.63-1.2s1-.52 2.38-.66c.8-.08 1.9-.09 1.9-.09m-.65 3.34h.65a.7.7 0 0 1 .6.76a.7.7 0 0 1-.6.59s-1.1 0-1.76.07a6 6 0 0 0-1.89.52a.68.68 0 0 1-.62-1.2s1-.52 2.38-.66c.4-.04.86-.07 1.24-.08m.65 3.33a.68.68 0 0 1 0 1.35s-1.1 0-1.77.06a5 5 0 0 0-1.88.52a.68.68 0 0 1-.63-1.2s1-.53 2.39-.66c.8-.08 1.89-.07 1.89-.07"/></symbol>
+</defs></svg>
+<div class="wizard">
+
+  <!-- ════════ LEFT RAIL ════════ -->
+  <aside class="rail">
+    <img class="laby-bg" src="/static/Ariadne-icon.png" alt="">
+    <div class="brand">
+      <img class="mk" src="/static/Ariadne-icon.png" alt="Ariadne">
+      <img class="wm" src="/static/wordmark.png" alt="ARIADNE">
+    </div>
+    <div class="kicker">New knowledge base</div>
+    <h2>Thread your way<br>into a new codebase.</h2>
+
+    <div class="steps" id="steps">
+      <div class="fill" id="threadfill" style="height:0"></div>
+      <!-- step items injected by JS -->
+    </div>
+
+    <div class="core">
+      <div class="orb">📖</div>
+      <div>
+        <div class="t">The knowledge core</div>
+        <div class="d">Your codebase, understood</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ════════ STAGE ════════ -->
+  <main class="stage">
+    <div class="stage-top">
+      <div class="crumb">New knowledge base · <b id="crumbName">myproject</b></div>
+      <div style="margin-left:auto;display:flex;gap:10px">
+        <div class="x" id="themeBtn" title="Toggle light / dark" onclick="toggleTheme()">☀</div>
+        <div class="x" title="Save &amp; exit">✕</div>
+      </div>
+    </div>
+
+    <div class="stage-body">
+      <div class="wrap">
+        <!-- ───── STEP 1 · CONNECT ───── -->
+        <section class="step on" data-step="1">
+          <div class="eyebrow">Step 1 of 5 · Connect <span class="tag">ariadne source add</span></div>
+          <h1 class="title">Point Ariadne at your code</h1>
+          <p class="lede">Ariadne reads a directory once and turns it into a queryable knowledge base — so agents stop re-discovering your codebase every session.</p>
+
+          <div class="field">
+            <label>Source name <span class="hint">scopes queries · lowercase, no spaces</span></label>
+            <div class="input"><span class="pre">name:</span><input id="srcName" placeholder="myproject" oninput="document.getElementById('crumbName').textContent=this.value||'…'"></div>
+          </div>
+          <div class="field">
+            <label>Path to source</label>
+            <div class="input"><span class="pre">📁</span><input id="srcPath" placeholder="/path/to/your/repo"><span class="btn-mini" id="browseBtn">Browse…</span></div>
+          </div>
+
+          <div class="detected" id="gitDetected" style="display:none"><span class="ic">⎇</span><span id="gitDetectedText"></span></div>
+
+          <div class="field">
+            <label>Depends on <span class="hint">load these sources as context</span></label>
+            <div class="chipset" id="depChips" style="position:relative">
+              <span class="tchip add" onclick="toggleDepMenu(event)">+ add dependency</span>
+              <div class="depmenu" id="depMenu" hidden></div>
+            </div>
+          </div>
+
+          <div class="toggle" id="defToggle" onclick="this.classList.toggle('on')">
+            <div class="sw"></div>
+            <div class="tl"><div class="t">Set as default source</div><div class="d">First source in a fresh project becomes the default.</div></div>
+          </div>
+          <div class="toggle" id="staleToggle" onclick="this.classList.toggle('on')">
+            <div class="sw"></div>
+            <div class="tl"><div class="t">Ignore staleness</div><div class="d">For repos that change rarely — skip the constant “stale, regenerate” nag.</div></div>
+          </div>
+
+          <div class="adv" onclick="toggleCollapse('connectAdv',this)"><span class="chev">▸</span> Advanced — branch / ref</div>
+          <div class="collapsed" id="connectAdv" style="margin-top:14px">
+            <div class="field" style="margin-top:14px">
+              <label>Active on branches <span class="hint">only scope this source on matching branches (default: all)</span></label>
+              <div class="chipset" id="exBranches"><span class="tchip add" onclick="startAdd(this)">+ add pattern</span></div>
+            </div>
+            <div class="field" style="margin-bottom:0">
+              <label>Pin to ref <span class="hint">index a fixed git ref instead of the working tree (optional)</span></label>
+              <div class="input"><span class="pre">ref:</span><input id="refInput" placeholder="e.g. v2.3.0, a branch, or a commit SHA"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ───── STEP 2 · DISCOVER ───── -->
+        <section class="step" data-step="2">
+          <div class="eyebrow">Step 2 of 5 · Discover <span class="tag">ariadne discover</span></div>
+          <h1 class="title">Discover the shape</h1>
+          <p class="lede">Ariadne walks the tree and detects languages, build tools, and how to index each one for cross-source intelligence.</p>
+
+          <label style="font-size:13px;font-weight:600" id="langLabel">Languages <span class="hint" style="font-weight:400">detected by file extension &amp; package markers</span></label>
+          <div class="langbar" id="langBar"></div>
+          <div class="leg" id="langLeg"></div>
+
+          <label style="font-size:13px;font-weight:600">Index plan <span class="hint" style="font-weight:400">how each language is detected &amp; indexed</span></label>
+          <div class="plan" id="indexPlan" style="margin-top:8px"></div>
+          <div class="note-managed" id="manifestNote"></div>
+        </section>
+
+        <!-- ───── STEP 3 · PREVIEW (scope + cost) ───── -->
+        <section class="step" data-step="3">
+          <div class="eyebrow">Step 3 of 5 · Preview <span class="tag">scope &amp; cost</span></div>
+          <h1 class="title">Refine what’s in scope</h1>
+          <p class="lede">This phase is free — no API calls. Browse the tree, exclude what you don’t want documented, and watch the total update. Excluded folders stay listed, so you can change your mind.</p>
+
+          <div id="previewBar"></div>
+
+          <div class="adv" onclick="toggleCollapse('exPanel',this)" style="margin-top:4px"><span class="chev">▸</span> Exclusions — globs &amp; force-include skipped dirs</div>
+          <div class="collapsed" id="exPanel" style="margin-top:10px">
+            <div class="exrow">
+              <span class="exlbl">Exclude globs</span>
+              <div class="chipset inline" id="exGlobs"><span class="tchip add" onclick="startAdd(this)">+ glob</span></div>
+              <span class="exlbl force">Force-include skipped dirs</span>
+              <div class="chipset inline" id="exemptChips"><span class="tchip add" onclick="startExempt(this)">+ dir</span></div>
+            </div>
+          </div>
+
+          <div class="pane" style="margin-top:14px">
+            <div class="ph"><span class="pt">Files &amp; folders</span><span class="pmeta" id="fileSum">click any file or folder to exclude it</span></div>
+            <div class="pbody"><div class="browser" id="browser"></div></div>
+          </div>
+        </section>
+
+        <!-- ───── STEP 4 · GENERATE (config) ───── -->
+        <section class="step" data-step="4">
+          <div class="eyebrow">Step 4 of 5 · Generate <span class="tag">ariadne onboard</span></div>
+          <h1 class="title">How to document it</h1>
+          <p class="lede">Set the model, speed, and themes in the bar above; choose which doc types to generate below. The estimate updates live.</p>
+
+          <div id="generateBar">
+            <div class="controls" id="levers">
+              <div class="ctl model">
+                <div class="clbl">Model</div>
+                <div class="dd" id="modeldd">
+                  <div class="ddbtn" onclick="ddToggle(event)"><span class="nm" id="ddnm">…</span><span class="rate" id="ddrate"></span><span class="chev">▾</span></div>
+                  <div class="modellist" id="modelSeg"></div>
+                </div>
+              </div>
+              <div class="ctl speed">
+                <div class="clbl">Speed</div>
+                <div class="opts" id="engineOpts">
+                  <div class="opt on" id="engApi"><div class="ohead"><span class="oname">Live</span><span class="obadge">⚡ Immediate</span><span class="oprice"></span></div><div class="odesc"><b>Synchronous API calls</b><span class="okv"><span class="k">Availability:</span> ready in minutes</span></div></div>
+                  <div class="opt" id="engBatch"><div class="ohead"><span class="oname">Batch</span><span class="obadge alt">◷ Up to 24h</span><span class="oprice"></span></div><div class="odesc"><b>Submitted as a batch job</b><span class="okv"><span class="k">Price:</span> roughly −50% off</span></div></div>
+                </div>
+              </div>
+              <div class="ctl" id="concCtl">
+                <div class="clbl">Concurrency</div>
+                <div class="stepper"><button onclick="bumpConc(-1)">−</button><span id="concV">4</span><button onclick="bumpConc(1)">+</button></div>
+                <div class="conc-note">Live only</div>
+              </div>
+              <div class="toggle on" id="themesToggle" onclick="this.classList.toggle('on');recompute()">
+                <div class="sw"></div>
+                <div class="tl"><div class="t">Cross-cutting themes</div><div class="d">Discover concerns scattered across many files. Adds to the cost.</div></div>
+              </div>
+              <div class="ctl total">
+                <div class="clbl">Estimated total</div>
+                <div class="amt" id="costV">—</div>
+                <div class="sub">incl. ~<span id="embCost">$0</span> embeddings · floor → +50%</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="pane" style="margin-top:14px">
+            <div class="ph"><span class="pt">Doc types</span><span class="pmeta" id="dtSummary"></span></div>
+            <div class="pbody"><div class="dtmatrix" id="dtmatrix"></div></div>
+          </div>
+        </section>
+
+        <!-- ───── STEP 5 · SUMMARY / OVERVIEW ───── -->
+        <section class="step" data-step="5">
+          <div id="gen-config">
+            <div class="eyebrow">Step 5 of 5 · Summary <span class="tag">ariadne onboard</span></div>
+            <h1 class="title">Review &amp; build</h1>
+            <p class="lede">Exactly what will be generated, and why it costs what it does. Jump back to any step to change something — your settings are kept.</p>
+            <div class="review-split">
+              <div class="rev-col">
+                <div class="rev-h">Your settings</div>
+                <div class="review">
+                  <div class="rrow"><span class="rk">Source</span><span class="rv" id="rvSource">—</span><a class="redit" onclick="goStep(1)">Connect ↗</a></div>
+                  <div class="rrow"><span class="rk">Scope</span><span class="rv" id="rvScope">—</span><a class="redit" onclick="goStep(3)">Preview ↗</a></div>
+                  <div class="rrow"><span class="rk">Doc types</span><span class="rv" id="rvDoc">—</span><a class="redit" onclick="goStep(4)">Generate ↗</a></div>
+                  <div class="rrow"><span class="rk">Themes</span><span class="rv" id="rvThemes">—</span><a class="redit" onclick="goStep(4)">Generate ↗</a></div>
+                  <div class="rrow"><span class="rk">Model</span><span class="rv" id="rvModel">—</span><a class="redit" onclick="goStep(4)">Generate ↗</a></div>
+                  <div class="rrow"><span class="rk">Speed</span><span class="rv" id="rvSpeed">—</span><a class="redit" onclick="goStep(4)">Generate ↗</a></div>
+                </div>
+              </div>
+              <div class="rev-col">
+                <div class="rev-h">What gets built</div>
+                <div class="phaseplan" id="phaseplan">
+                  <div class="p"><span class="ic">▤</span><span class="nm">Explanations &amp; architecture</span><span class="pbar"><i></i></span></div>
+                  <div class="p"><span class="ic">?</span><span class="nm">Q&amp;A · gotchas · diagrams</span><span class="pbar"><i></i></span></div>
+                  <div class="p"><span class="ic">❖</span><span class="nm">Theme discovery (Leiden)</span><span class="pbar"><i></i></span></div>
+                  <div class="p"><span class="ic">∿</span><span class="nm">Embeddings &amp; search index</span><span class="pbar"><i></i></span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="gen-running" style="display:none">
+            <div class="eyebrow">Building <span class="tag">ariadne onboard</span></div>
+            <h1 class="title">Threading through the labyrinth…</h1>
+            <p class="lede">Generating docs. You can close this — it keeps running.</p>
+            <div class="runline" id="runLine"><span class="pip"></span> Working…</div>
+          </div>
+          <div id="gen-ready" style="display:none">
+            <div class="ready">
+              <div class="big">📖</div>
+              <h2>Your knowledge base is ready</h2>
+              <p id="readyMsg">Queryable over MCP, CLI, and the web console.</p>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+
+    <div class="stage-foot">
+      <button class="btn ghost" id="backBtn" onclick="back()" style="visibility:hidden">← Back</button>
+      <div class="foot-spacer"></div>
+      <div class="foot-total" id="footTotal" style="display:none">
+        <span class="ft-k">Estimated total<small>embeddings included · real cost typically within +50%</small></span>
+        <span class="ft-v" id="cbTotal">$117–$175</span>
+      </div>
+      <button class="btn primary" id="nextBtn" onclick="next()">Continue →</button>
+    </div>
+  </main>
+  </div>
+
+<script>
+(function(){
+  const $ = (id)=>document.getElementById(id);
+  const esc = (s)=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const cap = (s)=>s? s.charAt(0).toUpperCase()+s.slice(1) : s;
+  const money = (n)=>{ n=+n||0; return '$'+(n>=20?Math.round(n):n.toFixed(n>=1?1:2)); };
+  const band = (c)=>{ c=+c||0; return money(c)+'–'+money(c*1.5); };
+  const setText = (id,v)=>{ const e=$(id); if(e!=null) e.textContent=v; };
+
+  const STEPS=[
+    {t:"Connect",  d:"Name & path",        cli:"source add"},
+    {t:"Discover", d:"Languages & index",  cli:"discover"},
+    {t:"Preview",  d:"Scope & cost",       cli:"estimate"},
+    {t:"Generate", d:"Model & doc types",  cli:"onboard"},
+    {t:"Summary",  d:"Review & build",     cli:"onboard"},
+  ];
+  let cur=1; const TOTAL=STEPS.length;
+
+  const state = {
+    source:null, model:'claude-opus-4-8', batch:false, estimate:null, discover:null,
+    excludeGlobs:[], excludeDirs:[], excludeFiles:[], exemptDirs:[], branches:[], depends:[],
+    docTypes:null,            // null = all applicable; else the enabled subset
+    fmtExcl:{},               // {doc_type: [excluded languages]} — per-format excludes within a doc type
+    dtTouched:false,          // user changed the doc-type screen → persist doc_types_by_language (don't clobber otherwise)
+    tree:null, cols:[],       // cols = Miller-column drill path (dir names)
+    optDelta:0,               // optimistic $ adjustment shown instantly on toggle,
+                              // reset when the authoritative estimate returns
+    jobId:null, buildTimer:null,   // background generate job id + its status-poll timer
+  };
+
+  let bannerEl;
+  function banner(msg, kind){
+    if(!bannerEl){
+      bannerEl=document.createElement('div');
+      bannerEl.style.cssText='position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:9999;padding:9px 16px;border-radius:10px;font:500 13px/1.4 var(--sans);box-shadow:var(--shadow);max-width:80vw;text-align:center';
+      document.body.appendChild(bannerEl);
+    }
+    if(!msg){ bannerEl.style.display='none'; return; }
+    const err=kind==='err', ok=kind==='ok';
+    bannerEl.style.display='block'; bannerEl.textContent=msg;
+    bannerEl.style.background = err?'var(--red)':(ok?'var(--green)':'var(--panel)');
+    bannerEl.style.color = (err||ok)?'#0b1220':'var(--text)';
+    bannerEl.style.border = '1px solid '+(err?'var(--red)':(ok?'var(--green)':'var(--line)'));
+  }
+  async function api(path, body){
+    const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+    let d={}; try{ d=await r.json(); }catch(e){}
+    if(!r.ok) throw new Error((d&&d.error)||('HTTP '+r.status));
+    return d;
+  }
+  const onState = (id, dflt)=>{ const e=$(id); return e? e.classList.contains('on') : dflt; };
+
+  // ════ rail + navigation ════
+  const stepsEl=$('steps');
+  STEPS.forEach((s,i)=>{
+    const n=i+1; const el=document.createElement('div'); el.className='step-item';
+    el.innerHTML='<div class="node">'+n+'</div><div class="meta"><div class="t">'+s.t+'</div><div class="d">'+s.d+'</div><div class="cli">ariadne '+s.cli+'</div></div>';
+    el.onclick=()=>goStep(n); stepsEl.appendChild(el);
+  });
+  function render(){
+    document.querySelectorAll('.step').forEach(s=>s.classList.toggle('on', +s.dataset.step===cur));
+    document.querySelectorAll('.step-item').forEach((el,i)=>{
+      const n=i+1; el.classList.toggle('done',n<cur); el.classList.toggle('current',n===cur);
+      const node=el.querySelector('.node'); if(node) node.textContent=n<cur?'✓':n;
+    });
+    const nodes=[...stepsEl.querySelectorAll('.step-item .node')];
+    if(nodes.length){
+      const base=stepsEl.getBoundingClientRect();
+      const cy=el=>{const r=el.getBoundingClientRect();return r.top-base.top+r.height/2;};
+      const top=cy(nodes[0]), last=cy(nodes[nodes.length-1]), now=cy(nodes[cur-1]);
+      stepsEl.style.setProperty('--track-top',top+'px'); stepsEl.style.setProperty('--track-h',(last-top)+'px');
+      const f=$('threadfill'); if(f){ f.style.top=top+'px'; f.style.height=Math.max(0,now-top)+'px'; }
+    }
+    const back=$('backBtn'); if(back) back.style.visibility=cur>1?'visible':'hidden';
+    const nb=$('nextBtn');
+    if(nb){ if(cur<TOTAL){ nb.textContent='Continue →'; nb.onclick=next; } else { nb.textContent='⚡ Start build'; nb.onclick=startBuild; } }
+    const ft=$('footTotal'); if(ft) ft.style.display=(cur>=4)?'flex':'none';
+    const aw=$('advWrap'); if(aw) aw.style.display=(cur===4)?'flex':'none';
+    const ap=$('advPop'); if(ap) ap.hidden=true;
+    if(cur===TOTAL){ const gc=$('gen-config'),gr=$('gen-running'),gd=$('gen-ready'); if(gc)gc.style.display='block'; if(gr)gr.style.display='none'; if(gd)gd.style.display='none'; }
+  }
+  window.goStep=function(n){ cur=Math.max(1,Math.min(TOTAL,n)); render(); const sb=document.querySelector('.stage-body'); if(sb)sb.scrollTop=0; onEnter(cur); };
+  window.back=function(){ goStep(cur-1); };
+
+  // ════ chrome ════
+  window.toggleCollapse=function(id, head){ const b=$(id); if(!b)return; b.classList.toggle('collapsed'); const ch=head&&head.querySelector('.chev'); if(ch) ch.textContent=b.classList.contains('collapsed')?'▸':'▾'; };
+  window.toggleTheme=function(){ const h=document.documentElement, toLight=h.getAttribute('data-theme')!=='light'; h.setAttribute('data-theme', toLight?'light':'dark'); const b=$('themeBtn'); if(b) b.textContent=toLight?'☾':'☀'; };
+  window.ddToggle=function(e){ if(e) e.stopPropagation(); const dd=$('modeldd'); if(dd) dd.classList.toggle('open'); };
+  window.toggleAdv=function(e){ if(e) e.stopPropagation(); const p=$('advPop'); if(p) p.hidden=!p.hidden; };
+  window.bumpConc=function(d){ const el=$('concV'); if(el) el.textContent=Math.max(1,Math.min(12,(+el.textContent||4)+d)); };
+  window.recompute=function(){ applyLocalTotals(); };   // themes toggle → instant local recompute
+  document.addEventListener('click',e=>{ const dd=$('modeldd'); if(dd && !e.target.closest('#modeldd')) dd.classList.remove('open'); const m=$('depMenu'); if(m && !e.target.closest('#depChips')) m.hidden=true; });
+
+  // ── chip fields (globs / branches / exempt) ──
+  const CHIP_FIELDS={
+    exGlobs:{arr:'excludeGlobs', ph:'e.g. **/*.min.js', commit:true},
+    exBranches:{arr:'branches', ph:'e.g. release/*', commit:false},
+    exemptChips:{arr:'exemptDirs', ph:'e.g. vendor', commit:true},
+  };
+  function savingFor(pattern){
+    const e=state.estimate; if(!e||!e.exclusion_savings) return null;
+    return e.exclusion_savings.find(s=>s.pattern===pattern)||null;
+  }
+  function savingSuffix(v){
+    const sv=savingFor(v); if(!sv) return '';
+    const amt=state.batch?sv.saved_batched_usd:sv.saved_usd;
+    if(sv.kind==='exempt') return ' <span class="save add" title="cost this force-include adds">+'+money(Math.abs(amt))+'</span>';
+    if(sv.files>0) return ' <span class="save" title="'+sv.files+' files this excludes">saves '+money(amt)+'</span>';
+    return ' <span class="save" style="color:var(--faint)">matches 0</span>';
+  }
+  function renderChips(containerId){
+    const cfg=CHIP_FIELDS[containerId], c=$(containerId); if(!cfg||!c) return;
+    const arr=state[cfg.arr];
+    c.querySelectorAll('.tchip:not(.add)').forEach(x=>x.remove());
+    const add=c.querySelector('.tchip.add');
+    arr.forEach(v=>{ const chip=document.createElement('span'); chip.className='tchip';
+      chip.innerHTML=esc(v)+(cfg.commit?savingSuffix(v):'')+' <span class="rm">✕</span>';
+      chip.querySelector('.rm').onclick=()=>{ const i=arr.indexOf(v); if(i>=0)arr.splice(i,1); renderChips(containerId); if(cfg.commit) commitScope(); };
+      c.insertBefore(chip, add); });
+  }
+  function startChipInput(addEl){
+    const c=addEl.parentElement, cfg=CHIP_FIELDS[c.id]; if(!cfg) return;
+    if(c.querySelector('.chipinput')){ c.querySelector('.chipinput').focus(); return; }
+    const inp=document.createElement('input'); inp.className='chipinput'; inp.placeholder=cfg.ph+' — Enter';
+    inp.onkeydown=(e)=>{
+      if(e.key==='Enter' && inp.value.trim()){ state[cfg.arr].push(inp.value.trim()); inp.value=''; renderChips(c.id); if(cfg.commit) commitScope(); inp.focus(); }
+      else if(e.key==='Escape'){ inp.remove(); }
+    };
+    inp.onblur=()=>{ if(!inp.value.trim()) inp.remove(); };
+    c.insertBefore(inp, addEl); inp.focus();
+  }
+  window.startAdd=startChipInput;
+  window.startExempt=startChipInput;
+
+  // ── dependency picker ──
+  function renderDepChips(){
+    const c=$('depChips'); if(!c) return;
+    c.querySelectorAll('.tchip:not(.add)').forEach(x=>x.remove());
+    const add=c.querySelector('.tchip.add');
+    state.depends.forEach(name=>{ const chip=document.createElement('span'); chip.className='tchip';
+      chip.innerHTML=esc(name)+' <span class="rm">✕</span>';
+      chip.querySelector('.rm').onclick=()=>{ const i=state.depends.indexOf(name); if(i>=0)state.depends.splice(i,1); renderDepChips(); };
+      c.insertBefore(chip, add); });
+  }
+  window.toggleDepMenu=function(e){ if(e) e.stopPropagation(); const m=$('depMenu'); if(m) m.hidden=!m.hidden; };
+  window.addDep=function(el){ const name=el && el.dataset.dep; if(!name || state.depends.includes(name)) return; state.depends.push(name); renderDepChips(); loadSources(); const m=$('depMenu'); if(m) m.hidden=true; };
+  async function loadSources(){
+    const menu=$('depMenu'); if(!menu) return;
+    let data; try{ data=await api('/api/sources',{}); }catch(e){ return; }
+    const self = state.source || (($('srcName')||{}).value||'').trim();
+    const others=(data.sources||[]).map(s=>s.name).filter(n=>n && n!==self);
+    let html='<div class="dmh">Existing sources in this project</div>';
+    if(!others.length) html+='<div class="dmi off">No other sources configured</div>';
+    others.forEach(n=>{ const a=state.depends.includes(n); html+='<div class="dmi'+(a?' off':'')+'" data-dep="'+esc(n)+'" onclick="addDep(this)">'+esc(n)+(a?' <span class="added">✓ added</span>':'')+'</div>'; });
+    menu.innerHTML=html;
+  }
+
+  // ════ renderers ════
+  const LANG_COLORS=['var(--gold)','var(--cyan)','var(--green)','#9a8bf2','#e08a5b','#33476e'];
+  function renderGit(git){
+    const box=$('gitDetected'), txt=$('gitDetectedText'); if(!box||!txt) return;
+    if(!git || !git.is_repo){ box.style.display='none'; return; }
+    const sz = git.size_bytes!=null ? (git.size_bytes>=1e9?(git.size_bytes/1e9).toFixed(1)+' GB':Math.max(1,Math.round(git.size_bytes/1e6))+' MB') : null;
+    const parts=[git.file_count!=null?git.file_count.toLocaleString()+' files':null, sz, git.last_commit_relative?('last commit '+git.last_commit_relative):null].filter(Boolean);
+    txt.innerHTML='<b>Git repository detected</b> <span class="muted">· branch</span> <b>'+esc(git.branch||'?')+'</b>'+(parts.length?' <span class="muted">· '+esc(parts.join(' · '))+'</span>':'');
+    box.style.display='flex';
+  }
+  function renderDiscover(d){
+    const langs=d.languages||[];
+    setText('langLabel', 'Languages · '+(d.file_count||0).toLocaleString()+' files');
+    const bar=$('langBar'); if(bar) bar.innerHTML=langs.map((l,i)=>'<i style="width:'+l.percent+'%;background:'+LANG_COLORS[i%LANG_COLORS.length]+'"></i>').join('');
+    const leg=$('langLeg'); if(leg) leg.innerHTML=langs.map((l,i)=>'<span><span class="d" style="background:'+LANG_COLORS[i%LANG_COLORS.length]+'"></span> '+esc(cap(l.language))+' '+l.percent+'% · '+l.files+'</span>').join('');
+    const plan=$('indexPlan');
+    if(plan){
+      const SCIP=new Set(['python','typescript','javascript','scala','java']);
+      const byKind={}; (d.indexers||[]).forEach(ix=>{ (byKind[ix.kind]=byKind[ix.kind]||[]).push(ix); });
+      // Each package's real name is read from its marker (npm/sbt/maven) by
+      // the backend and arrives in ix.names (aligned with ix.markers). Fall
+      // back to the marker's directory — never the Ariadne source name.
+      const pkgLabel=(m)=>{ const i=m.lastIndexOf('/'); const dir=i>=0?m.slice(0,i):''; return dir || '(repository root)'; };
+      const ic=(id)=>'<svg class="mi"><use href="#'+id+'"></use></svg>';
+      const FOLDER={python:'mi-folder-python',typescript:'mi-folder-typescript',java:'mi-folder-scala'};
+      const FMT={yaml:'mi-yaml',json:'mi-json',markdown:'mi-markdown',dockerfile:'mi-docker',rst:'mi-readthedocs',shell:'mi-console',sql:'mi-database'};
+      const KLABEL={python:'Python',typescript:'TypeScript',java:'Scala / Java'};
+      const kindIcon=(k)=> k==='java' ? ic('mi-scala')+ic('mi-java') : ic({python:'mi-python',typescript:'mi-typescript'}[k]||'mi-file');
+      let html='';
+      Object.keys(byKind).forEach(kind=>{
+        const seen=new Set(), pkgs=[];
+        byKind[kind].forEach(ix=>{
+          const ms=ix.markers||[], nms=ix.names||[];
+          if(ms.length) ms.forEach((m,idx)=>{ const lab=nms[idx]||pkgLabel(m); if(!seen.has(lab)){ seen.add(lab); pkgs.push({label:lab, scripts:ix.entry_kind==='scripts'}); } });
+          else { const lab=(ix.cwd&&ix.cwd!=='.')?ix.cwd:'(repository root)'; if(!seen.has(lab)){ seen.add(lab); pkgs.push({label:lab, scripts:ix.entry_kind==='scripts'}); } }
+        });
+        html+='<div class="prow"><span class="disc">▸</span><span class="lang">'+kindIcon(kind)+(KLABEL[kind]||esc(cap(kind)))+'</span><span class="arrow">→</span><span class="cap">Compiler-precise call graph</span><span class="pmeta">'+pkgs.length+' '+(pkgs.length===1?'package':'packages')+'</span></div>';
+        html+='<div class="pkgs"><div class="pkghdr">Detected packages</div>'+
+          pkgs.map(p=>'<div class="pkg'+(p.scripts?' dim':'')+'">'+ic(FOLDER[kind]||'mi-folder')+' '+esc(p.label)+(p.scripts?' <span class="pm2">loose scripts</span>':'')+'</div>').join('')+
+          '</div>';
+      });
+      const others=(d.languages||[]).filter(l=>!SCIP.has(l.language));
+      const otherTotal=others.reduce((a,l)=>a+l.files,0);
+      html+='<div class="prow"><span class="disc">▸</span><span class="lang">Other formats</span><span class="arrow">→</span><span class="cap struct">Structural catalog</span><span class="pmeta">'+otherTotal+' files</span></div>';
+      html+='<div class="pkgs"><div class="pkghdr">By file type · not call-graph indexed</div>'+
+        (others.length ? others.map(l=>'<div class="pkg">'+ic(FMT[l.language]||'mi-file')+' '+esc(cap(l.language))+' <span class="pm2">'+l.files+' files</span></div>').join('') : '<div class="pkg dim">none</div>')+
+        '</div>';
+      plan.innerHTML=html;
+      plan.querySelectorAll('.prow').forEach(row=>{ const pk=row.nextElementSibling;
+        if(pk && pk.classList.contains('pkgs')){ row.style.cursor='pointer';
+          row.onclick=()=>{ const open=pk.classList.toggle('open'); const dc=row.querySelector('.disc'); if(dc) dc.textContent=open?'▾':'▸'; }; } });
+    }
+    const note=$('manifestNote');
+    if(note) note.innerHTML='<div><span class="okmark">✓</span> Wrote manifest — <b>'+(d.file_count||0).toLocaleString()+' files</b> across <b>'+(d.dir_count||0)+' directories</b></div>'+
+      ((d.index_kinds&&d.index_kinds.length)?'<div><span class="okmark">✓</span> Updated <code>ariadne.yaml</code> · index_kinds: <code>'+esc(d.index_kinds.join(', '))+'</code></div>':'');
+  }
+  const ICON={explanation:'📄',architecture:'🏛️',qa:'❓',gotcha:'⚠️',diagram:'📊',catalog:'🗂️'};
+  const DESC={explanation:'A plain-language summary of what each file does and why — the gist an agent (or teammate) needs before ever opening the source.',architecture:'How the piece fits the wider system: its dependencies, data flow, and what a change here ripples into — the blast radius, up front.',qa:'Pre-answered “how do I…?” questions for the file, so common tasks start from an answer instead of a cold read of the code.',gotcha:'The non-obvious traps — implicit contracts, ordering assumptions, edge cases — that quietly cost real debugging hours when missed.',diagram:'A generated visual of the key flows and relationships, to grasp a complex path at a glance instead of tracing it by hand.',catalog:'A structured index of every symbol — classes, functions, configs — each with a one-line description: the file’s table of contents.'};
+  // Cross-cutting themes add an ~8% surcharge on output-token cost (extra
+  // theme docs get generated), mirroring the mock's heuristic. Input tokens
+  // and embeddings are unaffected. The toggle defaults ON.
+  const themesOn = ()=>onState('themesToggle', true);
+  // The one cost function. The token VOLUMES barely change across models and
+  // don't change at all on an exclusion toggle, so we never re-walk for those:
+  // we scale the authoritative estimate's LLM portion by the chosen model's
+  // rates and apply any pending optimistic exclusion delta. Returns the floor
+  // $ (band() adds the +50% ceiling). Themes add ~8% of output cost.
+  function modelTotal(modelId, batch){
+    const e=state.estimate; if(!e) return 0;
+    const inT=e.input_tokens||0, outT=e.output_tokens||0, emb=e.embedding_cost_usd||0;
+    let refLLM=(batch?e.total_cost_batched_usd:e.total_cost_usd)-emb;   // authoritative, model-of-record
+    // Doc-type toggles are pure math too: when the set is filtered, the LLM
+    // portion is the sum of the ENABLED doc types' costs (the server's own
+    // by_doc_type breakdown) — no re-walk. null = all enabled → use the whole.
+    // Per-format excludes are math too: each (doc type × format) price is
+    // pre-computed once (state.fmtCost); the LLM portion is the sum of the
+    // ENABLED doc types' INCLUDED formats — no re-walk, just addition.
+    const fmtX=state.fmtExcl||{}, anyFmtX=Object.keys(fmtX).some(dt=>(fmtX[dt]||[]).length);
+    if((state.docTypes!==null || anyFmtX) && state.docTypeCost){
+      const enabledDt=state.docTypes===null?Object.keys(state.docTypeCost):state.docTypes;
+      let s=0;
+      enabledDt.forEach(dt=>{ const per=state.fmtCost&&state.fmtCost[dt], c=state.docTypeCost[dt];
+        if(per && Object.keys(per).length){ const ex=fmtX[dt]||[];
+          Object.keys(per).forEach(lang=>{ if(ex.indexOf(lang)<0) s+=(batch?per[lang].batched:per[lang].usd); });
+        } else if(c){ s+=(batch?c.batched:c.usd); }
+      });
+      refLLM=s;
+    }
+    const refRate=e.input_per_million*inT + e.output_per_million*outT;
+    const m=(e.available_models||[]).find(x=>x.model===modelId);
+    let llm=refLLM, outRate=e.output_per_million;
+    if(m && refRate>0){ llm=refLLM*((m.input_per_million*inT + m.output_per_million*outT)/refRate); outRate=m.output_per_million; }
+    // optimistic exclusion delta (LLM portion), scaled for batch like the total
+    const bf = batch ? (e.total_cost_usd ? e.total_cost_batched_usd/e.total_cost_usd : 0.5) : 1;
+    llm = Math.max(0, llm + (state.optDelta||0)*bf);
+    const themes = themesOn() ? outT*outRate/1e6*(batch?0.5:1)*0.08 : 0;
+    return llm + emb + themes;
+  }
+  function applyLocalTotals(){ if(state.estimate) renderEstimate(state.estimate, false); }   // instant, no backend, no tree rebuild
+  function bumpOpt(delta){ state.optDelta=(state.optDelta||0)+delta; }
+  function renderModels(e){
+    const models=e.available_models||[];
+    const prov=(id)=>id.startsWith('claude')?'Anthropic':(id.startsWith('gpt')?'OpenAI':'Other');
+    const groups={}; models.forEach(m=>{ (groups[prov(m.model)]=groups[prov(m.model)]||[]).push(m); });
+    let html='';
+    Object.keys(groups).forEach(p=>{ html+='<div class="provhdr">'+p+'</div>';
+      groups[p].forEach(m=>{ html+='<div class="ml'+(m.model===state.model?' on':'')+'" data-model="'+esc(m.model)+'"><span class="mn">'+esc(m.model)+'</span><span class="mv"></span><span class="mp">$'+m.input_per_million+' / $'+m.output_per_million+'</span><span class="me">~'+money(modelTotal(m.model,state.batch))+'</span></div>'; });
+    });
+    const seg=$('modelSeg'); if(seg){ seg.innerHTML=html; seg.querySelectorAll('.ml[data-model]').forEach(row=>row.onclick=()=>selectModel(row.dataset.model)); }
+    const cm=models.find(m=>m.model===state.model);
+    setText('ddnm', state.model); if(cm) setText('ddrate', '$'+cm.input_per_million+' / $'+cm.output_per_million);
+  }
+  function renderMatrix(e){
+    const ldt=e.language_doc_types||{}, byType={};
+    (e.by_doc_type||[]).forEach(d=>byType[d.doc_type]=d);
+    const present=(e.by_doc_type||[]).map(d=>d.doc_type);
+    // Capture the full applicable set once (when nothing is filtered) so
+    // disabled rows don't vanish — they stay, greyed, and re-includable.
+    if(state.docTypes===null && present.length) state.allDocTypes=present.slice();
+    state.docTypeCost=state.docTypeCost||{};
+    state.fmtCost=state.fmtCost||{};   // {doc_type: {language: {usd, batched}}} — per-format price, split once
+    present.forEach(dt=>{ state.docTypeCost[dt]={usd:byType[dt].cost_usd, batched:byType[dt].cost_batched_usd}; });
+    const dts=(state.allDocTypes&&state.allDocTypes.length)?state.allDocTypes:present;
+    const enabled=(dt)=>state.docTypes===null||state.docTypes.includes(dt);
+    const allLangs=(e.languages||[]).slice();
+    // Doc-type-centric accordion: each type is a ribbon (value + files · formats
+    // · cost + on/off); expanding it lists EVERY applicable format as wrapping
+    // chips — so there's no 4-language column cap and all file types show.
+    const fmtsFor=(dt)=>allLangs.filter(l=>(ldt[l.language]||[]).includes(dt)).sort((a,b)=>b.files-a.files);
+    state.dtOpen=state.dtOpen||{};
+    let html='';
+    dts.forEach(dt=>{ const on=enabled(dt), c=state.docTypeCost[dt];
+      const price=c?('~'+money(state.batch?c.batched:c.usd)):'—';
+      const fmts=fmtsFor(dt), files=fmts.reduce((s,l)=>s+l.files,0), open=!!state.dtOpen[dt];
+      // Split this doc type's cost across its formats by file share, once — so
+      // toggling a format is add/subtract, never a re-estimate.
+      const fc={}; if(c && files>0) fmts.forEach(l=>{ const r=l.files/files; fc[l.language]={usd:c.usd*r, batched:c.batched*r}; });
+      state.fmtCost[dt]=fc;
+      html+='<div class="dtrow'+(on?'':' off')+(open?' open':'')+'" data-dt="'+esc(dt)+'">'+
+        '<div class="dthead">'+
+          '<span class="dchev">▸</span>'+
+          '<span class="dcb" data-act="dt">'+(on?'✓':'')+'</span>'+
+          '<span class="ic">'+(ICON[dt]||'•')+'</span>'+
+          '<div class="dt-txt"><div class="nm">'+esc(cap(dt))+'</div><div class="ds">'+esc(DESC[dt]||'')+'</div></div>'+
+          '<div class="dtmeta"><span class="dtf">'+files.toLocaleString()+' files · '+fmts.length+' format'+(fmts.length===1?'':'s')+'</span><span class="tprice">'+price+'</span></div>'+
+        '</div>'+
+        '<div class="dtfmts">'+(fmts.length?fmts.map(l=>{const ex=(state.fmtExcl[dt]||[]).indexOf(l.language)>=0,pc=fc[l.language],pr=pc?('~'+money(state.batch?pc.batched:pc.usd)):'';return '<span class="fchip'+(ex?' fx':'')+'" data-fmt="'+esc(l.language)+'" title="'+(ex?'Excluded — click to include':'Click to exclude '+esc(cap(l.language))+' from '+esc(cap(dt)))+'"><span class="fck">'+(ex?'✕':'✓')+'</span>'+esc(cap(l.language))+'<small>'+l.files+(pr?' · <b class="fpr">'+pr+'</b>':'')+'</small></span>';}).join(''):'<span class="fnone">No matching files.</span>')+'</div>'+
+      '</div>'; });
+    const dm=$('dtmatrix'); if(dm){ dm.innerHTML=html; dm.onclick=(ev)=>{
+      const row=ev.target.closest('[data-dt]'); if(!row) return; const dt=row.dataset.dt;
+      const chip=ev.target.closest('.fchip[data-fmt]');
+      if(chip){ toggleFmt(dt, chip.dataset.fmt); return; }   // format chip → exclude/include this format for this doc type
+      if(ev.target.closest('[data-act="dt"]')){ toggleDocType(dt); return; }   // checkbox → whole doc type on/off
+      if(ev.target.closest('.dthead')){ state.dtOpen[dt]=!state.dtOpen[dt]; renderMatrix(state.estimate); }   // head → expand/collapse
+    }; }
+    setText('dtSummary', dts.filter(enabled).length+' of '+dts.length+' types');
+  }
+  function toggleDocType(dt){
+    const all=(state.allDocTypes&&state.allDocTypes.length)?state.allDocTypes:(state.estimate&&state.estimate.by_doc_type||[]).map(d=>d.doc_type);
+    let set=state.docTypes===null?all.slice():state.docTypes.slice();
+    const i=set.indexOf(dt); if(i>=0) set.splice(i,1); else set.push(dt);
+    if(!set.length){ banner('Keep at least one doc type.',''); setTimeout(()=>banner(''),1500); return; }
+    state.docTypes=(set.length>=all.length)?null:set;
+    applyLocalTotals();   // doc-type cost is local math (by_doc_type) — no re-walk
+  }
+  function toggleFmt(dt, lang){
+    // Exclude/include one format (language) within a doc type. Persisted as
+    // doc_types_by_language; cost is the pre-computed per-format price (no
+    // re-walk), exactly like a file/dir toggle in the browser.
+    state.dtTouched=true;
+    const ldt=(state.estimate&&state.estimate.language_doc_types)||{}, langs=(state.estimate&&state.estimate.languages)||[];
+    const fmts=langs.filter(l=>(ldt[l.language]||[]).includes(dt));
+    const arr=state.fmtExcl[dt]||(state.fmtExcl[dt]=[]);
+    const i=arr.indexOf(lang), excluding=i<0;
+    if(excluding && arr.length+1>=fmts.length){
+      banner('Keep at least one format — turn the whole doc type off instead.',''); setTimeout(()=>banner(''),1800); return;
+    }
+    if(excluding) arr.push(lang); else arr.splice(i,1);
+    if(!arr.length) delete state.fmtExcl[dt];
+    applyLocalTotals();   // re-renders chips (struck) + the per-format price math
+    persistScope(false);  // save the override; no re-estimate
+  }
+  function renderExplorer(e, rebuild){
+    // rebuild === false → a local recompute (model switch / optimistic toggle):
+    // keep the tree (and any optimistic inScope flags) instead of re-stamping
+    // it from a stale estimate.
+    if(rebuild!==false) state.tree = buildTree(e.by_directory||[]);
+    renderBrowser();
+    renderChips('exGlobs'); renderChips('exemptChips');   // refresh savings suffixes
+    const n=e.file_count||0;
+    setText('fileSum', n.toLocaleString()+' files in scope · click any file or folder to exclude · excluded items stay listed');
+  }
+  function setSubtreeScope(nd, val){ if(!nd) return; nd.inScope=val; Object.values(nd.children).forEach(c=>setSubtreeScope(c,val)); }
+  function buildTree(byDir){
+    // MERGE into the existing tree so excluded items keep their node (greyed,
+    // re-includable) instead of vanishing when they drop out of the estimate.
+    // ``inScope`` is re-stamped each build: anything pruned by ANY mechanism
+    // (glob, dir, file, default policy) lands false and renders greyed.
+    const root=state.tree||{name:'',children:{},cost:0,docs:0};
+    (function clear(nd){ nd.inScope=false; Object.values(nd.children).forEach(clear); })(root);
+    byDir.forEach(n=>{ if(!n.rel_path||n.rel_path==='.') return;
+      let cur=root;
+      n.rel_path.split('/').forEach(s=>{ if(!cur.children[s]) cur.children[s]={name:s,children:{},cost:0,docs:0}; cur=cur.children[s]; cur.inScope=true; });
+      cur.cost=n.total_usd||0; cur.docs=n.docs||0; });
+    root.inScope=true;
+    return root;
+  }
+  const isDir=(nd)=>Object.keys(nd.children).length>0;
+  function dirScope(nd){
+    // A directory's checkbox state, derived from its descendant files: every
+    // file in scope → 'on'; none → 'off'; a mix → 'partial' (greyed checkmark).
+    let on=false, off=false;
+    (function walk(n){ Object.values(n.children).forEach(c=>{
+      if(isDir(c)) walk(c); else if(c.inScope===false) off=true; else on=true;
+    }); })(nd);
+    if(on && off) return 'partial';
+    return (off && !on) ? 'off' : 'on';
+  }
+  function nodeAt(path){ let cur=state.tree; for(const s of (path||[])){ if(!cur||!cur.children[s]) return null; cur=cur.children[s]; } return cur||null; }
+  // file/folder icons from the inlined vscode-icons sprite
+  const FILE_ICON={py:'mi-python',pyi:'mi-python',ipynb:'mi-python',ts:'mi-typescript',tsx:'mi-typescript',js:'mi-typescript',jsx:'mi-typescript',mjs:'mi-typescript',cjs:'mi-typescript',vue:'mi-vue',json:'mi-json',yaml:'mi-yaml',yml:'mi-yaml',md:'mi-markdown',markdown:'mi-markdown',rst:'mi-readthedocs',sql:'mi-database',sh:'mi-console',bash:'mi-console',zsh:'mi-console',scala:'mi-scala',sc:'mi-scala',sbt:'mi-sbt',java:'mi-java',kt:'mi-java'};
+  const FOLDER_ICON={docs:'mi-folder-docs',doc:'mi-folder-docs',documentation:'mi-folder-docs',test:'mi-folder-test',tests:'mi-folder-test',__tests__:'mi-folder-test',testkit:'mi-folder-test',src:'mi-folder-src',source:'mi-folder-src',sources:'mi-folder-src',main:'mi-folder-src',cypress:'mi-folder-cypress',target:'mi-folder-target',resources:'mi-folder-resource',resource:'mi-folder-resource'};
+  const useIcon=(id)=>'<svg class="mi"><use href="#'+id+'"></use></svg>';
+  function fileIcon(name){
+    const lc=name.toLowerCase();
+    if(lc==='dockerfile'||lc.startsWith('dockerfile')) return useIcon('mi-docker');
+    const dot=lc.lastIndexOf('.'); const ext=dot>=0?lc.slice(dot+1):'';
+    return useIcon(FILE_ICON[ext]||'mi-file');
+  }
+  const folderIcon=(name)=>useIcon(FOLDER_ICON[name.toLowerCase()]||'mi-folder');
+  function sortNodes(arr){
+    return arr.slice().sort((a,b)=>{ const ad=isDir(a), bd=isDir(b);
+      if(ad!==bd) return ad?-1:1;                   // directories before files…
+      const ac=a.cost||0, bc=b.cost||0;
+      if(ac!==bc) return bc-ac;                       // …then by price (costliest first)…
+      return a.name.localeCompare(b.name); });        // …then name as a tiebreak
+  }
+  function costView(c){   // per-item cost in the selected mode — batch ≈ the blended discount ratio the total uses
+    if(!c) return '';
+    const e=state.estimate, r=(state.batch && e && e.total_cost_usd) ? (e.total_cost_batched_usd/e.total_cost_usd) : 1;
+    return money(c*r);
+  }
+  function browserRow(nd, depth, selName){
+    const dir=isDir(nd);
+    const rel=state.cols.slice(0,depth).concat([nd.name]).join('/');
+    const explicit = dir ? state.excludeDirs.includes(nd.name) : state.excludeFiles.includes(rel);
+    // A directory reflects its descendants: a partial selection (some files in,
+    // some out) shows a greyed checkmark instead of a full or empty one.
+    let off, partial=false;
+    if(dir && !explicit){ const st=dirScope(nd); off=(st==='off'); partial=(st==='partial'); }
+    else { off = explicit || nd.inScope===false; }
+    const auto = off && !explicit;   // greyed without the user doing it → default policy / a glob
+    const sel = dir && nd.name===selName;
+    return '<div class="brow'+(off?' off':'')+(partial?' partial':'')+(auto?' auto':'')+(sel?' sel':'')+(dir?' isdir':' isfile')+'" data-name="'+esc(nd.name)+'" data-rel="'+esc(rel)+'" data-depth="'+depth+'" data-dir="'+(dir?1:0)+'"'+(auto?' title="Auto-excluded by the default policy (e.g. test files) or a glob — not by you"':'')+'>'+
+      '<span class="cb" data-act="ex">✓</span>'+(dir?folderIcon(nd.name):fileIcon(nd.name))+
+      '<span class="bname" data-act="'+(dir?'open':'ex')+'">'+esc(nd.name)+'</span>'+
+      '<span class="bcost">'+costView(nd.cost)+'</span>'+
+      (dir?'<span class="bchev" data-act="open">›</span>':'')+'</div>';
+  }
+  const MIN_COLS=3, MAX_COLS=6;
+  function renderBrowser(){
+    const wrap=$('browser'); if(!wrap||!state.tree) return;
+    // Capture each column's scroll (keyed by absolute depth) so re-rendering on
+    // a toggle/recompute keeps the user's place instead of jumping to the top.
+    const prevScroll={}; wrap.querySelectorAll('.bcol[data-depth]').forEach(c=>{ prevScroll[c.dataset.depth]=c.scrollTop; });
+    // Content levels = drill depth + 1. Columns split the width into equal
+    // parts: at least 3, growing to at most 6 as you drill; past 6 the
+    // shallowest (leftmost) columns slide off — the breadcrumb + "up" still
+    // reach them.
+    const total=state.cols.length+1;
+    const startDepth = total>MAX_COLS ? total-MAX_COLS : 0;
+    let colsHtml='';
+    for(let d=startDepth; d<total; d++){
+      const sel = d<state.cols.length ? state.cols[d] : null;
+      const parent = nodeAt(state.cols.slice(0,d));
+      const kids = parent ? sortNodes(Object.values(parent.children)) : [];
+      colsHtml += '<div class="bcol" data-depth="'+d+'">'+
+        (kids.length ? kids.map(nd=>browserRow(nd,d,sel)).join('') : '<div class="bempty">empty</div>')+'</div>';
+    }
+    // Pad to the 3-column minimum with placeholders (only when shallow).
+    const startPad=total-startDepth;
+    for(let i=startPad; i<MIN_COLS; i++)
+      colsHtml += '<div class="bcol placeholder"><div class="bempty">'+(i===startPad?'open a folder →':'')+'</div></div>';
+    const crumb = state.cols.length
+      ? '<span class="up" data-act="up">‹ up</span> · '+(startDepth?'…/':'/')+esc(state.cols.join('/'))
+      : '<span style="color:var(--faint)">/ (repository root)</span>';
+    const nExcl=state.excludeDirs.length+state.excludeFiles.length+state.excludeGlobs.length+state.exemptDirs.length;
+    wrap.innerHTML=
+      '<div class="btoolbar"><div class="crumb">'+crumb+'</div>'+
+        '<span class="tbtn" data-tb="all" title="Re-include every file and folder">✓ Select all</span>'+
+        '<span class="tbtn" data-tb="reset" title="Clear all exclusions and overrides">↺ Reset'+(nExcl?' ('+nExcl+')':'')+'</span></div>'+
+      '<div class="bcols">'+colsHtml+'</div>';
+    // Restore the per-column scroll captured above (same depths → same place;
+    // a freshly-opened column has no saved value and starts at the top).
+    wrap.querySelectorAll('.bcol[data-depth]').forEach(c=>{ const s=prevScroll[c.dataset.depth]; if(s!=null) c.scrollTop=s; });
+    wrap.onclick=(ev)=>{
+      const tb=ev.target.closest('[data-tb]');
+      if(tb){ if(tb.dataset.tb==='all') selectAllFiles(); else resetScope(); return; }
+      const el=ev.target.closest('[data-act]'); if(!el) return;
+      if(el.dataset.act==='up'){ state.cols=state.cols.slice(0,-1); renderBrowser(); return; }
+      const row=el.closest('.brow'); if(!row) return;
+      const dir=row.dataset.dir==='1', depth=+row.dataset.depth, name=row.dataset.name, rel=row.dataset.rel;
+      if(el.dataset.act==='ex'){ const nd=nodeAt(rel.split('/')); const c=nd?nd.cost:0; dir?toggleDirExcl(name,c,nd):toggleFileExcl(rel,c,nd); }
+      else if(el.dataset.act==='open'){ state.cols=state.cols.slice(0,depth).concat([name]); renderBrowser(); }
+    };
+  }
+  // Toggles update the shown total INSTANTLY from the per-item cost we already
+  // have and persist the scope WITHOUT a re-walk (persistScope(false)) — the
+  // local sum is exact for a file/dir. The toggled node's scope is set
+  // optimistically so it greys/un-greys at once (applyLocalTotals keeps the
+  // tree, so the flag isn't clobbered).
+  function toggleDirExcl(nm, cost, nd){ const i=state.excludeDirs.indexOf(nm), ex=i<0; if(ex)state.excludeDirs.push(nm); else state.excludeDirs.splice(i,1); setSubtreeScope(nd,!ex); bumpOpt(ex?-(cost||0):+(cost||0)); applyLocalTotals(); persistScope(false); }
+  function toggleFileExcl(rel, cost, nd){ const i=state.excludeFiles.indexOf(rel), ex=i<0; if(ex)state.excludeFiles.push(rel); else state.excludeFiles.splice(i,1); if(nd) nd.inScope=!ex; bumpOpt(ex?-(cost||0):+(cost||0)); applyLocalTotals(); persistScope(false); }
+  function selectAllFiles(){ state.excludeDirs=[]; state.excludeFiles=[]; state.optDelta=0; renderBrowser(); commitScope(); }
+  function resetScope(){ state.excludeDirs=[]; state.excludeFiles=[]; state.excludeGlobs=[]; state.exemptDirs=[]; state.docTypes=null; state.optDelta=0; renderBrowser(); renderChips('exGlobs'); renderChips('exemptChips'); commitScope(); }
+  function renderScopeSummary(){ const e=state.estimate; if(!e) return; setText('scopeSumText', (e.file_count||0).toLocaleString()+' files in scope · ~'+band(modelTotal(state.model,state.batch))); }
+  function renderEstimate(e, rebuild){
+    if(!e) return;
+    const total = modelTotal(state.model, state.batch);
+    setText('costV', band(total)); setText('cbTotal', band(total)); setText('embCost', money(e.embedding_cost_usd));
+    const ea=$('engApi'), eb=$('engBatch');
+    if(ea){ const p=ea.querySelector('.oprice'); if(p) p.textContent=band(modelTotal(state.model,false)); }
+    if(eb){ const p=eb.querySelector('.oprice'); if(p) p.textContent=band(modelTotal(state.model,true)); }
+    renderModels(e); renderMatrix(e); renderExplorer(e, rebuild); renderScopeSummary();
+  }
+  function renderReview(){
+    const e=state.estimate;
+    const m=e&&(e.available_models||[]).find(x=>x.model===state.model);
+    setText('rvSource', state.source||'—');
+    setText('rvModel', state.model+(m?(' · $'+m.input_per_million+' / $'+m.output_per_million+' per 1M'):''));
+    setText('rvSpeed', state.batch?'Batch · within 24h':'Live · ready in minutes');
+    setText('rvScope', e?(e.file_count+' files · ~'+(e.input_tokens/1e6).toFixed(1)+'M input tokens'):'—');
+    setText('rvDoc', e&&e.by_doc_type.length?e.by_doc_type.map(d=>cap(d.doc_type)).join(', '):'—');
+    setText('rvThemes', onState('themesToggle',false)?'On — cross-cutting concerns discovered':'Off');
+    if(e) setText('cbTotal', band(modelTotal(state.model,state.batch)));
+  }
+
+  // ════ actions ════
+  // Model switch is a pure local recompute — token volumes barely differ
+  // across models, so we re-scale the existing estimate instead of re-walking.
+  function selectModel(id){ state.model=id; const dd=$('modeldd'); if(dd) dd.classList.remove('open'); applyLocalTotals(); }
+  function showDiscovering(){
+    setText('langLabel', 'Walking the repository…');
+    const bar=$('langBar'); if(bar) bar.innerHTML='';
+    const leg=$('langLeg'); if(leg) leg.innerHTML='';
+    const note=$('manifestNote'); if(note) note.innerHTML='';
+    const plan=$('indexPlan');
+    if(plan) plan.innerHTML='<div class="bloading"><div class="bl-msg">Discovering the project'+
+      '<span class="bl-sub">Ariadne is walking the <b>entire tree</b> to detect every language, find build tools (build.sbt, package.json, pyproject, pom.xml…), and read each package’s real name so it can plan cross-source indexing. On a large monorepo this scans thousands of files and can take a while — the language breakdown and index plan appear the moment it finishes.</span></div>'+
+      '<div class="loadbar"><i></i></div></div>';
+  }
+  async function doDiscover(){
+    if(!state.source){ banner('Add a source first (Step 1).','err'); return; }
+    showDiscovering();
+    banner('Discovering languages & index plan… (no API calls)');
+    try{ const d=await api('/api/discover',{source:state.source}); state.discover=d; renderDiscover(d); banner('Discovered '+(d.file_count||0)+' files','ok'); setTimeout(()=>banner(''),1400); }
+    catch(err){ banner('Discover failed: '+err.message,'err'); const plan=$('indexPlan'); if(plan) plan.innerHTML='<div class="bempty">Discover failed — '+esc(err.message)+'</div>'; }
+  }
+  function showEstimating(){
+    const cv=$('costV'); if(cv) cv.classList.add('cvload');
+    const wrap=$('browser'); if(!wrap) return;
+    if(!state.tree){
+      // First load: the file walk + per-file token counting takes a few
+      // seconds on large repos. Show a progress bar — and explain the wait —
+      // rather than an empty pane.
+      wrap.innerHTML='<div class="bloading"><div class="bl-msg">Measuring your codebase'+
+        '<span class="bl-sub">Ariadne is reading every file and counting its tokens so the cost estimate is accurate <b>before you spend anything</b> on generation. It runs locally — no API calls — and takes a few seconds on large repositories. The file tree and price appear as soon as it finishes.</span></div>'+
+        '<div class="loadbar"><i></i></div></div>';
+    } else if(!wrap.querySelector('.brefresh')){
+      // Re-estimate: keep the columns visible, show a thin refreshing strip.
+      const bar=document.createElement('div'); bar.className='brefresh'; bar.innerHTML='<i></i>';
+      wrap.insertBefore(bar, wrap.firstChild);
+    }
+  }
+  async function doEstimate(){
+    if(!state.source){ banner('Add a source first (Step 1).','err'); return; }
+    showEstimating();
+    banner('Estimating cost (no API calls)…');
+    const req={source:state.source, model:state.model};
+    if(state.docTypes) req.doc_types=state.docTypes;
+    try{ const e=await api('/api/estimate', req); state.estimate=e; state.optDelta=0; renderEstimate(e); banner(''); }
+    catch(err){
+      banner('Estimate failed: '+err.message,'err');
+      const wrap=$('browser'); const rf=wrap&&wrap.querySelector('.brefresh'); if(rf) rf.remove();
+      if(wrap && !state.tree) wrap.innerHTML='<div class="bempty">Estimate failed — '+esc(err.message)+'</div>';
+    }
+    finally{ const cv=$('costV'); if(cv) cv.classList.remove('cvload'); }
+  }
+  // The per-source per-language doc-type override from the doc-type screen's
+  // per-format excludes: {language: [doc types still enabled]} for every
+  // language the user capped (omitted when nothing's excluded for it).
+  function docTypesByLanguage(){
+    const e=state.estimate; if(!e) return {};
+    const ldt=e.language_doc_types||{}, out={};
+    Object.keys(ldt).forEach(lang=>{
+      const full=ldt[lang]||[];
+      const enabled=full.filter(dt=>(state.fmtExcl[dt]||[]).indexOf(lang)<0);
+      if(enabled.length<full.length) out[lang]=enabled;
+    });
+    return out;
+  }
+  let scopeTimer;
+  // Persist the scope to the server (debounced). ``reestimate`` re-walks the
+  // tree via tiktoken — needed ONLY for glob/exempt changes, whose $ impact
+  // can't be summed client-side. A file/dir toggle already knows the item's
+  // cost (optDelta), so it persists with reestimate=false and keeps the instant
+  // local total — no tiktoken, no browser rebuild (so it also stays in place).
+  function persistScope(reestimate){
+    clearTimeout(scopeTimer);
+    scopeTimer=setTimeout(async()=>{
+      if(!state.source) return;
+      // Per-file exclusions ride along as path globs (find_catalog_files
+      // matches them via Path.match), kept out of the user-authored glob chips.
+      const exclude=state.excludeGlobs.concat(state.excludeFiles);
+      const payload={name:state.source, exclude, exclude_dirs:state.excludeDirs, exempt_dirs:state.exemptDirs};
+      // Persist the doc-type screen's per-format excludes only once the user has
+      // touched it — otherwise a scope save would clobber an existing override.
+      if(state.dtTouched) payload.doc_types_by_language=docTypesByLanguage();
+      try{ await api('/api/source_add', payload); }
+      catch(err){ banner('Scope update failed: '+err.message,'err'); return; }
+      if(reestimate) await doEstimate();
+    }, 450);
+  }
+  function commitScope(){ persistScope(true); }   // glob/exempt/reset → re-walk
+  function moveLevers(targetId){ const lv=$('levers'), t=$(targetId); if(lv && t && lv.parentNode!==t) t.appendChild(lv); }
+  async function onEnter(n){
+    if(n===1) await loadSources();
+    else if(n===2) await doDiscover();
+    else if(n===3){ moveLevers('previewBar'); renderChips('exGlobs'); renderChips('exemptChips'); await doEstimate(); }
+    else if(n===4){ moveLevers('generateBar'); if(state.estimate) applyLocalTotals(); else await doEstimate(); }
+    else if(n===5) renderReview();
+  }
+
+  window.next=async function(){
+    if(cur===1){
+      const name=(($('srcName')||{}).value||'').trim(), path=(($('srcPath')||{}).value||'').trim();
+      if(!name||!path){ banner('Enter a source name and a path.','err'); return; }
+      banner('Adding source…');
+      try{
+        const r=await api('/api/source_add',{ name, path, set_default:(onState('defToggle',false)?true:null),
+          depends_on:state.depends, ignore_staleness:onState('staleToggle',false),
+          branches:state.branches, ref:(($('refInput')||{}).value||'').trim()||null });
+        state.source=r.source; renderGit(r.git);
+        if(r.created===false){ banner('Source “'+r.source+'” already exists — updating it.',''); setTimeout(()=>banner(''),3000); } else banner('');
+      }catch(err){ banner('Add source failed: '+err.message,'err'); return; }
+      goStep(2);
+    } else { goStep(cur+1); }
+  };
+  // The Generate step runs `ariadne onboard --approve` server-side as a
+  // detached background job; the browser keeps the job id in localStorage and
+  // polls status, so closing the tab (even for a 24h batch) and coming back
+  // re-attaches.
+  function toggleGen(which){ ['gen-config','gen-running','gen-ready'].forEach(id=>{ const el=$(id); if(el) el.style.display=(id===which?'block':'none'); }); }
+  function showBuilding(){ toggleGen('gen-running'); const nb=$('nextBtn'); if(nb)nb.style.display='none'; const bb=$('backBtn'); if(bb)bb.style.visibility='hidden'; }
+  function showReady(){ toggleGen('gen-ready'); const nb=$('nextBtn'); if(nb)nb.style.display='none'; }
+  function showBuildConfig(){ toggleGen('gen-config'); const nb=$('nextBtn'); if(nb)nb.style.display=''; }
+  function setRun(msg){ const rl=$('runLine'); if(rl) rl.innerHTML='<span class="pip"></span> '+esc(msg); }
+  window.startBuild=async function(){
+    if(!state.source){ banner('Add a source first.','err'); return; }
+    showBuilding(); setRun('Starting generation…');
+    try{
+      const types=(state.docTypes&&state.docTypes.length)?state.docTypes.join(','):null;
+      const r=await api('/api/onboard',{source:state.source, model:state.model, batch:state.batch, types});
+      state.jobId=r.job_id;
+      try{ localStorage.setItem('ariadneOnboardJob', JSON.stringify({job_id:r.job_id, source:state.source})); }catch(e){}
+      pollBuild();
+    }catch(err){ banner('Could not start generation: '+err.message,'err'); showBuildConfig(); }
+  };
+  function pollBuild(){
+    clearTimeout(state.buildTimer);
+    state.buildTimer=setTimeout(async()=>{
+      if(!state.jobId) return;
+      try{
+        const r=await fetch('/api/onboard/status?job_id='+encodeURIComponent(state.jobId));
+        if(r.status===404){ setRun('Lost track of this build (did the server restart?). A batch keeps running on the server and resumes there; otherwise start again.'); localStorage.removeItem('ariadneOnboardJob'); return; }
+        const s=await r.json();
+        if(s.tail&&s.tail.length) setRun(s.tail[s.tail.length-1]);
+        if(s.status==='done'){ localStorage.removeItem('ariadneOnboardJob'); showReady(); return; }
+        if(s.status==='error'){ setRun('Generation failed (exit '+s.returncode+'). Check the server logs.'); localStorage.removeItem('ariadneOnboardJob'); return; }
+        pollBuild();
+      }catch(err){ pollBuild(); }   // transient network hiccup — keep polling
+    }, 3000);
+  }
+
+  // ════ Browse… ════
+  async function browseList(path){ const q=path?('?path='+encodeURIComponent(path)):''; const r=await fetch('/api/browse'+q); if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }
+  function openBrowseModal(){
+    let modal=$('browseModal');
+    if(!modal){
+      modal=document.createElement('div'); modal.id='browseModal';
+      modal.style.cssText='position:fixed;inset:0;z-index:10000;background:rgba(3,7,15,.62);display:flex;align-items:center;justify-content:center';
+      modal.innerHTML='<div style="width:560px;max-width:92vw;max-height:78vh;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);overflow:hidden">'+
+        '<div style="display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)"><b style="font-family:var(--display);font-size:15px">Choose a folder</b><span id="bmPath" class="mono" style="margin-left:auto;font-size:11.5px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:330px"></span></div>'+
+        '<div id="bmList" style="overflow:auto;flex:1;padding:6px;min-height:140px"></div>'+
+        '<div style="display:flex;gap:10px;align-items:center;padding:13px 16px;border-top:1px solid var(--line)"><button class="btn ghost" id="bmCancel">Cancel</button><div style="flex:1"></div><button class="btn primary" id="bmSelect">Use this folder</button></div>'+
+      '</div>';
+      document.body.appendChild(modal);
+      modal.addEventListener('click',e=>{ if(e.target===modal) modal.remove(); });
+    }
+    modal.style.display='flex';
+    let here=(($('srcPath')||{}).value||'').trim()||null;
+    async function show(path){
+      let data; try{ data=await browseList(path); }catch(e){ banner('Browse failed: '+e.message,'err'); return; }
+      here=data.path; setText('bmPath', data.path);
+      const row=(p,label,icon)=>'<div class="bmr" data-path="'+esc(p)+'" style="display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;border-radius:8px">'+icon+'<span class="mono" style="font-size:13px">'+esc(label)+'</span></div>';
+      const rows=[]; if(data.parent) rows.push(row(data.parent,'..','<span style="width:16px;text-align:center">⤴</span>'));
+      data.dirs.forEach(n=>rows.push(row(data.path.replace(/\/+$/,'')+'/'+n, n, '<svg class="mi"><use href="#mi-folder"></use></svg>')));
+      const list=$('bmList'); list.innerHTML=rows.join('')||'<div style="padding:16px;color:var(--faint)">No subfolders here.</div>';
+      list.querySelectorAll('.bmr').forEach(r=>{ r.onmouseenter=()=>r.style.background='var(--inset)'; r.onmouseleave=()=>r.style.background=''; r.onclick=()=>show(r.dataset.path); });
+    }
+    $('bmCancel').onclick=()=>modal.remove();
+    $('bmSelect').onclick=()=>{ const inp=$('srcPath'); if(inp&&here) inp.value=here; modal.remove(); banner(''); };
+    show(here);
+  }
+  async function openBrowse(){
+    banner('Opening folder picker…');
+    try{
+      const start=(($('srcPath')||{}).value||'').trim();
+      const r=await fetch('/api/pick-folder'+(start?('?start='+encodeURIComponent(start)):''));
+      const d=await r.json(); banner('');
+      if(d && d.path){ const inp=$('srcPath'); if(inp) inp.value=d.path; return; }
+      if(d && d.cancelled){ return; }
+    }catch(e){ banner(''); }
+    openBrowseModal();
+  }
+  const bb=$('browseBtn'); if(bb) bb.addEventListener('click', openBrowse);
+
+  const eo=$('engineOpts');
+  if(eo){ eo.querySelectorAll('.opt').forEach(opt=>opt.addEventListener('click',()=>{
+    eo.querySelectorAll('.opt').forEach(x=>x.classList.remove('on'));
+    opt.classList.add('on'); state.batch = opt.id==='engBatch';
+    // Concurrency only applies to Live runs — keep the handle in place but
+    // grey it out under Batch (rather than making it disappear).
+    const cc=$('concCtl'); if(cc) cc.classList.toggle('disabled', state.batch);
+    applyLocalTotals();   // live/batch is a known ratio — recompute locally, no re-walk
+  })); }
+
+  render();
+  // Resume a build started in a previous browser session (the "come back
+  // later" path); otherwise start the wizard at the current step.
+  (function(){
+    let saved=null; try{ saved=JSON.parse(localStorage.getItem('ariadneOnboardJob')||'null'); }catch(e){}
+    if(saved && saved.job_id){
+      state.jobId=saved.job_id; if(saved.source) state.source=saved.source;
+      cur=TOTAL; render(); showBuilding(); setRun('Reconnecting to your build…'); pollBuild();
+    } else {
+      onEnter(cur);   // initial step (Connect) → load the dependency picker, etc.
+    }
+  })();
+  banner('Connected to Ariadne over MCP — add a source to begin.', 'ok');
+  setTimeout(()=>banner(''), 2600);
+})();
+</script>
+</body>
+</html>
