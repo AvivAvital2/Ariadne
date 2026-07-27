@@ -320,15 +320,17 @@ class StalenessTracker:
 
         record = self.get_record(rel_path)
         if record is None:
-            return True  # Never documented
+            return True  # Never documented (still generated, even when exempt)
 
-        current_hash = _compute_file_hash(source_path)
-        if current_hash == record.hash:
-            return False
-        # Hash changed: stale, unless this path is staleness-exempt.
+        # A staleness-exempt path (e.g. a pinned/immutable spool corpus) never
+        # goes stale on a content change, so its answer is already "not stale"
+        # here — decide that WITHOUT reading and hashing the file. This skips the
+        # per-file I/O + sha for exempt sources (the "checking staleness" cost on
+        # a large static corpus).
         if is_exempt is not None and is_exempt(rel_path):
             return False
-        return True
+
+        return _compute_file_hash(source_path) != record.hash
 
     def get_stale_files(
         self,
