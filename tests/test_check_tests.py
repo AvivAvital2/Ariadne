@@ -50,3 +50,19 @@ def test_coverage_mode_parses_args_and_builds_commands():
     assert check_tests.build_coverage_report_cmd(include2) == [
         sys.executable, '-m', 'coverage', 'report', '-m', '--include=*/cli/sync.py',
     ]
+
+
+def test_green_mode_accepts_xfailed_flags_strict_xpass():
+    # An xfail-marked test that fails is an EXPECTED failure (the repo's
+    # security-guard convention: record the finding, keep the gate green).
+    # A strict xpass arrives from pytest-json-report as outcome='failed'
+    # and must still gate.
+    from check_tests import report_green
+
+    assert report_green({'tests': [
+        {'nodeid': 't::guard', 'outcome': 'xfailed'},
+        {'nodeid': 't::ok', 'outcome': 'passed'},
+    ]}) is True
+    assert report_green({'tests': [
+        {'nodeid': 't::broke', 'outcome': 'failed'},
+    ]}) is False

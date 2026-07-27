@@ -45,7 +45,9 @@ def report_green(report: dict) -> bool:
 
     ``skipped`` is treated as non-failure: pytest.skip() is a deliberate
     "don't run me here" signal, not a behavioral failure of the code
-    under test.
+    under test. ``xfailed`` likewise: an xfail-marked test that fails is a
+    RECORDED expected failure (the security-guard convention) — a strict
+    xpass surfaces as outcome='failed' and still gates.
     """
     tests = report.get("tests", [])
 
@@ -53,7 +55,8 @@ def report_green(report: dict) -> bool:
         print(f"{RED}{BOLD}✗ 0 tests collected — aborting.{RESET}")
         return False
 
-    failures = [t for t in tests if t["outcome"] not in ("passed", "skipped")]
+    failures = [t for t in tests
+                if t["outcome"] not in ("passed", "skipped", "xfailed")]
 
     if not failures:
         total = len(tests)
