@@ -206,6 +206,21 @@ def test_source_group_evolves_through_contract(monkeypatch, tmp_path):
     assert 'zeta' not in remaining
     assert 'epsilon' in remaining
 
+    # ---- D10: `source purge` cleans a source's DB data even when the
+    # source is NOT in ariadne.yaml — the orphaned-after-`remove` case
+    # (a plain `remove` is config-only, so its data lingers). -----------
+    with Library(db_path) as lib:
+        lib.add_document('catalog', 'o title', 'o body',
+                         source_files=['orphan/f.py'],
+                         metadata={'qualified_name': 'orphan.pkg.o'},
+                         doc_id='orphan-d1', source_name='orphan')
+    assert _fresh_config(cfg_path).get_source_config('orphan') is None
+    assert _run(['source', 'purge', 'orphan', '--yes']) == 0
+    with Library(db_path) as lib:
+        after_purge = {m.source_name for m in lib.list_documents_lite()}
+    assert 'orphan' not in after_purge
+    assert 'epsilon' in after_purge   # untouched
+
 
 def test_source_add_honors_explicit_config_over_package_fallthrough(monkeypatch, tmp_path):
     """`source add` with an explicit $ARIADNE_CONFIG must bootstrap THERE,
