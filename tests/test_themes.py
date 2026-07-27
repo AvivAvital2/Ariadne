@@ -207,6 +207,43 @@ class TestSummarizeTheme:
         # No longer "dirty" because we processed it (just judged it INCOHERENT).
         assert theme.dirty is False
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('empty_response', ['', '   \n  \t '])
+    async def test_empty_response_left_pending_and_skips_doc(
+        self, library: Library, mocked_embedding, monkeypatch, empty_response,
+    ) -> None:
+        """An empty (or whitespace-only) LLM completion is not a usable doc.
+        It must NOT crash (previously an empty content raised ValueError in
+        update_document) and must NOT overwrite the placeholder; the theme is
+        left dirty so a later run retries it."""
+        from docgen import themes
+        from docgen.cluster import cluster_themes
+        from docgen.graph_builder import build_semantic_edges
+
+        _populate_two_clusters(library)
+        build_semantic_edges(library, k=5, min_sim=0.6)
+        cluster_themes(library, min_cluster_size=3)
+
+        async def fake_chat(messages, *, model=None, **kwargs):
+            return empty_response
+
+        monkeypatch.setattr('docgen.themes.chat_complete', fake_chat)
+
+        all_themes = library.list_themes(coherent_only=False)
+        cluster_id = all_themes[0].cluster_id
+        original_doc_id = all_themes[0].doc_id
+        content_before = library.get_document(original_doc_id).content
+
+        async with LibraryWriter(library) as writer:
+            result = await themes.summarize_theme(library, writer, cluster_id)
+
+        assert result is False                       # skipped, no crash
+        theme = library.get_theme(cluster_id)
+        assert theme is not None
+        assert theme.dirty is True                   # left pending for retry
+        # Placeholder doc untouched — never overwritten with empty content.
+        assert library.get_document(original_doc_id).content == content_before
+
 
 # ---------------------------------------------------------------------------
 # Batch

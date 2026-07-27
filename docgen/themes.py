@@ -180,6 +180,17 @@ async def _apply_theme_response(
     path filters errored (``None``) results out before calling this.
     """
     response = response.strip()
+    if not response:
+        # An empty (or whitespace-only) completion isn't a usable doc. Leave the
+        # theme dirty — retried on the next run — rather than overwriting the
+        # placeholder with empty content (which update_document rejects) or
+        # crashing the summary.
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            'summarize_theme: empty response for cluster %s — left pending',
+            req.cluster_id,
+        )
+        return False
     if response.startswith('INCOHERENT'):
         _set_theme_coherent(library, req.cluster_id, coherent=False)
         return False
