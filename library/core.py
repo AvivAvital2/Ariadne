@@ -336,7 +336,11 @@ class CoreMixin:
             )
             for row in rows
         ]
-    def list_catalog_element_names(self, source_name: str) -> list[tuple[str, str | None]]:
+    def list_catalog_element_names(
+        self,
+        source_name: str,
+        exclude_subtypes: tuple = (),
+    ) -> list[tuple[str, str | None]]:
         """(qualified_name, first source file) of every catalog ELEMENT of one source.
 
         The symbol-suggestion candidate pool. Deliberately per-source and
@@ -353,8 +357,19 @@ class CoreMixin:
             "AND json_extract(metadata, '$.source_name') = ? "
             "AND json_extract(metadata, '$.qualified_name') IS NOT NULL"
         )
+        params: list = [CATALOG_KIND_ELEMENT, source_name]
+        if exclude_subtypes:
+            # The lens router excludes 'variable' elements here — the
+            # catalog's local-var over-capture must not fake entity
+            # relevance in routing. Suggestions pass nothing (full pool).
+            placeholders = ','.join('?' * len(exclude_subtypes))
+            query += (
+                " AND COALESCE(json_extract(metadata, '$.subtype'), '') "
+                f"NOT IN ({placeholders})"
+            )
+            params.extend(exclude_subtypes)
         with self._conn_provider.acquire() as conn:
-            rows = conn.execute(query, (CATALOG_KIND_ELEMENT, source_name)).fetchall()
+            rows = conn.execute(query, params).fetchall()
         return [
             (str(qn), str(f) if f is not None else None)
             for qn, f in rows

@@ -256,6 +256,18 @@ class TestCandidatePool:
             ('pkg.mod.alpha_fn', '/abs/src1/mod.py'),
         ]
 
+    def test_exclude_subtypes_filters_variables(self, library) -> None:
+        # The lens router's symbol layer must refuse 'variable' elements —
+        # the catalog's local-var over-capture would otherwise fake entity
+        # relevance. Suggestions keep the full pool (default unchanged).
+        _add_element(library, 'src1', 'pkg.mod.real_fn', file='/abs/src1/mod.py')
+        _add_element(library, 'src1', 'pkg.mod.local_tmp',
+                     file='/abs/src1/mod.py', subtype='variable')
+        pairs = library.list_catalog_element_names(
+            'src1', exclude_subtypes=('variable',))
+        assert [qn for qn, _ in pairs] == ['pkg.mod.real_fn']
+        assert len(library.list_catalog_element_names('src1')) == 2
+
     def test_bulk_recent_source_does_not_evict_older_source(self, library) -> None:
         # Regression at the defect's real scale: >100k rows in another source,
         # all updated more recently than the target source's one element.

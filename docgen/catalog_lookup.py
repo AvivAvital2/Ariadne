@@ -8,7 +8,8 @@ from __future__ import annotations
 from schema import CATALOG_KIND_ELEMENT
 
 import difflib
-import re
+
+from library.word_tokens import segment_word_tokens as _segment_word_tokens
 from typing import TYPE_CHECKING, Any
 
 from docgen.catalog_writer import _element_doc_id
@@ -78,19 +79,6 @@ def lookup_symbol(
     }                                                                                                                                                                                
  
                                                                                                                                                                                      
-_CAMEL_WORD_RE = re.compile(r'[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+')
-
-
-def _segment_word_tokens(segment: str) -> frozenset:
-    """Lowercased word tokens of one dotted-path segment — splits snake_case,
-    camelCase, PascalCase, and SCREAMING_CASE alike."""
-    return frozenset(
-        m.group(0).lower()
-        for part in segment.split('_')
-        for m in _CAMEL_WORD_RE.finditer(part)
-    )
-
-
 def rank_symbol_candidates(query: str, qualified_names, limit: int = 5) -> list[str]:
     """Rank catalog qualified_names against a (possibly bare) symbol query.
 

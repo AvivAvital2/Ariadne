@@ -190,13 +190,16 @@ class TestScarcityGateSearchIntegration:
 
 
 class TestAnchoredGroundSearchIntegration:
-    """The anchored-ground model at the search-service level (the #10 fix):
-    with a spool enabled the repo (anchor) keeps its floor and a relevant spool
-    doc surfaces as ground, even when many spool docs would flood the top-k.
-    See ``designs/spool-anchored-retrieval.md``.
+    """Search-service level spool behavior, now under the LENS router
+    (designs/spool-lens-router.md §6 — the regime supersedes the anchored
+    floor and the scarcity gate on routed questions). The anti-flooding
+    intent of the original anchored tests is preserved: a no-crisp routed
+    question keeps the repo first and admits spool docs only through the
+    gated semantic fallback — never a flood, and never at all without an
+    embedding matrix (degraded ≠ noisy).
     """
 
-    async def test_repo_anchor_not_crowded_out_and_relevant_ground_surfaces(
+    async def test_no_crisp_question_without_matrix_stays_repo_only(
         self, tmp_path, monkeypatch,
     ):
         e_q = np.array([1.0, 1.0, 0.0], dtype=np.float32)  # hybrid query
@@ -249,20 +252,21 @@ class TestAnchoredGroundSearchIntegration:
 
             resp = await svc._search_uncached(query='hybrid', limit=4)
             titles = [d.title for d in resp.documents]
-            # Repo anchor kept its floor despite 11 spool docs...
+            # Repo docs lead despite 11 spool docs...
             assert any(t.startswith('RepoTopic') for t in titles), titles
-            # ...and the relevant spool doc surfaced as ground context.
-            assert 'GroundRelevant' in titles, titles
+            # ...and with NO matrix the semantic fallback cannot vouch for
+            # any spool doc — none appear (degraded honestly, not noisily).
+            assert not any(t.startswith('Ground') for t in titles), titles
         finally:
             lib.close()
 
     async def test_matrix_path_prelimits_and_anchors_without_flooding(
         self, tmp_path, monkeypatch,
     ):
-        # With a real embedding matrix built (the production path that hung
-        # before the O(window) fix), the anchored ranking must return promptly,
-        # keep the repo floor, and surface the relevant spool doc — not let 20
-        # flooding spool docs crowd out the repo.
+        # With a real embedding matrix built, the no-crisp routed question
+        # runs the gated semantic FALLBACK: repo docs lead, the genuinely
+        # related spool doc is admitted above the gate, and the 20 flooding
+        # stub docs stay out (not doc-grade + below gate).
         from library.embedding_matrix import (
             build_doc_embedding_matrix, matrix_dir_for,
         )
@@ -315,6 +319,7 @@ class TestAnchoredGroundSearchIntegration:
             titles = [d.title for d in resp.documents]
             assert any(t.startswith('RepoTopic') for t in titles), titles
             assert 'GroundRelevant' in titles, titles
+            assert not any(t.startswith('GroundNoise') for t in titles), titles
         finally:
             lib.close()
 

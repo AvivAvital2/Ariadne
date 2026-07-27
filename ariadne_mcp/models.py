@@ -42,6 +42,7 @@ class SearchResponse(BaseModel):
     suggested_queries: list[str] | None = None  # Populated when few/no results found
     improvement_hint: str | None = None  # Hint when library has coverage gaps
     truncated: bool = False  # True when full content exceeded response_token_budget; call ariadne_expand(event_id) for full docs
+    spool_connections: dict[str, str] | None = None  # doc_id -> lens connection label ('entity(<term>)' / 'semantic(<cosine>)') for spool docs admitted by the router
 
 
 # ---------------------------------------------------------------------------

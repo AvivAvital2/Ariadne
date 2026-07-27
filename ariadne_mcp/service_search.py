@@ -71,8 +71,10 @@ def _trim_related_documents(content: str, max_links: int = 5) -> str:
 # fingerprint only tracks the enabled-spool SET, so without a version
 # component a fixed leak keeps replaying from query_cache for its 30-day TTL.
 # v2 = 2026-07-26 (member-grounded theme gate, spool provenance rank,
-# per-source suggestion pool).
-_RETRIEVAL_CACHE_VERSION = 2
+# per-source suggestion pool). v3 = lens routing wired (regimes change every
+# routed result set). v4 = entity-cap + reserved semantic fill in
+# select_spool_docs (fuse/expert-only result sets change).
+_RETRIEVAL_CACHE_VERSION = 4
 
 class SearchMixin:
     """Search implementation with multi-phase ranking.
@@ -214,6 +216,114 @@ class SearchMixin:
 
         return result
 
+    def _lens_route(self, query, lite_docs, spool_sources, spool_fp):
+        """Deterministic lens routing (designs/spool-lens-router.md §3-§4):
+        build/cache the two entity indexes for this (fingerprint, sources)
+        pair and derive the regime. No LLM, no embeddings — routing must
+        never depend on a degraded environment."""
+        from spools import is_spool_source
+
+        from library.lens_router import route_question
+        from library.spool_entity_index import build_entity_index
+
+        repo_sources = sorted({
+            d.source_name for d in lite_docs
+            if d.source_name and not is_spool_source(d.source_name)
+        })
+        corpus_names = {s.split(':', 1)[1] for s in spool_sources if ':' in s}
+        spool_index_sources = sorted(set(spool_sources) | corpus_names)
+        cache = getattr(self, '_lens_index_cache', None)
+        if cache is None:
+            cache = self._lens_index_cache = {}
+        key = (spool_fp, tuple(repo_sources), tuple(spool_index_sources))
+        pair = cache.get(key)
+        if pair is None:
+            pair = (
+                build_entity_index(self.library, repo_sources or ['']),
+                build_entity_index(self.library, spool_index_sources),
+            )
+            cache[key] = pair
+        repo_index, spool_index = pair
+        return route_question(
+            query, subject_names=repo_sources,
+            repo_index=repo_index, spool_index=spool_index,
+        )
+
+    async def _lens_ranked_ids(self, route, repo_ids, retrieval_sources,
+                               query, limit, weights):
+        """Regime → (ranked ids, connection labels) (design §5-§6).
+        repo-only: spool silent;
+        fuse: repo ranking + categorical spool contributions; expert-only:
+        the spool contributions ARE the results (repo take dropped; degrades
+        to repo ranking only if the environment can resolve no entity docs —
+        never empty for structural reasons); no-crisp regimes: repo ranking
+        + the gated semantic fallback when enabled."""
+        from library.lens_retrieval import (
+            fallback_spool_docs,
+            select_spool_docs,
+        )
+
+        matrix = None
+        try:
+            matrix = self._get_embedding_matrix()
+        except Exception:
+            _logger.debug('lens: embedding matrix unavailable', exc_info=True)
+
+        async def _repo_ranked():
+            if not repo_ids:
+                return []
+            return await self._rank_ids_by_embedding(
+                repo_ids, query, limit, weights)
+
+        contributions = []
+        if route.regime in ('fuse', 'expert-only'):
+            query_embedding = None
+            try:
+                query_embedding = await self.embedding_service.embed(query)
+            except Exception:
+                _logger.debug(
+                    'lens: query embed failed — entity admissions only',
+                    exc_info=True)
+            spool_limit = (
+                limit if route.regime == 'expert-only' else max(2, limit // 2)
+            )
+            contributions = select_spool_docs(
+                self.library, matrix, retrieval_sources, route.crisp_spool,
+                query_embedding=query_embedding, limit=spool_limit,
+            )
+
+        if route.regime == 'expert-only':
+            if contributions:
+                ordered = [c.doc_id for c in contributions][:limit]
+            else:
+                ordered = [d for d, _ in await _repo_ranked()][:limit]
+        else:
+            repo_ranked = [d for d, _ in await _repo_ranked()]
+            if route.regime == 'fuse':
+                pass                          # contributions already selected
+            elif route.fallback_enabled:
+                contributions = fallback_spool_docs(
+                    self.library, matrix, retrieval_sources,
+                    repo_ranked[:3], limit=2)
+            else:
+                contributions = []
+            extra = [c.doc_id for c in contributions]
+            keep = max(1, limit - len(extra)) if extra else limit
+            seen = set(repo_ranked[:keep])
+            ordered = (
+                repo_ranked[:keep]
+                + [e for e in extra if e not in seen]
+            )[:limit]
+        kept = set(ordered)
+        connections = {
+            c.doc_id: f'{c.connection}({c.detail})'
+            for c in contributions if c.doc_id in kept
+        }
+        n = len(ordered)
+        scored = [(did, (n - i) / n if n else 0.0)
+                  for i, did in enumerate(ordered)]
+        return scored, connections
+
     async def _search_uncached(
         self,
         query: str | None = None,
@@ -312,35 +422,38 @@ class SearchMixin:
         # Score and rank by query (treat empty/whitespace as no query)
         effective_query = query.strip() if query else ''
         spool_gap_hint_text = None
+        lens_connections: dict | None = None
         if effective_query:
             if spool_sources:
-                # Anchored-ground ranking (designs/spool-anchored-retrieval.md):
-                # the user repo is the protected anchor (the subject); the spool
-                # is subordinate ground (context), admitted by BOTH query and
-                # anchor similarity, diversified + relevance-gated. Replaces the
-                # scarcity gate whenever a spool is registered — the spool is the
-                # environment the repo operates in, never a corpus that replaces
-                # it.
-                from spools import is_spool_source
-                anchor_ids = [d.id for d in lite_docs
-                              if not is_spool_source(d.source_name)]
-                ground_ids = [d.id for d in lite_docs
-                              if is_spool_source(d.source_name)]
-                # Fold catalog-bloat demotion into the provenance weights.
-                aweights = dict(weights)
-                for d in lite_docs:
-                    if is_spool_source(d.source_name) and _is_catalog_bloat(d.title):
-                        aweights[d.id] = aweights.get(d.id, 1.0) * 0.3
-                ordered = await self._anchored_rank_ids(
-                    anchor_ids, ground_ids, effective_query, limit, aweights,
-                )
-                # Encode the anchored order as descending scores so the
-                # downstream context-boost re-sort preserves it (the anchor
-                # floor sits at the top scores and can't be evicted by a
-                # boosted lower doc).
-                n = len(ordered)
-                ranked_ids = [(did, (n - i) / n if n else 0.0)
-                              for i, did in enumerate(ordered)]
+                # Lens routing (designs/spool-lens-router.md §6). On routed
+                # questions the REGIME replaces the anchored premise ("the
+                # spool never replaces the repo"), the scarcity gate ("spool
+                # only when the repo runs thin"), and the tier-2 holdback —
+                # those philosophies contradict expert-only and the
+                # corrector (a confidently-wrong repo layer kept the gate
+                # closed). Routing is deterministic: entity resolution over
+                # both catalogs + subject anchor + entity classes; ranked
+                # order is encoded as descending scores exactly like the
+                # branch it replaces.
+                from spools import is_spool_source, spool_gap_hint
+                route = self._lens_route(
+                    effective_query, lite_docs, spool_sources, spool_fp)
+                repo_ids = [d.id for d in lite_docs
+                            if not is_spool_source(d.source_name)]
+                corpus_names = {
+                    s.split(':', 1)[1] for s in spool_sources if ':' in s}
+                retrieval_sources = sorted(set(spool_sources) | corpus_names)
+                ranked_ids, lens_connections = await self._lens_ranked_ids(
+                    route, repo_ids, retrieval_sources, effective_query,
+                    limit, weights)
+                if route.regime == 'honest-gap':
+                    spool_doc_ids = {d.id for d in lite_docs
+                                     if is_spool_source(d.source_name)}
+                    if not (spool_doc_ids
+                            & {did for did, _ in ranked_ids}):
+                        spool_gap_hint_text = spool_gap_hint(
+                            gate_opened=True, tier2_present=False,
+                            spools_registered=True)
             else:
                 # No spool registered — unchanged scarcity-gate path
                 # (byte-identical to pre-anchored behavior for every non-spool
@@ -442,7 +555,8 @@ class SearchMixin:
             event_id=event_id,
             suggested_queries=self._suggest_queries(effective_query, scored_docs) if effective_query else None,
             improvement_hint=spool_gap_hint_text or self._improvement_hint(scored_docs, effective_query),
-            truncated=truncated,                                                                                                                                        
+            truncated=truncated,
+            spool_connections=lens_connections or None,                                                                                                                                        
         )
 
     @staticmethod

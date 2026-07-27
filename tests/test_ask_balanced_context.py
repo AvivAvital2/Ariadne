@@ -50,3 +50,55 @@ class TestBalancedAskDocs:
             docs, frozenset({'spool:databricks'}), anchor_n=1, ground_n=1,
         )
         assert [d.id for d in out] == ['r0', 's0']
+
+
+def _cdoc(doc_id, source_name, content='body text'):
+    return SimpleNamespace(
+        id=doc_id, title=doc_id, source_name=source_name, content=content)
+
+
+class TestLabeledAssembly:
+    """The design-§7 labeled synthesis context: two attributed streams —
+    'GIVEN' (the project's own docs) and 'CONSIDERING' (the environment
+    reference, authoritative-where-relevant + injection guard, per-item
+    connection labels). The old per-doc 'UNTRUSTED' fence measurably made
+    the synthesis discount certified docs; the injection guard survives the
+    rewrite, the distrust framing does not."""
+
+    def test_two_streams_authoritative_with_labels_and_pin(self):
+        from ariadne_mcp.service_analysis import _assemble_ask_context
+        out = _assemble_ask_context(
+            [_cdoc('r0', 'src1'), _cdoc('s0', 'spool:env1')],
+            frozenset({'spool:env1'}),
+            connections={'s0': 'entity(Quantum Mesh)'},
+            environment_label='env1 (runtime fake-17.3)',
+        )
+        assert 'UNTRUSTED' not in out
+        assert 'GIVEN' in out and 'CONSIDERING' in out
+        assert 'authoritative' in out.lower()
+        assert 'instructions' in out.lower()          # the guard survives
+        assert 'entity(Quantum Mesh)' in out
+        assert 'fake-17.3' in out
+        assert out.index('GIVEN') < out.index('CONSIDERING')
+
+    def test_no_spool_docs_means_plain_context(self):
+        from ariadne_mcp.service_analysis import _assemble_ask_context
+        out = _assemble_ask_context(
+            [_cdoc('r0', 'src1'), _cdoc('r1', 'src1')],
+            frozenset({'spool:env1'}),
+            connections=None, environment_label='env1 (runtime fake-17.3)',
+        )
+        assert 'GIVEN' not in out and 'CONSIDERING' not in out
+        assert 'UNTRUSTED' not in out
+        assert '## r0' in out and '## r1' in out
+
+    def test_expert_only_environment_stream_alone(self):
+        from ariadne_mcp.service_analysis import _assemble_ask_context
+        out = _assemble_ask_context(
+            [_cdoc('s0', 'spool:env1'), _cdoc('s1', 'spool:env1')],
+            frozenset({'spool:env1'}),
+            connections={'s0': 'semantic(0.78)'},
+            environment_label='env1 (runtime fake-17.3)',
+        )
+        assert 'CONSIDERING' in out and 'GIVEN' not in out
+        assert 'semantic(0.78)' in out
