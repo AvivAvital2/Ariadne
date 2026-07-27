@@ -41,8 +41,10 @@ module.exports = defineConfig({
     specPattern: 'cypress/e2e/**/*.cy.js',
     supportFile: 'cypress/support/e2e.js',
     fixturesFolder: false,
-    video: false,
-    taskTimeout: 60000,
+    video: true,               // record each spec → cypress/videos/*.mp4 to review the hang
+    pageLoadTimeout: 120000,   // 2-min cap on cy.visit (a stuck load fails + saves the video)
+    defaultCommandTimeout: 8000,
+    taskTimeout: 120000,       // 2-min cap on cy.task (server start/stop)
     setupNodeEvents(on) {
       on('task', {
         // Boot a FRESH, isolated Ariadne for one test: a new temp config dir
@@ -58,9 +60,11 @@ module.exports = defineConfig({
           fs.mkdirSync(path.join(sourcePath, 'pkg'), { recursive: true });
           fs.writeFileSync(path.join(sourcePath, 'pkg', 'a.py'), 'def a():\n    return 1\n');
 
-          // Capture output so a startup failure is DIAGNOSABLE (not a silent
-          // 45s timeout). Both streams are consumed, so the child can never
-          // block on a full pipe buffer.
+          // Capture AND live-stream the server's output to the terminal, so you
+          // can see whether ariadne serve is booting or silent. Both streams are
+          // consumed, so the child can never block on a full pipe buffer.
+          console.log(`[e2e] booting: uv run ariadne serve --host ${HOST} --port ${port}  (cwd=${REPO_ROOT})`);
+          const t0 = Date.now();
           let out = '';
           let exited = null;
           proc = spawn('uv', ['run', 'ariadne', 'serve', '--host', HOST, '--port', String(port)], {
@@ -69,26 +73,33 @@ module.exports = defineConfig({
             stdio: ['ignore', 'pipe', 'pipe'],
             detached: true,   // own process group → clean group kill (incl. the MCP child)
           });
-          const grab = (d) => { out = (out + d.toString()).slice(-8000); };
+          const grab = (d) => { const s = d.toString(); out = (out + s).slice(-8000); process.stdout.write('[serve] ' + s); };
           proc.stdout.on('data', grab);
           proc.stderr.on('data', grab);
           proc.on('exit', (code, signal) => { exited = { code, signal }; });
 
-          // Poll for readiness; fail FAST (with the server's output) if it dies
-          // or never comes up — so "the server didn't spin" is obvious, not a hang.
-          const deadline = Date.now() + 45000;
+          // Poll for readiness with periodic progress logs; fail with the server's
+          // output if it dies or never answers — so a stuck/broken server is
+          // obvious in the terminal, not a silent hang.
+          const deadline = Date.now() + 90000;
+          let lastLog = 0;
           while (Date.now() < deadline) {
             if (exited) {
               throw new Error(
-                `ariadne serve exited before it was ready (code=${exited.code}, signal=${exited.signal}).\n`
+                `[e2e] ariadne serve EXITED before ready (code=${exited.code}, signal=${exited.signal}).\n`
                 + `--- server output ---\n${out || '(no output)'}`);
             }
-            if (await ping(port)) return { baseUrl: `http://${HOST}:${port}`, sourcePath };
+            if (await ping(port)) {
+              console.log(`[e2e] server ready in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+              return { baseUrl: `http://${HOST}:${port}`, sourcePath };
+            }
+            const waited = Math.round((Date.now() - t0) / 1000);
+            if (waited >= lastLog + 5) { lastLog = waited; console.log(`[e2e] waiting for server to answer /  … ${waited}s`); }
             await new Promise((r) => setTimeout(r, 300));
           }
           try { process.kill(-proc.pid, 'SIGKILL'); } catch (e) { /* gone */ }
           throw new Error(
-            `ariadne serve did not become ready on http://${HOST}:${port} within 45s.\n`
+            `[e2e] ariadne serve NOT ready after 90s on http://${HOST}:${port}.\n`
             + `--- server output (tail) ---\n${out || '(no output — is `uv run ariadne serve` runnable from the repo root?)'}`);
         },
 

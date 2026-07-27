@@ -27,10 +27,12 @@ describe('Ask console', () => {
   after(() => cy.task('stopAriadne'));
 
   beforeEach(() => {
+    cy.log('server base = ' + base);   // shows in the video/command log (catches an undefined base)
     cy.intercept('POST', '/api/sources', { statusCode: 200, body: { default_source: 'proj', sources: [{ name: 'proj' }] } }).as('sources');
     cy.intercept('POST', '/api/ask', { statusCode: 200, body: ASK }).as('ask');
     cy.intercept('POST', '/api/search', { statusCode: 200, body: SEARCH }).as('search');
     cy.intercept('POST', '/api/feedback', { statusCode: 200, body: { success: true, message: 'Hit logged.' } }).as('feedback');
+    cy.log('visiting ' + base + '/static/console.html');
     cy.visit(base + '/static/console.html');
   });
 
