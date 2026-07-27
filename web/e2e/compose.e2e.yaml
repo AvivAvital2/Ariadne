@@ -1,0 +1,26 @@
+# E2E override for container-journey.cy.js — layered on the real compose.yaml so
+# the test exercises the actual compose deploy path. The harness sets the env
+# vars below and runs (per variant):
+#   docker compose -p ariadne-e2e-<variant> -f compose.yaml \
+#     -f web/e2e/compose.e2e.yaml --project-directory <repo> up -d --build
+#
+# Everything variant-specific comes from env so the two journeys can run
+# SIMULTANEOUSLY without colliding: a per-variant image TAG (${E2E_VARIANT}),
+# distinct host PORTS (${E2E_WEB_PORT}/${E2E_MCP_PORT}), and a per-run WORKSPACE
+# (${E2E_WORKSPACE}, a Python+Go source so `scip merge` runs). `!override`
+# REPLACES the base's ports/volumes lists — compose concatenates them otherwise.
+services:
+  ariadne:
+    image: ariadne:e2e-${E2E_VARIANT:-default}   # per-variant tag → parallel builds don't clash
+    build:
+      args:
+        WITH_JVM: "0"
+    ports: !override
+      - "127.0.0.1:${E2E_WEB_PORT:?E2E_WEB_PORT must be set}:8765"
+      - "127.0.0.1:${E2E_MCP_PORT:?E2E_MCP_PORT must be set}:8000"
+    volumes: !override
+      - "${E2E_WORKSPACE:?E2E_WORKSPACE must point at the test workspace}:/workspace"
+      - "/data"                        # anonymous volume → fresh /data each run
+    environment:
+      - ARIADNE_DEBUG=1                # verbose brain logs (onboard progress / errors)
+    restart: "no"

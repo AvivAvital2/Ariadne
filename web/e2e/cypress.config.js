@@ -94,6 +94,37 @@ const RETRY_PY = [
   '',
 ].join('\n');
 
+// A tiny Go module alongside RETRY_PY, so the container source is MULTI-LANGUAGE
+// (Python + Go) → the in-container onboard runs two SCIP indexers and the real
+// `scip merge` actually combines them (single-language skips merge). go.mod pins
+// a version the image's Go toolchain (1.22.x) satisfies; stdlib-only so scip-go
+// needs no network.
+const RETRY_GO_MOD = 'module retryutils\n\ngo 1.22\n';
+const RETRY_GO = [
+  '// Package retryutils retries flaky calls with exponential backoff.',
+  'package retryutils',
+  '',
+  'import "time"',
+  '',
+  '// RetryWithBackoff calls fn, retrying up to attempts times with exponential',
+  '// backoff (base, 2x, 4x, ...). The last error is returned once attempts run out.',
+  'func RetryWithBackoff(fn func() error, attempts int, base time.Duration) error {',
+  '    var err error',
+  '    delay := base',
+  '    for i := 0; i < attempts; i++ {',
+  '        if err = fn(); err == nil {',
+  '            return nil',
+  '        }',
+  '        if i < attempts-1 {',
+  '            time.Sleep(delay)',
+  '            delay *= 2',
+  '        }',
+  '    }',
+  '    return err',
+  '}',
+  '',
+].join('\n');
+
 function pingHost(host, port) {
   return new Promise((resolve) => {
     const req = http.get({ host, port, path: '/' }, (res) => { res.resume(); resolve(true); });
@@ -160,6 +191,177 @@ function journeyGenerate({ sourceName, configPath }) {
   });
 }
 
+// --- Container e2e support -------------------------------------------------
+// Boots the REAL image via `docker compose` (the actual deploy path) and drives
+// the full journey against it — the automated Phase-0 acceptance the blueprint
+// left manual. Layers web/e2e/compose.e2e.yaml over the real compose.yaml (small
+// Python+Go workspace so `scip merge` runs, distinct ports, verbose, JVM-less).
+// Gated (CYPRESS_CONTAINER=1); needs a reachable Docker daemon + LLM/embedding
+// keys. Can't run in the author's sandbox (docker socket blocked) — you run it.
+// Per-variant isolation so the two journeys can run SIMULTANEOUSLY without
+// colliding: each boot gets its own compose PROJECT, host PORTS, and image TAG
+// (passed from the spec's VARIANTS, threaded to compose via env vars below).
+// --project-directory so `build: context: .` + `env_file: .env` resolve to the
+// repo root regardless of the cypress cwd.
+const COMPOSE_FILES = [
+  '-f', path.join(REPO_ROOT, 'compose.yaml'),
+  '-f', path.join(REPO_ROOT, 'web', 'e2e', 'compose.e2e.yaml'),
+  '--project-directory', REPO_ROOT];
+const composeArgs = (project) => ['compose', '-p', project, ...COMPOSE_FILES];
+let currentProject = null;      // compose project of the live stack (for teardown)
+let containerWorkspace = null;
+let containerBooted = null;
+let containerLogProc = null;    // `docker logs -f` follower — streams the in-container onboard
+let containerHeartbeat = null;  // elapsed-time ticker so a quiet onboard never looks frozen
+let containerTornDown = false;  // set by containerDown so reapAll doesn't re-`docker logs` a gone container (clobbering the saved log)
+
+function sh(cmd, args, opts = {}) {
+  return new Promise((resolve) => {
+    const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], ...opts });
+    let out = '';
+    const grab = (d) => { out = (out + d).slice(-16000); if (opts.echo) process.stdout.write(d); };
+    p.stdout.on('data', grab);
+    p.stderr.on('data', grab);
+    p.on('exit', (code) => resolve({ rc: code, out }));
+    p.on('error', (e) => resolve({ rc: -1, out: String((e && e.message) || e) }));
+  });
+}
+
+// Ariadne reads API keys from the repo-root .env (python-dotenv), so they're
+// usually NOT exported in the shell — but `docker run -e KEY` and the preflight
+// below only see EXPORTED vars. Read that .env as a fallback so the container
+// gets the same keys Ariadne would, with no manual `export`. (Values only, never
+// logged; a shell-exported var still wins.)
+function keyFromDotenv(name) {
+  let text;
+  try { text = fs.readFileSync(path.join(REPO_ROOT, '.env'), 'utf8'); } catch (e) { return ''; }
+  for (let raw of text.split(/\r?\n/)) {
+    let line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    if (line.startsWith('export ')) line = line.slice(7).trim();
+    const eq = line.indexOf('=');
+    if (eq === -1 || line.slice(0, eq).trim() !== name) continue;
+    let v = line.slice(eq + 1).trim();
+    if (v.length >= 2 && ((v[0] === '"' && v.endsWith('"')) || (v[0] === "'" && v.endsWith("'")))) {
+      v = v.slice(1, -1);
+    }
+    return v;
+  }
+  return '';
+}
+
+async function bootContainer(opts = {}) {
+  if (containerBooted) return containerBooted;                    // cached across re-attempts
+  containerTornDown = false;                                      // fresh boot (variants boot sequentially)
+
+  // Preflight (fail fast + free): OPENAI_API_KEY is ALWAYS required — embeddings +
+  // search are OpenAI-only regardless of the generation provider (Anthropic has no
+  // embeddings API). ANTHROPIC_API_KEY is required only for the Claude-generation
+  // variant. Resolve from the shell env or the repo .env, and populate process.env
+  // so the compose `environment:` passthrough forwards the value into the container.
+  const required = ['OPENAI_API_KEY'];
+  if (opts.requireAnthropic) required.push('ANTHROPIC_API_KEY');
+  for (const k of required) {
+    const v = process.env[k] || keyFromDotenv(k);
+    if (!v) {
+      throw new Error(`[container] ${k} not found in the shell env or ${REPO_ROOT}/.env — set it in one of those. `
+        + (opts.requireAnthropic
+          ? 'The Claude-generation variant needs BOTH keys (OPENAI for embeddings, ANTHROPIC for generation).'
+          : 'The all-OpenAI variant needs OPENAI_API_KEY (generation + embeddings).'));
+    }
+    process.env[k] = v;
+  }
+
+  const ver = await sh('docker', ['version', '--format', '{{.Server.Version}}']);
+  if (ver.rc !== 0) throw new Error('[container] docker daemon not reachable:\n' + ver.out);
+
+  // Per-variant isolation (so two runs can go simultaneously): project, ports,
+  // and image tag all come from the caller (the spec's VARIANTS).
+  const project = opts.project || 'ariadne-e2e';
+  const webPort = opts.webPort || 18765;
+  currentProject = project;
+  const COMPOSE = composeArgs(project);
+
+  // Small MULTI-LANGUAGE source (Python + Go) so the in-container onboard runs
+  // TWO SCIP indexers and the real `scip merge` actually combines them (a
+  // single-language source would skip merge — see cli/index.py:798).
+  containerWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), `ariadne-container-${project}-`));
+  const src = path.join(containerWorkspace, 'retryutils');
+  fs.mkdirSync(src, { recursive: true });
+  fs.writeFileSync(path.join(src, 'retry.py'), RETRY_PY);
+  fs.writeFileSync(path.join(src, 'go.mod'), RETRY_GO_MOD);
+  fs.writeFileSync(path.join(src, 'retry.go'), RETRY_GO);
+  // Threaded into compose.e2e.yaml via ${...}: the workspace mount, the distinct
+  // host ports, and a per-variant image tag (so parallel builds don't clash).
+  process.env.E2E_WORKSPACE = containerWorkspace;
+  process.env.E2E_WEB_PORT = String(webPort);
+  process.env.E2E_MCP_PORT = String(opts.mcpPort || 18000);
+  process.env.E2E_VARIANT = opts.variantKey || 'default';
+
+  // Bring the stack up via docker compose (the real deploy path): base
+  // compose.yaml + the e2e override. --build so a Dockerfile change is never
+  // masked by a stale image; Docker's layer cache keeps an unchanged build fast.
+  console.log(`[${project}] docker compose up --build → http://127.0.0.1:${webPort}`);
+  await sh('docker', [...COMPOSE, 'down', '-v', '--remove-orphans']);   // clear any stale stack for THIS project
+  const up = await sh('docker', [...COMPOSE, 'up', '-d', '--build'], { cwd: REPO_ROOT, echo: true });
+  if (up.rc !== 0) throw new Error(`[${project}] docker compose up FAILED:\n` + up.out.slice(-6000));
+
+  // VISIBILITY: stream the stack's logs live + a heartbeat with elapsed time, so
+  // the slow, quiet in-container onboard never looks frozen at "ready". The
+  // per-project prefix keeps simultaneous variants distinguishable.
+  containerLogProc = spawn('docker', [...COMPOSE, 'logs', '-f', '--tail', '20'],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+  const relay = (d) => process.stdout.write(`[${project}] ` + d);
+  containerLogProc.stdout.on('data', relay);
+  containerLogProc.stderr.on('data', relay);
+  const startedAt = Date.now();
+  containerHeartbeat = setInterval(() => {
+    process.stdout.write(`[${project}] still working — ${Math.round((Date.now() - startedAt) / 1000)}s elapsed `
+      + `(real onboard/ask; \`docker compose -p ${project} logs -f\` for detail)\n`);
+  }, 20000);
+
+  // Readiness: the web answers `/` only after the brain is up (entrypoint gates).
+  const deadline = Date.now() + 240000;
+  while (Date.now() < deadline) {
+    if (await pingHost('127.0.0.1', webPort)) {
+      containerBooted = {
+        baseUrl: `http://127.0.0.1:${webPort}`,
+        sourceName: 'retryutils',
+        sourcePath: '/workspace/retryutils',                     // container-internal path (the mount)
+        workspace: containerWorkspace,
+      };
+      console.log(`[${project}] ready: ${containerBooted.baseUrl}`);
+      return containerBooted;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  const logs = await sh('docker', [...COMPOSE, 'logs', '--tail', '150']);
+  throw new Error(`[${project}] not ready after 240s:\n` + logs.out);
+}
+
+function stopContainerLogs() {
+  if (containerHeartbeat) { try { clearInterval(containerHeartbeat); } catch (e) { /* gone */ } containerHeartbeat = null; }
+  if (containerLogProc && containerLogProc.pid) { try { containerLogProc.kill('SIGKILL'); } catch (e) { /* gone */ } containerLogProc = null; }
+}
+
+async function containerDown() {
+  stopContainerLogs();
+  const project = currentProject || 'ariadne-e2e';
+  const COMPOSE = composeArgs(project);
+  // Preserve this stack's FULL logs before tearing down (a failed onboard stays
+  // diagnosable after the run). Per-project file so simultaneous variants don't
+  // clobber each other.
+  const dump = await sh('docker', [...COMPOSE, 'logs', '--no-color']);
+  const logPath = path.join(__dirname, `${project}.log`);
+  try { fs.writeFileSync(logPath, dump.out || '(no container logs captured)'); console.log(`[${project}] saved logs → ${logPath}`); } catch (e) { /* best effort */ }
+  await sh('docker', [...COMPOSE, 'down', '-v', '--remove-orphans']);
+  if (containerWorkspace) { try { fs.rmSync(containerWorkspace, { recursive: true, force: true }); } catch (e) { /* best effort */ } }
+  containerWorkspace = null;
+  containerBooted = null;
+  containerTornDown = true;   // reapAll must not re-capture logs from the now-gone container
+  return null;
+}
+
 function killServer(s) {
   if (!s) return;
   if (s.proc && s.proc.pid) {
@@ -185,6 +387,18 @@ function reapAll() {
   servers.clear();
   closeStaticServers();
   if (journeyProc && journeyProc.pid) { try { process.kill(-journeyProc.pid, 'SIGKILL'); } catch (e) { /* gone */ } }
+  // Reap the e2e compose stack + its temp workspace (best-effort, synchronous).
+  // Skip entirely if containerDown already tore it down — otherwise `logs` on the
+  // gone stack writes an error over the saved log.
+  stopContainerLogs();
+  if (!containerTornDown && currentProject) {
+    const cf1 = path.join(REPO_ROOT, 'compose.yaml');
+    const cf2 = path.join(REPO_ROOT, 'web', 'e2e', 'compose.e2e.yaml');
+    const base = `docker compose -p ${currentProject} -f "${cf1}" -f "${cf2}" --project-directory "${REPO_ROOT}"`;
+    try { require('node:child_process').execSync(`${base} logs --no-color > "${path.join(__dirname, currentProject + '.log')}" 2>&1`, { stdio: 'ignore' }); } catch (e) { /* stack gone / never started */ }
+    try { require('node:child_process').execSync(`${base} down -v --remove-orphans`, { stdio: 'ignore' }); } catch (e) { /* daemon down / never started */ }
+  }
+  if (containerWorkspace) { try { fs.rmSync(containerWorkspace, { recursive: true, force: true }); } catch (e) { /* best effort */ } }
 }
 process.on('exit', reapAll);
 process.on('SIGINT', () => { reapAll(); process.exit(130); });
@@ -245,6 +459,15 @@ module.exports = defineConfig({
         },
         journeyGenerate(args) {
           return journeyGenerate(args);
+        },
+
+        // Container e2e: build + run the REAL stack (compose); tear it down.
+        // opts.requireAnthropic gates the ANTHROPIC key preflight (Claude variant).
+        async containerUp(opts) {
+          return bootContainer(opts || {});
+        },
+        async containerDown() {
+          return containerDown();
         },
 
         // Boot a FRESH, isolated Ariadne: a new temp config dir (empty DB +
