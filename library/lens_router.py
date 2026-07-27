@@ -113,7 +113,12 @@ def match_symbol(term: str, qualified_names) -> bool:
 _STOP_WORDS = frozenset(
     'a an and are as at be by can do does for from how i in is it my of on '
     'or our should that the this to we what when where which will with you '
-    'your'.split()
+    # Imperative request verbs: sentence-initial capitalization makes them
+    # look entity-shaped ('Show' resolved via Dataset.show / SHOW COLUMNS
+    # docs and dragged junk into a name lookup) — they carry no entity
+    # meaning in a question.
+    'your show tell give list explain describe find display provide '
+    'compare summarize'.split()
 )
 
 _WORD_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_'-]*")

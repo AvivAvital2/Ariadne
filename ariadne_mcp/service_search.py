@@ -79,7 +79,8 @@ def _trim_related_documents(content: str, max_links: int = 5) -> str:
 # matrix left them dark — matrix-less cached rows must not replay.
 # v7 = bidirectional lens: spool-primary composition + repo-as-lens + the
 # spool-theme repo-channel partition (routed result sets change).
-_RETRIEVAL_CACHE_VERSION = 7
+# v8 = request-verb stopwords in entity extraction (routing inputs change).
+_RETRIEVAL_CACHE_VERSION = 8
 
 class SearchMixin:
     """Search implementation with multi-phase ranking.

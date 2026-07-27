@@ -187,6 +187,19 @@ class TestExtraction:
         assert 'for' not in terms                  # stop word
         assert 'data' not in terms                 # bare common word
 
+    def test_imperative_request_verbs_are_stopwords(self):
+        # LOOKUP-probe wart (live): sentence-initial 'Show' resolved as a
+        # crisp entity via Dataset.show / 'SHOW COLUMNS' docs and dragged
+        # junk into a name lookup. Request verbs carry no entity meaning in
+        # questions — they are stop words, as boundaries AND as bare terms.
+        terms = lens_router.extract_candidate_terms(
+            'Show me the Quantum Mesh overview')
+        assert 'Show' not in terms
+        assert 'Quantum Mesh' in terms             # the real entity survives
+        for verb in ('List', 'Explain', 'Describe', 'Display'):
+            assert verb not in lens_router.extract_candidate_terms(
+                f'{verb} the shared ledger limits')
+
     def test_symbol_shaped_single_tokens_survive(self):
         terms = lens_router.extract_candidate_terms(
             'Is FrobnicateSelector still available?')
