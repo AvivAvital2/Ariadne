@@ -84,7 +84,8 @@ def _trim_related_documents(content: str, max_links: int = 5) -> str:
 # admissions change; the semantic tier owns name-term selection).
 # v10 = derived lens_share replaces the fixed lens caps (composition
 # changes at window sizes other than 5).
-_RETRIEVAL_CACHE_VERSION = 10
+# v11 = mid-gram stopwords reject candidate terms (routing inputs change).
+_RETRIEVAL_CACHE_VERSION = 11
 
 class SearchMixin:
     """Search implementation with multi-phase ranking.

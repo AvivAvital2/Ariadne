@@ -135,8 +135,9 @@ def extract_candidate_terms(question: str, max_words: int = 3) -> list:
     for n in range(min(max_words, len(words)), 0, -1):
         for i in range(len(words) - n + 1):
             gram = words[i:i + n]
-            if (gram[0].lower() in _STOP_WORDS
-                    or gram[-1].lower() in _STOP_WORDS):
+            # Stop words at the EDGES trim the gram; one in the MIDDLE means
+            # the gram spans two phrases ('data and Python') — not a term.
+            if any(w.lower() in _STOP_WORDS for w in gram):
                 continue
             term = ' '.join(gram)
             if not is_distinctive(term):

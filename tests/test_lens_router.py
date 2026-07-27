@@ -187,6 +187,16 @@ class TestExtraction:
         assert 'for' not in terms                  # stop word
         assert 'data' not in terms                 # bare common word
 
+    def test_mid_gram_stopwords_break_phrasal_cohesion(self):
+        # 'data and Python' resolved as an entity term (live Q2) because the
+        # n-gram check only inspected the FIRST and LAST words. A stop word
+        # in the MIDDLE means the gram spans two phrases — it is not a term.
+        terms = lens_router.extract_candidate_terms(
+            'shipping data and Python objects to Quantum Mesh workers')
+        assert 'data and Python' not in terms
+        assert 'Quantum Mesh' in terms
+        assert 'shipping data' in terms
+
     def test_imperative_request_verbs_are_stopwords(self):
         # LOOKUP-probe wart (live): sentence-initial 'Show' resolved as a
         # crisp entity via Dataset.show / 'SHOW COLUMNS' docs and dragged
