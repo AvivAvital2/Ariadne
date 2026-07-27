@@ -79,6 +79,12 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     create_parser.set_defaults(batch_mode=None)
     create_parser.add_argument('--yes', '-y', action='store_true',
         help='Non-interactive: skip setup + prompts and build the existing spools.yaml (pair with --batch/--live for a fully unattended run)')
+    create_parser.add_argument('--resume', action='store_true',
+        help='Resume an interrupted build: reuse the existing spools.yaml + '
+             'already-fetched corpus (skip setup), then continue — completed '
+             'docs are skipped via staleness, so only the unfinished work '
+             'runs. Shows the (now-smaller) cost preview unless paired with '
+             '--yes.')
     create_parser.add_argument('--dest', default='spool-corpus',
         help='Corpus checkout directory (default: ./spool-corpus)')
     create_parser.add_argument('--out', default=None,
@@ -227,10 +233,14 @@ def _create(args: argparse.Namespace) -> int:
     from spool_acquire import _load_spoolfile, create_spool, setup_recipe
 
     spoolfile = 'spools.yaml'
-    if args.yes:
+    resume = getattr(args, 'resume', False)
+    if resume or args.yes:
         if not Path(spoolfile).exists():
-            print(f'Error: --yes needs an existing {spoolfile}; run `ariadne spools create` without --yes to set one up.')
+            flag = '--resume' if resume else '--yes'
+            print(f'Error: {flag} needs an existing {spoolfile}; run `ariadne spools create` without {flag} to set one up.')
             return 1
+        if resume:
+            print(f'Resuming build from {spoolfile} — completed work is skipped (staleness); only the unfinished phases run.')
     else:
         setup_recipe(args.environment, out_path=spoolfile)
 
@@ -239,6 +249,7 @@ def _create(args: argparse.Namespace) -> int:
     result = create_spool(
         spoolfile, dest_dir=args.dest, out_path=out, approve=args.yes,
         allow_ungrounded=args.allow_ungrounded, batch_mode=args.batch_mode,
+        resume=resume,
     )
     if not result.accepted:
         print('Creation declined — nothing fetched.')

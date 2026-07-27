@@ -510,7 +510,8 @@ def _resolve_sha(url: str, tag: str) -> str:
 def create_spool(spoolfile_path, *, dest_dir, out_path, approve: bool,
                  confirm=input, phases: dict | None = None,
                  allow_ungrounded: bool = False,
-                 batch_mode: str | None = None) -> CreateResult:
+                 batch_mode: str | None = None,
+                 resume: bool = False) -> CreateResult:
     """``spools create``: the whole build behind one consent + one cost gate.
 
     Resolves any missing shas from the declared tags, PINS them back into the
@@ -559,8 +560,12 @@ def create_spool(spoolfile_path, *, dest_dir, out_path, approve: bool,
         },
         certify=tuple(data.get('certify') or ()),
     )
-    result = acquire(packfile, dest_dir=dest_dir, approve=approve,
-                     confirm=confirm)
+    # On resume the corpus is already fetched (acquire reuses clones at the
+    # pinned sha), so skip the fetch-consent. onboard_approve stays tied to
+    # `approve`, so `--resume` alone still shows the now-smaller cost preview
+    # while `--resume --yes` is fully unattended.
+    result = acquire(packfile, dest_dir=dest_dir,
+                     approve=(approve or resume), confirm=confirm)
     if not result.accepted:
         return CreateResult(accepted=False)
 

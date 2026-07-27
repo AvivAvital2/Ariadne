@@ -14,6 +14,22 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
+# Max bind variables per ``WHERE id IN (...)`` query. SQLite's
+# SQLITE_MAX_VARIABLE_NUMBER is 999 on older builds (32766 on newer); 900 is
+# safely under both. Batch-by-id reads chunk their id list to this so a large
+# corpus (e.g. a Databricks spool's ~38k scoped docs) never trips
+# ``sqlite3.OperationalError: too many SQL variables``.
+_SQL_MAX_VARS = 900
+
+
+def _chunked(seq, size: int | None = None):
+    """Yield successive slices of ``seq``. ``size`` defaults to the
+    module-level ``_SQL_MAX_VARS`` read at CALL time (so tests can lower it)."""
+    step = size if (size and size > 0) else _SQL_MAX_VARS
+    for i in range(0, len(seq), step):
+        yield seq[i:i + step]
+
+
 # file_index docs are pure derived index data (one per source file, listing
 # its element ids). They are stored deliberately unembedded, so a NULL
 # embedding on them is the intended state — not a doc "missing" its vector.
@@ -345,17 +361,18 @@ class CoreMixin:
         if not doc_ids:
             return {}
 
-        placeholders = ','.join('?' * len(doc_ids))
         result: dict[str, NDArray[np.float32]] = {}
         with self._conn_provider.acquire() as conn:
-            rows = conn.execute(
-                f'SELECT id, embedding FROM documents WHERE id IN ({placeholders}) AND embedding IS NOT NULL',
-                doc_ids,
-            ).fetchall()
-        for row in rows:
-            emb_blob = row[1]
-            if emb_blob:
-                result[str(row[0])] = np.frombuffer(emb_blob, dtype=np.float32).copy()
+            for chunk in _chunked(doc_ids):
+                placeholders = ','.join('?' * len(chunk))
+                rows = conn.execute(
+                    f'SELECT id, embedding FROM documents WHERE id IN ({placeholders}) AND embedding IS NOT NULL',
+                    chunk,
+                ).fetchall()
+                for row in rows:
+                    emb_blob = row[1]
+                    if emb_blob:
+                        result[str(row[0])] = np.frombuffer(emb_blob, dtype=np.float32).copy()
         return result
 
     def get_documents_batch(self, doc_ids: list[str]) -> list[Document]:
@@ -366,17 +383,20 @@ class CoreMixin:
         if not doc_ids:
             return []
 
-        placeholders = ','.join('?' * len(doc_ids))
+        doc_map: dict[str, Document] = {}
         with self._conn_provider.acquire() as conn:
-            rows = conn.execute(
-                f'''SELECT id, content_type, title, content, source_files, embedding,
-                           created_at, updated_at, metadata, source_name
-                    FROM documents WHERE id IN ({placeholders})''',
-                doc_ids,
-            ).fetchall()
+            for chunk in _chunked(doc_ids):
+                placeholders = ','.join('?' * len(chunk))
+                rows = conn.execute(
+                    f'''SELECT id, content_type, title, content, source_files, embedding,
+                               created_at, updated_at, metadata, source_name
+                        FROM documents WHERE id IN ({placeholders})''',
+                    chunk,
+                ).fetchall()
+                for row in rows:
+                    doc_map[str(row[0])] = self._row_to_document(row)
 
         # Preserve order matching input doc_ids
-        doc_map = {str(row[0]): self._row_to_document(row) for row in rows}
         return [doc_map[did] for did in doc_ids if did in doc_map]
 
     def update_document(
@@ -583,22 +603,23 @@ class CoreMixin:
         """Get sections for multiple documents in a single query."""
         if not doc_ids:
             return {}
-        placeholders = ','.join('?' * len(doc_ids))
-        with self._conn_provider.acquire() as conn:
-            rows = conn.execute(
-                f'''SELECT document_id, idx, heading, description, content, embedding
-                    FROM sections WHERE document_id IN ({placeholders}) ORDER BY document_id, idx''',
-                doc_ids,
-            ).fetchall()
         result: dict[str, list[Section]] = {did: [] for did in doc_ids}
-        for row in rows:
-            doc_id = str(row[0])
-            if doc_id in result:
-                result[doc_id].append(Section(
-                    document_id=doc_id, index=int(row[1]),
-                    heading=str(row[2]), description=str(row[3]),
-                    content=str(row[4]), embedding=row[5],
-                ))
+        with self._conn_provider.acquire() as conn:
+            for chunk in _chunked(doc_ids):
+                placeholders = ','.join('?' * len(chunk))
+                rows = conn.execute(
+                    f'''SELECT document_id, idx, heading, description, content, embedding
+                        FROM sections WHERE document_id IN ({placeholders}) ORDER BY document_id, idx''',
+                    chunk,
+                ).fetchall()
+                for row in rows:
+                    doc_id = str(row[0])
+                    if doc_id in result:
+                        result[doc_id].append(Section(
+                            document_id=doc_id, index=int(row[1]),
+                            heading=str(row[2]), description=str(row[3]),
+                            content=str(row[4]), embedding=row[5],
+                        ))
         return result
 
     def get_section_embeddings_for_doc(self, document_id: str) -> list[tuple[int, NDArray[np.float32]]]:

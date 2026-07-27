@@ -286,6 +286,24 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
     assert dry_run_calls[-1].interactive is True      # browser always opens
     assert dry_run_calls[-1].offer_staleness is True  # staleness modal offered
 
+    # ---- T12: a themes-phase failure is NON-FATAL — the completed (and, for
+    # a spool, paid) generate+embed run must not be discarded because the
+    # semantic-clustering augmentation failed at the last step -------------
+    invoked.clear(); seen_args.clear()
+    monkeypatch.setattr(
+        'cli.onboard.cmd_themes_build', make_async_stub('themes', rc=1))
+    # T10 left the doc-type picker as a throwing guard; restore a benign one
+    # so this demand reaches the paid phases (proceed=True) without tripping it.
+    monkeypatch.setattr(
+        'cli.onboard._select_generate_doc_types',
+        lambda defaults, off=frozenset(): ('explanation',))
+    proceed['value'] = True
+    rc = await cmd_onboard(_args(approve=True))
+    assert rc == 0, 'themes failure must not fail onboard'
+    assert 'generate' in invoked and 'themes' in invoked
+    out = capsys.readouterr().out
+    assert "'Building themes' failed" in out and 'continuing' in out
+
 
 def test_select_generate_doc_types_off_defaults_are_dropped() -> None:
     """``off_types`` start off: on a non-TTY the picker returns the remaining

@@ -1,0 +1,23 @@
+name: databricks
+runtime: dbr17.3-lts
+version: 1.0.0
+languages:
+- python
+- scala
+corpus:
+  spark:
+    url: https://github.com/apache/spark
+    tag: v4.0.0
+    sha: fa33ea000a0bda9e5a3fa1af98e8e85b8cc5e4d4
+  databricks-sdk-py:
+    url: https://github.com/databricks/databricks-sdk-py
+    tag: v0.121.0
+    sha: e25671d923ab61926a3716700049ac4776cc4491
+  delta:
+    url: https://github.com/delta-io/delta
+    tag: v4.0.0
+    sha: 6d055c5c8a2e16bbf4458268a1bc271c7afcc4d2
+certify:
+- spark/docs/
+- databricks-sdk-py/docs/
+- delta/docs/

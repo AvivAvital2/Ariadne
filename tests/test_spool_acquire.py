@@ -830,10 +830,11 @@ class TestSpoolAcquire:
         seen = {}
 
         def fake_create(spoolfile, *, dest_dir, out_path, approve,
-                        allow_ungrounded=False, batch_mode=None):
+                        allow_ungrounded=False, batch_mode=None, resume=False):
             seen.update(spoolfile=str(spoolfile), dest=str(dest_dir),
                         out=str(out_path), approve=approve,
-                        allow_ungrounded=allow_ungrounded, batch_mode=batch_mode)
+                        allow_ungrounded=allow_ungrounded, batch_mode=batch_mode,
+                        resume=resume)
             return CreateResult(accepted=True, pack_path=str(out_path))
 
         monkeypatch.setattr(spool_acquire, 'create_spool', fake_create)

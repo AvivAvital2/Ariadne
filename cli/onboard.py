@@ -240,36 +240,52 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
     )
 
     ui = _PhaseUI(verbose=verbose)
-    phases: list[tuple[str, str, object]] = [
+    # (label, success_line, invoke, fatal). fatal=False phases warn and
+    # continue on failure — themes are a semantic-clustering augmentation, so
+    # a themes failure must not discard a completed (and, for a spool, paid)
+    # generate + embed run at the last step.
+    phases: list[tuple[str, str, object, bool]] = [
         (
             'Describing catalog elements',
             '  [green]✓[/green] Catalog-describe — descriptions persisted',
             lambda: cmd_catalog_describe(catalog_describe_args),
+            True,
         ),
         (
             'Generating documentation',
             '  [green]✓[/green] Generate — explanation/architecture/qa docs written',
             lambda: cmd_generate(generate_args),
+            True,
         ),
     ]
     phases.append((
         'Building themes',
         '  [green]✓[/green] Themes build — cluster summaries written',
         lambda: cmd_themes_build(themes_args),
+        False,
     ))
 
     import inspect
 
-    for label, success_line, invoke in phases:
+    for label, success_line, invoke, fatal in phases:
         with ui.passthrough(label):
             result = invoke()
             rc = await result if inspect.isawaitable(result) else result
         if rc != 0:
+            if fatal:
+                console.print(
+                    f'[red]Phase {label!r} failed (rc={rc}). Pipeline '
+                    'stopped.[/red]',
+                )
+                return rc
+            # Non-fatal (e.g. themes): surface loudly but keep the completed
+            # docs/embeddings — they're persisted and the pack can still build.
             console.print(
-                f'[red]Phase {label!r} failed (rc={rc}). Pipeline '
-                'stopped.[/red]',
+                f'[yellow]Phase {label!r} failed (rc={rc}) — continuing; it '
+                'augments the docs and the generated docs/pack are '
+                'unaffected.[/yellow]',
             )
-            return rc
+            continue
         if not verbose:
             console.print(success_line)
 
