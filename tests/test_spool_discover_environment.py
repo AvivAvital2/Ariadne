@@ -114,13 +114,15 @@ class TestSetupRecipeIntegration:
         # filled so the pack stays runtime-pinned (schema/enable gate need it).
         assert data['runtime']
 
-    def test_terraform_recipe_single_repo_version_is_runtime(self, tmp_path) -> None:
-        # The shipped terraform recipe is single-repo with no `runtime:` — its
-        # corpus is opentofu (the MPL/open-source Terraform impl, not BUSL
-        # hashicorp/terraform). The picked version becomes the edition, and no
-        # "Runtime edition" prompt is shown (nothing meaningful to type). Uses
-        # the real recipe; fakes tags.
-        out = tmp_path / 'tf.yaml'
+    def test_opentofu_recipe_single_repo_version_is_runtime(
+            self, tmp_path) -> None:
+        # The shipped opentofu recipe is single-repo with no `runtime:` — the
+        # corpus is OpenTofu (the MPL/open-source Terraform implementation;
+        # the recipe is NAMED for its actual corpus, never BUSL
+        # hashicorp/terraform). The picked version becomes the edition, and
+        # no "Runtime edition" prompt is shown (nothing meaningful to type).
+        # Uses the real recipe; fakes tags.
+        out = tmp_path / 'tofu.yaml'
         prompts = []
 
         def _prompt(p: str) -> str:
@@ -128,7 +130,7 @@ class TestSetupRecipeIntegration:
             return '1' if ('tag' in p.lower() or 'pick' in p.lower()) else ''
 
         setup_recipe(
-            'terraform', out_path=out, prompt=_prompt,
+            'opentofu', out_path=out, prompt=_prompt,
             tags_fn=lambda url: ['v1.13.0', 'v1.12.0'],
             compat_fn=lambda *a, **k: {},
             order_fn=lambda *a, **k: ['opentofu'],

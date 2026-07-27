@@ -1,0 +1,33 @@
+# Built-in corpus recipe for `ariadne spools create opentofu`.
+# Curation per design §18.1 (admit iff real code corpus AND SCIP-translatable).
+#
+# OpenTofu is a single-repo Go environment: the MPL 2.0,
+# Linux-Foundation-governed fork of Terraform — same HCL, same providers,
+# same runtime concepts. The recipe (and the packs it builds) is named for
+# its ACTUAL corpus: since Aug 2023 Terraform ships under the Business Source
+# License (BUSL 1.1), which is source-available, NOT open source, and does
+# not permit redistributing derived artifacts under an open-source claim —
+# so nothing here fetches from or brands itself as hashicorp/terraform.
+# Indexed by scip-go.
+#
+# Unlike Databricks (a DBR runtime governing several repos), there is no
+# separate "runtime edition" — the release version you pick at `create` time
+# becomes the pack edition, so this recipe declares no `runtime:` and no `tag:`
+# (chosen interactively from the live release tags, so it stays current and
+# valid). Requires scip-go on PATH:
+#   go install github.com/scip-code/scip-go/cmd/scip-go@latest
+name: opentofu
+version: 1.0.0
+# Corpus language — Go, indexed by scip-go (checked by the grounding gate).
+languages: [go]
+# Question-side product names that route to this environment (nominative
+# use only — users phrase questions with the household name; nothing is
+# fetched from or branded with these).
+name_aliases:
+  - open tofu
+  - tofu
+  - terraform
+corpus:
+  opentofu:
+    url: https://github.com/opentofu/opentofu
+# certify: (optional) publisher-certified doc dirs, e.g. opentofu/website/docs/
