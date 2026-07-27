@@ -105,8 +105,11 @@ module.exports = defineConfig({
 
         async stopAriadne() {
           if (proc && proc.pid) {
-            try { process.kill(-proc.pid, 'SIGTERM'); }
-            catch (e) { try { proc.kill('SIGTERM'); } catch (_) { /* gone */ } }
+            // SIGKILL the whole process group. ariadne serve's graceful shutdown
+            // currently crashes (anyio cancel-scope) and SURVIVES SIGTERM, so a
+            // polite signal leaves servers piling up across tests. Kill hard.
+            try { process.kill(-proc.pid, 'SIGKILL'); }
+            catch (e) { try { proc.kill('SIGKILL'); } catch (_) { /* gone */ } }
             proc = null;
           }
           if (workspace) {
