@@ -268,3 +268,45 @@ def evaluate_guardrail(guardrail: Guardrail, view: CatalogView) -> GuardrailResu
         guardrail=guardrail,
         result=evaluate_signal(guardrail.signal, view),
     )
+
+
+_SIGNAL_SYMBOL_FIELDS = ('pattern', 'symbol', 'prefix')
+
+
+def _signal_symbol_refs(signal: dict) -> list:
+    """Every non-empty symbol/namespace a structural signal keys on, recursing
+    through ``all_of``/``any_of``. An empty ``prefix`` (scan-all) names no
+    namespace, so it contributes nothing."""
+    refs = []
+    for field_name in _SIGNAL_SYMBOL_FIELDS:
+        value = signal.get(field_name)
+        if value:
+            refs.append(str(value))
+    for sub in signal.get('signals', ()) or ():
+        refs.extend(_signal_symbol_refs(sub))
+    return refs
+
+
+def validate_spool_guardrails(guardrails, *, allowed_prefixes) -> None:
+    """Reject any SHIPPED spool guardrail keyed on non-environment symbols.
+
+    A spool encodes ENVIRONMENT knowledge, so a structural signal may name
+    only the environment's own API packages (``allowed_prefixes`` — e.g.
+    ``pyspark``/``mlflow``/``delta`` for databricks). A signal naming a
+    caller's own symbols is consumer knowledge and must never ship in a
+    pack. Prose (``nl``) guardrails name no symbols and always pass. Loud on
+    violation — an author error, caught at build, never masked.
+    """
+    allowed = tuple(allowed_prefixes)
+    for guardrail in guardrails:
+        if guardrail.signal_type != 'structural':
+            continue
+        for ref in _signal_symbol_refs(guardrail.signal):
+            if not any(ref == p or ref.startswith(p + '.') for p in allowed):
+                raise GuardrailError(
+                    f'spool guardrail {guardrail.name!r}: structural signal '
+                    f'references {ref!r}, outside the environment API allowlist '
+                    f'{sorted(allowed)} — a spool guardrail must key on the '
+                    f'environment (or be prose `nl`); consumer symbols must not '
+                    f'ship in a spool.',
+                )

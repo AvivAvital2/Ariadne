@@ -337,7 +337,7 @@ def test_enabled_spools_parses_projects(tmp_path):
         spools:
           databricks:
             runtime: dbr17.3-lts
-            projects: [ao-core, other-spark-proj]
+            projects: [demo-spark-proj, other-spark-proj]
           delta:
             runtime: some-rt
           terraform: true
@@ -346,7 +346,7 @@ def test_enabled_spools_parses_projects(tmp_path):
     ''')
     settings = enabled_spools(cfg)
     assert settings['databricks'].runtime == 'dbr17.3-lts'
-    assert settings['databricks'].projects == ('ao-core', 'other-spark-proj')
+    assert settings['databricks'].projects == ('demo-spark-proj', 'other-spark-proj')
     assert settings['delta'].projects == ()      # dict without `projects` -> empty
     assert settings['terraform'].projects == ()  # `true` -> empty
     assert 'dormant' not in settings             # `enabled: false` -> excluded

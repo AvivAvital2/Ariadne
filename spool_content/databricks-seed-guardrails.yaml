@@ -1,0 +1,72 @@
+# Databricks environment seed guardrails — repo-agnostic advisories applied
+# to ANY project consulted against the databricks spool.
+#
+# These are ENVIRONMENT knowledge (Spark / MLflow / Delta on Databricks), not
+# any consumer's code. Per design §6 a guardrail is repo-agnostic prose plus an
+# optional machine-checkable code-signal. A spool's structural signal may key
+# ONLY on the environment's own API (pyspark / mlflow / delta / databricks) — a
+# signal keyed on a caller's own symbols is consumer knowledge and must never
+# ship in a spool. Where no such environment-keyed signal exists yet, the
+# guardrail stays `nl` (honest prose, unevaluated) rather than borrowing a
+# specific project's symbols. Design: designs/spool-environment-plugin.md §6.
+guardrails:
+  - name: mlflow-autolog-patches-fit
+    kind: antipattern
+    recommendation: >-
+      Disable MLflow autologging around scikit-learn training on Spark
+      (mlflow.sklearn.autolog(disable=True) / mlflow.autolog(disable=True))
+      unless you need it — autolog monkeypatches estimator.fit, so a tight fit
+      loop (e.g. per-bin / per-group models) pays the logging cost on every
+      call and can slow training by orders of magnitude.
+    rationale: >-
+      On Databricks MLflow autolog is on by default and wraps sklearn's fit to
+      capture params/metrics/models per call; repeated fits therefore pay that
+      overhead repeatedly — a catastrophic slowdown that is invisible in the
+      code itself.
+    citation: designs/spool-environment-plugin.md §6
+    signal_type: nl
+    signal: {kind: nl}
+    spans: [autolog-patching]
+
+  - name: engine-types-in-public-api
+    kind: antipattern
+    recommendation: >-
+      Keep engine-native types (Spark/DuckDB sessions, DataFrames, connections)
+      out of a library's PUBLIC signatures; expose engine-neutral types and keep
+      the engine internal, so scaling the engine is not an API rewrite.
+    rationale: >-
+      When engine types appear in public signatures every consumer is coupled to
+      the engine; a distributed redesign then becomes an API rewrite that must
+      re-prove its correctness guarantees, not a configuration change.
+    citation: designs/spool-environment-plugin.md §6
+    signal_type: nl
+    signal: {kind: nl}
+    spans: [engine-coupling]
+
+  - name: shared-canonical-read-only
+    kind: method
+    recommendation: >-
+      When many workers read one shared on-disk dataset, open every worker's
+      connection read-only; engines that permit many concurrent readers do so
+      only when no connection can write.
+    rationale: >-
+      A scatter phase is safe precisely because no worker can mutate the shared
+      canonical; the read-only open is the mechanism that enforces it.
+    citation: designs/spool-environment-plugin.md §6
+    signal_type: nl
+    signal: {kind: nl}
+    spans: [distribution]
+
+  - name: gather-on-stable-identifier
+    kind: method
+    recommendation: >-
+      Gather distributed results on a stamped identifier column, never the
+      engine's physical rowid; thread an explicit identifier column through the
+      split/gather path.
+    rationale: >-
+      A physical rowid is a position, unstable across copies/reloads — exactly
+      the distributed case; keying a gather on it silently misaligns rows.
+    citation: designs/spool-environment-plugin.md §6
+    signal_type: nl
+    signal: {kind: nl}
+    spans: [identity, gather]
