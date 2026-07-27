@@ -190,6 +190,15 @@ class AdminMixin:
         }
         for lang, _count in est.languages:
             language_doc_types[lang] = list(_supported_doc_types_for(lang))
+        # Grand total = generate + catalog-describe (the phase the web preview
+        # previously omitted). The generate-only totals keep their meaning as
+        # separate fields; the grand total is what the run actually costs.
+        describe = est.catalog_describe_cost
+        describe_batched = est.catalog_describe_cost_batched
+        grand_total = total.total_cost_usd + (describe or 0.0)
+        grand_total_batched = (
+            est.total_batched.total_cost_usd + (describe_batched or 0.0)
+        )
         return EstimateResponse(
             source=src,
             model=model,
@@ -202,6 +211,11 @@ class AdminMixin:
             embedding_tokens=total.embedding_tokens,
             total_cost_usd=total.total_cost_usd,
             total_cost_batched_usd=est.total_batched.total_cost_usd,
+            catalog_describe_cost_usd=describe,
+            catalog_describe_cost_batched_usd=describe_batched,
+            catalog_element_count=est.catalog_element_count,
+            grand_total_cost_usd=grand_total,
+            grand_total_cost_batched_usd=grand_total_batched,
             cost_lower_bound=total.cost_lower_bound,
             cost_upper_bound=total.cost_upper_bound,
             embedding_cost_usd=total.embedding_cost_usd,
@@ -598,6 +612,25 @@ class AdminMixin:
             message='Miss logged.' if success else 'Event not found.',
         )
 
+    def _count_cataloged_files(self, source_name: str) -> int:
+        """Real number of files actually cataloged for ``source_name``.
+
+        Counts the source's ``file_index`` catalog docs — catalog-sync writes
+        exactly one per catalogued source file. Unlike ``coverage().total_files``
+        (a filesystem walk that is non-zero even when nothing was indexed), this
+        reflects what was actually written, so a run that indexed nothing
+        reports 0. Reads lite docs (no content/embedding) and filters on the
+        catalog metadata, matching the per-source pattern the dry-run uses.
+        """
+        from schema import CATALOG_KIND_FILE_INDEX
+
+        return sum(
+            1
+            for d in self.library.list_documents_lite(content_type='catalog')
+            if d.metadata.get('source_name') == source_name
+            and d.metadata.get('kind') == CATALOG_KIND_FILE_INDEX
+        )
+
     async def onboard(
         self,
         source: str | None = None,
@@ -608,13 +641,17 @@ class AdminMixin:
         concurrency: int | None = None,
         progress=None,
     ) -> OnboardResponse:
-        """Run the paid onboarding phases for a source (the "Generate" step).
+        """Run a COMPLETE onboard for a source (the wizard's "Generate" step).
 
-        Delegates the paid work to ``run_onboard_pipeline`` (catalog-describe →
-        generate → themes-build) with an optional progress callback, then reads
-        coverage + the indexed-file count via :meth:`coverage`. NOT idempotent:
-        it spends LLM budget and writes documents. The free phases (discover /
-        index / catalog-sync) and the cost preview are the caller's job.
+        Runs the free phases (discover → index → catalog-sync) then the paid
+        phases (catalog-describe → generate → themes-build) via
+        ``run_onboard_pipeline(include_free_phases=True)``, with an optional
+        progress callback, then reads coverage via :meth:`coverage`. Running the
+        free phases here mirrors the CLI ``ariadne onboard`` and is what makes a
+        SCIP-routed source usable: without a built index generate raises
+        ``ScipIndexNotReadyError``, and without catalog-sync the catalog +
+        cross-source graph are silently empty. NOT idempotent: it spends LLM
+        budget and writes documents. The cost preview remains the caller's job.
         """
         from cli.generate import DEFAULT_GENERATE_DOC_TYPES
         from cli.onboard_pipeline import run_onboard_pipeline
@@ -630,11 +667,12 @@ class AdminMixin:
         result = await run_onboard_pipeline(
             src, model, types, mode=mode, concurrency=concurrency,
             progress=progress, db_path=cfg.db_path,
+            include_free_phases=True,
         )
         cov = self.coverage(src)
         return OnboardResponse(
             source=src, model=model, mode=mode,
-            files_indexed=cov.total_files,
+            files_indexed=self._count_cataloged_files(src),
             docs_written=result.docs_written,
             themes_found=result.themes_found,
             coverage_percent=round(cov.coverage_percent, 1),

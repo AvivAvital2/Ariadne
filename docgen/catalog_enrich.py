@@ -35,6 +35,7 @@ from docgen.catalog_extractor import (
     _py_module_qn,
     extract_elements,
 )
+from docgen.scip_config import ScipError, ScipIndexNotReadyError
 from ast_utils import safe_ast_parse
 
 if TYPE_CHECKING:
@@ -388,9 +389,23 @@ def enrich_file(
             return None
 
     line_count = len(src.splitlines())
-    elements = extract_elements(
-        path, source_root=source_root, source_config=source_config,
-    )
+    try:
+        elements = extract_elements(
+            path, source_root=source_root, source_config=source_config,
+        )
+    except ScipError as exc:
+        # A SCIP-routed language whose index was never built raises a terse
+        # ScipError here. Translate it into one actionable, fail-loud error
+        # (source, language, artifact, remedy) rather than letting it escape the
+        # generate path raw. Only reached when a real file of that language is
+        # actually extracted through SCIP.
+        raise ScipIndexNotReadyError(
+            repo=exc.repo,
+            reason=exc.reason,
+            language=language,
+            artifact=getattr(source_config, 'artifact_path', None),
+            remedy_cmd=f'ariadne index --source {exc.repo}',
+        ) from exc
 
     scip_metadata = _compute_scip_metadata(
         elements, path, source_root, cross_source_graph,

@@ -188,6 +188,11 @@ class GenerateEstimate:
     by_doc_type_batched: dict    # doc_type -> CostEstimate
     by_directory: dict           # rel_path -> NodeCost (the explorer tree)
     languages: tuple             # ((language, file_count), ...) desc by count
+    # catalog-describe phase, priced index-free (no built .scip). Defaulted
+    # so older constructions stay valid; ``build_estimate`` always populates.
+    catalog_describe_cost: float | None = None
+    catalog_describe_cost_batched: float | None = None
+    catalog_element_count: int = 0
 
 
 def language_histogram(files) -> tuple:
@@ -318,6 +323,67 @@ def exclusion_savings(cfg, source_name, *, model, doc_types=None, db_path=None) 
     return out
 
 
+def _estimate_catalog_describe(
+    cfg, source_name, source_path, files, *, model, db_path=None,
+) -> tuple[int, float | None, float | None]:
+    """Index-free estimate of the catalog-describe LLM cost for a source.
+
+    Returns ``(element_count, cost, cost_batched)``.
+
+    The web onboarding preview runs BEFORE catalog-sync, so unlike
+    ``dry-run`` (which prices catalog-describe from real catalog rows) there
+    is no catalog to count. This derives an element count itself with an
+    *index-free* extraction pass over the SAME discovered ``files``: each
+    file's elements are counted via :func:`docgen.catalog_extractor.extract_elements`
+    with the source's SCIP config forced to ``allow_degraded=True`` — so a
+    SCIP-declared language falls back to ast-grep and NO ``.scip`` index is
+    required (the estimate never crashes or hangs on a missing index).
+
+    NOTE: scala/java/go have no ast-grep grammar, so index-free extraction
+    yields 0 elements for those languages — an accepted limitation of the
+    preview (their real describe cost only surfaces after an index-backed
+    catalog-sync).
+
+    Pricing mirrors ``cli.dry_run.cmd_dry_run``'s describe path (its
+    fallback branch, which has no per-element prompt text either): the
+    calibrated per-call token figures times the count times the model rates,
+    with the batched figure at half (Message Batches ~50% discount).
+    """
+    from attrs import evolve
+
+    from cli.dry_run import _describe_tokens_per_call
+    from docgen.calibration import CalibrationStore
+    from docgen.catalog_extractor import extract_elements
+    from docgen.pricing import LLM_PRICING
+
+    scip_cfg = cfg.get_source_scip_config(source_name)
+    degraded_cfg = (
+        evolve(scip_cfg, allow_degraded=True) if scip_cfg is not None else None
+    )
+
+    count = 0
+    for path, _size in files:
+        try:
+            count += len(extract_elements(
+                path, source_root=source_path, source_config=degraded_cfg))
+        except Exception:
+            # A single unparseable file must not sink the whole estimate;
+            # skip it and keep counting.
+            continue
+
+    rates = LLM_PRICING.get(model)
+    if rates is None:
+        return count, None, None
+    ipm, opm = rates
+    try:
+        store = CalibrationStore(str(db_path or cfg.db_path))
+    except Exception:
+        store = None
+    desc_in, desc_out = _describe_tokens_per_call(store, model)
+    cost = count * desc_in * ipm / 1_000_000 + count * desc_out * opm / 1_000_000
+    return count, cost, cost * 0.5
+
+
 def build_estimate(cfg, source_name, *, model, doc_types=None, db_path=None) -> GenerateEstimate:
     """Compute the full generate-phase cost preview for a source.
 
@@ -354,6 +420,14 @@ def build_estimate(cfg, source_name, *, model, doc_types=None, db_path=None) -> 
 
     languages = language_histogram(files)
 
+    # catalog-describe: the web preview has no catalog yet, so derive the
+    # element count index-free (see _estimate_catalog_describe) and price it.
+    describe_count, describe_cost, describe_cost_batched = (
+        _estimate_catalog_describe(
+            cfg, source_name, source_path, files,
+            model=model, db_path=db_path)
+    )
+
     return GenerateEstimate(
         base_path=source_path,
         file_count=len(files),
@@ -364,6 +438,9 @@ def build_estimate(cfg, source_name, *, model, doc_types=None, db_path=None) -> 
         by_doc_type_batched=by_type_batched,
         by_directory=by_dir,
         languages=languages,
+        catalog_describe_cost=describe_cost,
+        catalog_describe_cost_batched=describe_cost_batched,
+        catalog_element_count=describe_count,
     )
 
 

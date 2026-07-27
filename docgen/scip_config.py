@@ -82,6 +82,38 @@ class ScipCorruptError(ScipError):
     """
 
 
+class ScipIndexNotReadyError(ScipError):
+    """A SCIP-routed language's index is missing/stale/corrupt at the point a
+    file of that language is actually extracted.
+
+    ``resolve_index`` raises a terse ``ScipError`` deep in ``extract_elements``;
+    on the generate path that is uncaught and takes the whole run down with an
+    opaque message. The extraction seam (``catalog_enrich.enrich_file``)
+    translates it into this single, actionable failure — naming the source, the
+    language routed through SCIP, the artifact, and how to fix it — before it
+    propagates. Fires only when a real file of that language is extracted, so a
+    source that merely *declares* SCIP (but has no such files, or is never
+    generated) is unaffected.
+    """
+
+    def __init__(self, *, repo, reason, language, artifact, remedy_cmd):
+        self.repo = repo
+        self.reason = reason
+        self.language = language
+        self.artifact = artifact
+        self.expected_commit = None
+        self.last_good_commit = None
+        self.last_good_age_days = None
+        Exception.__init__(self, (
+            f"SCIP index not ready for source {repo!r}: language {language!r} "
+            f"routes catalog extraction through SCIP (index_kinds.{language}: "
+            f"scip), but its index at {artifact} is unavailable ({reason}). "
+            f"Build it with `{remedy_cmd}`, then re-run. If this source isn't "
+            f"SCIP-indexable, drop index_kinds.{language}: scip so it uses "
+            f"ast-grep instead."
+        ))
+
+
 # Module-level cache for loaded ScipIndex instances. Keyed by
 # (artifact_path_str, mtime_ns) so a re-indexed artifact invalidates
 # automatically on mtime change. Without this, every Scala/Java file
@@ -143,6 +175,7 @@ def resolve_index(
 __all__ = [
     'ScipCorruptError',
     'ScipError',
+    'ScipIndexNotReadyError',
     'ScipTooStaleError',
     'ScipUnavailableError',
     'SourceScipConfig',

@@ -4,13 +4,14 @@
  * /api/* stubbed → ONE fresh server per spec. Covers the shell load and the
  * full build (Connect → Start build → SSE progress → ready → console handoff).
  */
-// SKIPPED — same headless-harness cy.visit issue as console.cy.js (CDP -32000
-// "Cannot find context" → Cypress re-runs the spec → boot loop). See that file's
-// header for the full trace/ruled-out list. Debug headed via `cypress open`.
-describe.skip('Onboarding wizard', () => {
+// Visits the PERSISTENT static server (see console.cy.js header) instead of
+// booting `ariadne serve` per spec — the per-spec boot was the old cy.visit
+// boot-loop (a spec re-attempt re-booted on a new port → moving origin → CDP
+// -32000 "Cannot find context"). /api is fully stubbed, so only the served page
+// is needed; a fixed URL recovers cleanly.
+describe('Onboarding wizard', () => {
   let base;
-  before(() => cy.task('startAriadne').then((s) => { base = s.baseUrl; }));
-  after(() => cy.task('stopAriadne'));
+  beforeEach(() => cy.task('fixedStaticUrl').then((u) => { base = u; }));
 
   const wizard = () => base + '/';
 

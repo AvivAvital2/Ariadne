@@ -9,8 +9,10 @@ pipeline output (docs/themes) with filesystem-derived coverage (files/percent).
 A single evolving test, one demand at a time:
 
   D1 — onboarding a source returns an OnboardResponse whose pipeline stats
-       (docs_written, themes_found, themes_ok) come from the pipeline and whose
-       files_indexed + coverage_percent are computed from the real source.
+       (docs_written, themes_found, themes_ok) come from the pipeline, whose
+       files_indexed is the REAL count of catalogued files (file_index docs),
+       NOT a filesystem walk, and whose coverage_percent is computed from the
+       real source.
   D2 — the tool's progress callback bridges each phase to ctx.report_progress.
   D3 — batch=True maps to mode='batch' reaching the pipeline.
   D4 — explicit doc_types are passed to the pipeline (as a tuple) and echoed.
@@ -22,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from ariadne_mcp.server_admin import ariadne_onboard, ariadne_source_add
+from ariadne_mcp.service import AriadneService
 
 
 @pytest.fixture(autouse=True)
@@ -67,15 +70,33 @@ async def test_onboard_tool_evolves_through_contract(monkeypatch, tmp_path):
 
     async def fake_pipeline(source, model, doc_types, *, mode='live',
                             concurrency=None, progress=None, db_path=None,
-                            verbose=False):
+                            verbose=False, include_free_phases=False):
         calls.append({'source': source, 'model': model, 'doc_types': doc_types,
-                      'mode': mode, 'concurrency': concurrency})
+                      'mode': mode, 'concurrency': concurrency,
+                      'include_free_phases': include_free_phases})
         if progress is not None:
             await progress('Generating documentation', 2, 3)
         return OnboardResult(docs_written=5, themes_found=2, themes_ok=True)
 
     monkeypatch.setattr(
         'cli.onboard_pipeline.run_onboard_pipeline', fake_pipeline)
+
+    # Populate the catalog with file_index docs — the REAL "files indexed"
+    # signal (catalog-sync writes one per catalogued source file). Deliberately
+    # 3, distinct from the 2-file filesystem walk, so the assertion proves
+    # files_indexed reflects what was actually cataloged, not a directory walk.
+    # Synthetic source_files that don't match the real tree, so coverage stays 0%.
+    _lib = AriadneService.get().library
+    for i in range(3):
+        _lib.add_document(
+            content_type='catalog',
+            title=f'file_index:proj:mod{i}.py',
+            content=f'Catalog index for mod{i}.py -- 1 elements.',
+            source_files=[f'proj/mod{i}.py'],
+            metadata={'kind': 'file_index', 'source_name': 'proj',
+                      'language': 'python'},
+            source_name='proj',
+        )
 
     ctx = _FakeCtx()
 
@@ -87,11 +108,17 @@ async def test_onboard_tool_evolves_through_contract(monkeypatch, tmp_path):
     assert resp.docs_written == 5          # from the pipeline
     assert resp.themes_found == 2
     assert resp.themes_ok is True
+    # files_indexed is the REAL count of catalogued files (3 file_index docs),
+    # NOT the 2-file filesystem walk that coverage() performs.
+    assert resp.files_indexed == 3
     # coverage computed on the real synthetic source: 2 python files, none
     # documented in a fresh library.
-    assert resp.files_indexed == 2
     assert resp.coverage_percent == 0.0
     assert 'explanation' in resp.doc_types  # default set echoed
+    # The tool runs a COMPLETE onboard: it must request the free phases
+    # (discover → index → catalog-sync) the wizard otherwise never runs, so a
+    # SCIP-routed source gets a built index and a populated catalog.
+    assert calls[-1]['include_free_phases'] is True
 
     # ---- D2: progress bridged to ctx.report_progress ----------------
     assert (2, 3, 'Generating documentation') in ctx.progress

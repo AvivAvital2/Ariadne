@@ -743,7 +743,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
               <div class="ctl total">
                 <div class="clbl">Estimated total</div>
                 <div class="amt" id="costV">—</div>
-                <div class="sub">incl. ~<span id="embCost">$0</span> embeddings · floor → +50%</div>
+                <div class="sub">incl. ~<span id="embCost">$0</span> embeddings · ~<span id="descCost">$0</span> catalog index · floor → +50%</div>
               </div>
             </div>
           </div>
@@ -1041,6 +1041,20 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   // we scale the authoritative estimate's LLM portion by the chosen model's
   // rates and apply any pending optimistic exclusion delta. Returns the floor
   // $ (band() adds the +50% ceiling). Themes add ~8% of output cost.
+  // catalog-describe (index-free element-count cost) for a given model. It's
+  // independent of the doc-type/exclusion toggles (it prices catalog elements,
+  // not doc types), so it rides alongside the generate LLM portion, scaled by
+  // the chosen model's blended rate exactly like that portion.
+  function modelDescribe(modelId, batch){
+    const e=state.estimate; if(!e) return 0;
+    let d=(batch?e.catalog_describe_cost_batched_usd:e.catalog_describe_cost_usd)||0;
+    if(!d) return 0;
+    const inT=e.input_tokens||0, outT=e.output_tokens||0;
+    const refRate=e.input_per_million*inT + e.output_per_million*outT;
+    const m=(e.available_models||[]).find(x=>x.model===modelId);
+    if(m && refRate>0) d=d*((m.input_per_million*inT + m.output_per_million*outT)/refRate);
+    return d;
+  }
   function modelTotal(modelId, batch){
     const e=state.estimate; if(!e) return 0;
     const inT=e.input_tokens||0, outT=e.output_tokens||0, emb=e.embedding_cost_usd||0;
@@ -1070,7 +1084,9 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     const bf = batch ? (e.total_cost_usd ? e.total_cost_batched_usd/e.total_cost_usd : 0.5) : 1;
     llm = Math.max(0, llm + (state.optDelta||0)*bf);
     const themes = themesOn() ? outT*outRate/1e6*(batch?0.5:1)*0.08 : 0;
-    return llm + emb + themes;
+    // Fold in catalog-describe so the headline total is the true minimum
+    // (generate + describe + embeddings + themes), not generate-only.
+    return llm + emb + themes + modelDescribe(modelId, batch);
   }
   function applyLocalTotals(){ if(state.estimate) renderEstimate(state.estimate, false); }   // instant, no backend, no tree rebuild
   function bumpOpt(delta){ state.optDelta=(state.optDelta||0)+delta; }
@@ -1294,6 +1310,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     if(!e) return;
     const total = modelTotal(state.model, state.batch);
     setText('costV', band(total)); setText('cbTotal', band(total)); setText('embCost', money(e.embedding_cost_usd));
+    setText('descCost', money(modelDescribe(state.model, state.batch)));
     const ea=$('engApi'), eb=$('engBatch');
     if(ea){ const p=ea.querySelector('.oprice'); if(p) p.textContent=band(modelTotal(state.model,false)); }
     if(eb){ const p=eb.querySelector('.oprice'); if(p) p.textContent=band(modelTotal(state.model,true)); }

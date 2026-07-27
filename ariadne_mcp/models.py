@@ -492,8 +492,17 @@ class EstimateResponse(BaseModel):
     input_tokens: int
     output_tokens: int
     embedding_tokens: int
-    total_cost_usd: float
-    total_cost_batched_usd: float
+    total_cost_usd: float           # generate-phase only (unchanged meaning)
+    total_cost_batched_usd: float   # generate-phase only, batched
+    # catalog-describe phase (index-free element count). Separate line item so
+    # the generate-only totals above keep their meaning; None when the model
+    # has no pricing entry.
+    catalog_describe_cost_usd: float | None = None
+    catalog_describe_cost_batched_usd: float | None = None
+    catalog_element_count: int = 0
+    # generate + catalog-describe — the true minimum the run will cost.
+    grand_total_cost_usd: float = 0.0
+    grand_total_cost_batched_usd: float = 0.0
     cost_lower_bound: float
     cost_upper_bound: float
     embedding_cost_usd: float

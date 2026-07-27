@@ -7,8 +7,12 @@ prompt removed and an optional progress callback. It builds each phase's
 argument Namespace from scratch (the MCP caller has no argparse namespace to
 inherit from, so every field a phase command reads is set explicitly here).
 
-The free phases (discover / index / catalog-sync) and the cost preview are the
-caller's job — this module never re-indexes.
+By default the free phases (discover / index / catalog-sync) and the cost
+preview are the caller's job — the CLI runs them in its dry-run preview, so it
+leaves them off here to avoid re-indexing. Callers with no preview of their own
+(the ``ariadne_onboard`` MCP tool / web wizard) pass ``include_free_phases=True``
+so the free phases run first and a SCIP-routed source has a built index before
+generate reads it.
 """
 from __future__ import annotations
 
@@ -67,6 +71,7 @@ async def run_onboard_pipeline(
     verbose: bool = False,
     progress: ProgressCallback | None = None,
     db_path: str | None = None,
+    include_free_phases: bool = False,
 ) -> OnboardResult:
     """Run the paid onboarding phases for ``source`` and report the result.
 
@@ -126,6 +131,31 @@ async def run_onboard_pipeline(
         ('Generating documentation', cmd_generate, generate_args, True),
         ('Building themes', cmd_themes_build, themes_args, False),
     ]
+
+    if include_free_phases:
+        # Free phases (discover -> index -> catalog-sync), run for real before the
+        # paid phases so a SCIP-routed source has a built index to read and the
+        # catalog / cross-source graph are populated. The CLI runs these in its
+        # dry-run preview; the web tool has no such preview, so it runs them here.
+        # Discover reruns at build time (after the wizard persisted excludes), so
+        # index_kinds reflects the final scope. All fatal: a failed free phase must
+        # stop before any LLM budget is spent.
+        from cli.catalog import cmd_catalog_sync as _cmd_catalog_sync
+        from cli.index import cmd_discover as _cmd_discover
+        from cli.index import cmd_index as _cmd_index
+        _cc_free = cc if cc is not None else 4
+        free_phases: list[tuple[str, Callable, argparse.Namespace, bool]] = [
+            ('Detecting languages', _cmd_discover, argparse.Namespace(
+                source=source, all=False, dry_run=False, review=False,
+                quiet=not verbose), True),
+            ('Indexing symbols (SCIP)', _cmd_index, argparse.Namespace(
+                source=source, all=False, dry_run=False, kind=None, force=False,
+                best_effort=False, quiet=not verbose), True),
+            ('Cataloging files', _cmd_catalog_sync, argparse.Namespace(
+                source=source, db=db_path, allow_degraded=False,
+                concurrency=_cc_free, force=False, quiet=not verbose), True),
+        ]
+        phases = free_phases + phases
 
     themes_ok = True
     phases_run: list[str] = []

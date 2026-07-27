@@ -17,6 +17,7 @@ A single evolving test:
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -29,7 +30,10 @@ from web.server import (
     make_app,
     native_picker_command,
     _feedback_call,
+    _make_tool_handler,
+    _onboard_start,
     _onboard_tool_args,
+    _read_json,
     _run_onboard,
 )
 
@@ -52,6 +56,27 @@ class _FakeBridge:
             await progress_callback(1, 3, 'Describing catalog elements')
             await progress_callback(2, 3, 'Generating documentation')
         return {'tool': tool, 'echo': args}
+
+
+class _FakeReq:
+    """Minimal stand-in for ``aiohttp.web.Request`` that drives a real handler
+    without binding a socket (loopback bind is unavailable under the sandbox).
+
+    Provides only what the handlers touch: ``.app`` (the bridge + jobs map), a
+    JSON body, and ``can_read_body``. ``bad_json=True`` makes ``.json()`` raise,
+    to exercise the malformed-body path.
+    """
+
+    def __init__(self, *, app, body=None, bad_json=False, can_read_body=True):
+        self.app = app
+        self._body = {} if body is None else body
+        self._bad = bad_json
+        self.can_read_body = can_read_body
+
+    async def json(self):
+        if self._bad:
+            raise ValueError('malformed JSON')
+        return self._body
 
 
 async def test_backend_bridges_to_mcp_tools(tmp_path):
@@ -207,3 +232,120 @@ async def test_ask_search_feedback_endpoints():
         'ariadne_log_miss', {'event_id': 7, 'feedback': 'wrong'})
     assert _feedback_call({'event_id': 9, 'helpful': False}) == (
         'ariadne_log_miss', {'event_id': 9})
+
+
+# ---------------------------------------------------------------------------
+# Direct connection: the UI talks to Ariadne straight over MCP, every time.
+# ---------------------------------------------------------------------------
+async def test_ask_is_a_direct_single_forward():
+    """Every UI ask reaches Ariadne DIRECTLY: the ``/api/ask`` handler makes
+    exactly ONE MCP call — to ``ariadne_ask`` — and returns its raw structured
+    result verbatim. Nothing sits between the user and Ariadne deciding whether
+    to consult it (contrast the Claude-Code path, where using Ariadne is at the
+    agent's discretion)."""
+    bridge = _FakeBridge()
+    handler = _make_tool_handler(TOOL_ROUTES['/api/ask'])
+    body = {'question': 'how are retries handled?', 'role': 'developer'}
+    resp = await handler(_FakeReq(app={'bridge': bridge}, body=body))
+
+    assert resp.status == 200
+    # exactly one call — unconditional, no branch that could skip Ariadne
+    assert bridge.calls == [('ariadne_ask', body)]
+    # the tool's structured result is returned as-is (no summarising middle layer)
+    assert json.loads(resp.body) == {'tool': 'ariadne_ask', 'echo': body}
+
+
+# ---------------------------------------------------------------------------
+# Attack surface: the browser cannot exploit Ariadne "over MCP" through the UI.
+# ---------------------------------------------------------------------------
+async def test_route_tool_is_authoritative_over_body():
+    """A crafted request body can't redirect a route to a different MCP tool.
+    Posting a body that NAMES another tool (plus mutating-tool arguments) to
+    ``/api/ask`` still invokes ONLY ``ariadne_ask`` — the extra keys ride along
+    as inert arguments, never as tool selection."""
+    bridge = _FakeBridge()
+    malicious = {'question': 'hi', 'tool': 'ariadne_generate',
+                 'name': 'evil', 'path': '/etc', 'source': 'other'}
+    handler = _make_tool_handler(TOOL_ROUTES['/api/ask'])
+    await handler(_FakeReq(app={'bridge': bridge}, body=malicious))
+    assert [t for t, _ in bridge.calls] == ['ariadne_ask']  # never ariadne_generate
+
+    # Every route's tool is fixed by the route table, independent of the body.
+    bridge2 = _FakeBridge()
+    for _path, tool in TOOL_ROUTES.items():
+        h = _make_tool_handler(tool)
+        await h(_FakeReq(app={'bridge': bridge2}, body={'tool': 'ariadne_generate'}))
+    invoked = {t for t, _ in bridge2.calls}
+    assert invoked == set(TOOL_ROUTES.values())
+    assert 'ariadne_generate' not in invoked
+
+
+def test_browser_reachable_tools_are_a_safe_whitelist():
+    """The browser can reach ONLY a fixed, safe set of MCP tools — the read +
+    onboarding surface — never destructive or expensive maintenance tools. This
+    is the boundary that keeps 'the UI does not expose MCP' true: wiring a route
+    for e.g. ``ariadne_generate`` would trip this."""
+    reachable = set(TOOL_ROUTES.values())
+    reachable.add('ariadne_onboard')                      # POST /api/onboard
+    for helpful in (True, False):                         # POST /api/feedback
+        reachable.add(_feedback_call({'event_id': 1, 'helpful': helpful})[0])
+
+    assert reachable == {
+        'ariadne_source_add', 'ariadne_list_sources', 'ariadne_discover',
+        'ariadne_estimate', 'ariadne_ask', 'ariadne_search',
+        'ariadne_onboard', 'ariadne_log_hit', 'ariadne_log_miss',
+    }
+    # None of these destructive / expensive tools may be browser-reachable.
+    forbidden = {'ariadne_generate', 'ariadne_generate_docs', 'ariadne_merge',
+                 'ariadne_index_source', 'ariadne_contribute',
+                 'ariadne_improve', 'ariadne_self_improve'}
+    assert reachable.isdisjoint(forbidden)
+
+
+async def test_malformed_body_is_contained():
+    """A malformed / non-JSON / absent request body degrades to an empty args
+    dict — the tool is still called (with ``{}``), never a 500 or a crash — and
+    a tool-side error surfaces as a clean 400."""
+    assert await _read_json(_FakeReq(app={}, bad_json=True)) == {}
+    assert await _read_json(_FakeReq(app={}, can_read_body=False)) == {}
+
+    bridge = _FakeBridge()
+    handler = _make_tool_handler('ariadne_ask')
+    resp = await handler(_FakeReq(app={'bridge': bridge}, bad_json=True))
+    assert resp.status == 200
+    assert bridge.calls == [('ariadne_ask', {})]
+
+    # a tool that errors on the empty args yields a clean 400, not an unhandled 500
+    bridge.fail_on = {'ariadne_ask'}
+    bridge.calls.clear()
+    resp = await handler(_FakeReq(app={'bridge': bridge}, bad_json=True))
+    assert resp.status == 400
+    assert 'error' in json.loads(resp.body)
+
+
+async def test_onboard_start_requires_source_before_spawning_a_build():
+    """A build cannot be kicked off without a source: ``/api/onboard`` returns
+    400 and spawns no job / tool call when ``source`` is missing — so a crafted
+    empty POST can't trigger a paid build."""
+    bridge = _FakeBridge()
+    app = {'bridge': bridge, 'jobs': {}}
+    resp = await _onboard_start(_FakeReq(app=app, body={}))
+    assert resp.status == 400
+    assert app['jobs'] == {}       # no job registered
+    assert bridge.calls == []      # ariadne_onboard never called
+
+
+def test_browse_is_listing_only_and_never_reads_file_contents(tmp_path):
+    """The Browse picker lists directory NAMES only — never file contents — and
+    fails soft (never raises) on a bad / greedy path, so it can't be turned into
+    an arbitrary file read through the UI."""
+    (tmp_path / 'sub').mkdir()
+    (tmp_path / 'secret.txt').write_text('TOP SECRET VALUE')
+    listing = list_dirs(str(tmp_path))
+    assert listing['dirs'] == ['sub']                       # dirs only; file absent
+    assert 'TOP SECRET VALUE' not in json.dumps(listing)    # no content leak
+
+    # a non-existent / traversal-y path fails soft to a real listing, no raise
+    weird = list_dirs('/nonexistent/../../does-not-exist-xyz')
+    assert set(weird) == {'path', 'parent', 'dirs'}
+    assert isinstance(weird['dirs'], list)

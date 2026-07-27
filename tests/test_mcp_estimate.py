@@ -18,6 +18,10 @@ A single evolving test, one demand at a time:
        glob that matches nothing saves $0, a force-included (exempt) dir
        shows a NEGATIVE saving (it adds cost), and the reported glob saving
        reconciles with the real total delta of applying it.
+  D7 — catalog-describe is priced index-free: the preview counts catalog
+       elements without a built ``.scip`` index and reports a positive
+       element count + describe cost, batched at half, and a grand total
+       that folds describe on top of the generate-only total.
 
 No LLM calls — ``estimate_*`` are pure functions over the walked files.
 Costs depend on token heuristics, so assertions check structure/ordering,
@@ -110,6 +114,24 @@ async def test_estimate_tool_evolves_through_contract(monkeypatch, tmp_path):
     #         explanation-only via the cost model's default) -----------
     assert langs.get('dockerfile') == 1
     assert est.language_doc_types.get('dockerfile') == ['explanation']
+
+    # ---- D7: catalog-describe priced index-free ---------------------
+    # The web preview has no catalog yet (catalog-sync hasn't run), so
+    # build_estimate counts elements via an index-free extraction pass and
+    # prices catalog-describe from that count. The synthetic tree has code
+    # elements (python defs, etc.), so the count and cost are positive, the
+    # batched figure is half, and the grand total folds describe on top of
+    # the generate-only total (which keeps its existing meaning).
+    assert est.catalog_element_count > 0
+    assert est.catalog_describe_cost_usd is not None
+    assert est.catalog_describe_cost_usd > 0
+    assert est.catalog_describe_cost_batched_usd == pytest.approx(
+        est.catalog_describe_cost_usd * 0.5)
+    assert est.grand_total_cost_usd == pytest.approx(
+        est.total_cost_usd + est.catalog_describe_cost_usd)
+    assert est.grand_total_cost_usd > est.total_cost_usd
+    assert est.grand_total_cost_batched_usd == pytest.approx(
+        est.total_cost_batched_usd + est.catalog_describe_cost_batched_usd)
 
     # ---- D6: per-exclusion savings ----------------------------------
     # A second source whose tree has rst docs (a glob target) and a

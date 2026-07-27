@@ -8,12 +8,14 @@ const path = require('node:path');
 
 // Repo root (this file lives at web/e2e/cypress.config.js).
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-// Use `localhost` everywhere (bind, readiness ping, and the URL handed to
-// Cypress). Cypress runs its own proxy on `localhost`; if the app is on a
-// different host (127.0.0.1) it's cross-origin and cy.visit's socket injection
-// fails (CDP -32000 "Cannot find context") → the spec silently re-runs → the
-// boot loop. `--host localhost` also makes ariadne serve bind BOTH 127.0.0.1
-// and ::1, so the browser reaches it whichever localhost resolves to.
+// Use `localhost` (NOT 127.0.0.1) — bind, readiness ping, and the URL handed to
+// Cypress. Cypress runs its own proxy on `localhost`; visiting 127.0.0.1 is a
+// DIFFERENT super-domain (cross-origin), which breaks cy.visit's socket
+// injection (CDP -32000) so Cypress re-runs the spec forever — the boot loop.
+// EVIDENCED headed: with 127.0.0.1, `cypress open` loops (server boots ready in
+// 2.4s, Cypress reloads the spec, repeat); with `localhost` the tests actually
+// run. `--host localhost` binds both 127.0.0.1 and ::1 so the browser reaches
+// it. (Headless `cypress run` still loops for a separate, unsolved reason.)
 const HOST = 'localhost';
 
 // Track EVERY spawned server so none can leak. A single missed teardown, a
@@ -23,6 +25,140 @@ const HOST = 'localhost';
 // survivors when Cypress itself exits.
 const servers = new Set();   // each: { proc, workspace }
 let current = null;          // the server for the test in flight
+
+// A PLAIN Node static file server for the UI specs, booted ONCE per run (see
+// setupNodeEvents) and served at a FIXED URL. This exists to fix the old
+// `cypress run` boot-loop: the specs used to boot a fresh `ariadne serve` per
+// spec, so when Cypress re-attempts a spec the server re-booted on a NEW port —
+// cy.visit chased a moving origin and Cypress's CDP execution context never
+// settled (-32000 "Cannot find context", retried forever). Visiting one fixed
+// URL recovers cleanly, exactly like any external cy.visit. The specs stub every
+// /api, so they only need the page served; the real backend is exercised by
+// backend-atomicity.cy.js via cy.request (no page visit → no injection).
+const WEB_STATIC = path.join(REPO_ROOT, 'web', 'static');
+const staticServers = new Set();
+const CTYPE = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
+
+function startStaticServer(host = HOST) {
+  return new Promise((resolve, reject) => {
+    const srv = http.createServer((req, res) => {
+      let p = decodeURIComponent((req.url || '/').split('?')[0]);
+      if (p === '/') p = '/onboarding.html';
+      p = p.replace(/^\/static\//, '/');
+      const fp = path.join(WEB_STATIC, path.normalize(p));
+      if (!fp.startsWith(WEB_STATIC) || !fs.existsSync(fp) || !fs.statSync(fp).isFile()) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('not found'); return;
+      }
+      res.writeHead(200, { 'Content-Type': CTYPE[path.extname(fp)] || 'application/octet-stream' });
+      res.end(fs.readFileSync(fp));   // plain: no ETag/Range/conditional/sendfile
+    });
+    srv.on('error', reject);
+    srv.listen(0, host, () => {
+      staticServers.add(srv);
+      resolve({ baseUrl: `http://${host}:${srv.address().port}` });
+    });
+  });
+}
+
+function closeStaticServers() {
+  for (const s of staticServers) { try { s.close(); } catch (e) { /* gone */ } }
+  staticServers.clear();
+}
+
+// --- Journey test support -------------------------------------------------
+// ONE persistent REAL `ariadne serve` (fixed 127.0.0.1 URL, so cy.visit survives
+// a re-attempt) on a workspace holding a small synthetic source with clear,
+// answerable content. Cached — booted once. The journey does a REAL generate +
+// REAL ask, so the run env MUST have the LLM/embedding API keys.
+let journeyProc = null;
+let journey = null;
+const RETRY_PY = [
+  '"""Retry helpers: wrap flaky calls in exponential backoff."""',
+  'import time',
+  '',
+  '',
+  'def retry_with_backoff(fn, attempts=3, base_delay=0.1):',
+  '    """Call ``fn``, retrying up to ``attempts`` times with exponential backoff.',
+  '',
+  '    After each failure the delay doubles (base_delay, 2x, 4x, ...). The last',
+  '    exception is re-raised once all attempts are exhausted."""',
+  '    delay = base_delay',
+  '    for attempt in range(attempts):',
+  '        try:',
+  '            return fn()',
+  '        except Exception:',
+  '            if attempt == attempts - 1:',
+  '                raise',
+  '            time.sleep(delay)',
+  '            delay *= 2',
+  '',
+].join('\n');
+
+function pingHost(host, port) {
+  return new Promise((resolve) => {
+    const req = http.get({ host, port, path: '/' }, (res) => { res.resume(); resolve(true); });
+    req.on('error', () => resolve(false));
+    req.setTimeout(1500, () => { req.destroy(); resolve(false); });
+  });
+}
+
+async function bootJourneyServer() {
+  if (journey) return journey;                       // cached → fixed URL across re-attempts
+  const jhost = '127.0.0.1';
+  const port = await new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.on('error', reject);
+    s.listen(0, jhost, () => { const p = s.address().port; s.close(() => resolve(p)); });
+  });
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariadne-journey-'));
+  const configPath = path.join(workspace, 'ariadne.yaml');
+  fs.writeFileSync(configPath, 'sources: {}\n');
+  const sourcePath = path.join(workspace, 'retryutils');
+  fs.mkdirSync(sourcePath, { recursive: true });
+  fs.writeFileSync(path.join(sourcePath, 'retry.py'), RETRY_PY);
+
+  console.log(`[journey] booting REAL ariadne serve on http://${jhost}:${port} (cwd=${REPO_ROOT})`);
+  const proc = spawn('uv', ['run', 'ariadne', 'serve', '--host', jhost, '--port', String(port)], {
+    cwd: REPO_ROOT,
+    env: { ...process.env, ARIADNE_CONFIG: configPath },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
+  });
+  journeyProc = proc;
+  let out = '';
+  const grab = (d) => { out = (out + d).slice(-8000); process.stdout.write('[journey-serve] ' + d); };
+  proc.stdout.on('data', grab);
+  proc.stderr.on('data', grab);
+
+  const deadline = Date.now() + 90000;
+  while (Date.now() < deadline) {
+    if (await pingHost(jhost, port)) {
+      journey = { baseUrl: `http://${jhost}:${port}`, sourceName: 'retryutils', sourcePath, configPath, workspace };
+      console.log(`[journey] server ready: ${journey.baseUrl}`);
+      return journey;
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  throw new Error('[journey] ariadne serve not ready after 90s\n--- output ---\n' + (out || '(none)'));
+}
+
+// A REAL `ariadne generate` against the journey source (same config/DB the
+// journey server reads) so the ask has genuine docs. --yes = non-interactive.
+function journeyGenerate({ sourceName, configPath }) {
+  return new Promise((resolve) => {
+    console.log(`[journey] REAL generate --source ${sourceName}`);
+    const proc = spawn('uv', ['run', 'ariadne', 'generate', '--source', sourceName, '--yes'], {
+      cwd: REPO_ROOT,
+      env: { ...process.env, ARIADNE_CONFIG: configPath },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    const grab = (d) => { out = (out + d).slice(-16000); process.stdout.write('[journey-gen] ' + d); };
+    proc.stdout.on('data', grab);
+    proc.stderr.on('data', grab);
+    proc.on('exit', (code) => resolve({ rc: code, output: out.slice(-4000) }));
+  });
+}
 
 function killServer(s) {
   if (!s) return;
@@ -47,6 +183,8 @@ function reapAll() {
     if (s.workspace) { try { fs.rmSync(s.workspace, { recursive: true, force: true }); } catch (e) { /* best effort */ } }
   }
   servers.clear();
+  closeStaticServers();
+  if (journeyProc && journeyProc.pid) { try { process.kill(-journeyProc.pid, 'SIGKILL'); } catch (e) { /* gone */ } }
 }
 process.on('exit', reapAll);
 process.on('SIGINT', () => { reapAll(); process.exit(130); });
@@ -73,10 +211,11 @@ function ping(port) {
 
 module.exports = defineConfig({
   e2e: {
-    // NOTE: no baseUrl on purpose. Cypress verifies a configured baseUrl at
-    // launch (before any hook) — that would fail because each spec/test boots
-    // its own server. Specs hold the baseUrl in a closure var, set from the
-    // startAriadne task, and use absolute URLs.
+    // No baseUrl: the UI specs (console/onboarding) visit the persistent static
+    // server via the `fixedStaticUrl` task; backend-atomicity boots a per-test
+    // `ariadne serve` and drives it with cy.request (no page visit). Both use
+    // absolute URLs, so a configured baseUrl (which Cypress verifies at launch)
+    // isn't needed.
     specPattern: 'cypress/e2e/**/*.cy.js',
     supportFile: 'cypress/support/e2e.js',
     fixturesFolder: false,
@@ -84,8 +223,30 @@ module.exports = defineConfig({
     pageLoadTimeout: 120000,   // 2-min cap on cy.visit (a stuck load fails + saves the video)
     defaultCommandTimeout: 8000,
     taskTimeout: 120000,       // 2-min cap on cy.task (server start/stop)
-    setupNodeEvents(on) {
+    async setupNodeEvents(on) {
+      // ONE persistent static server for the whole run (fixed port/URL), so a
+      // spec re-run visits the SAME origin instead of a freshly-booted one.
+      const fixed = await startStaticServer('127.0.0.1');
       on('task', {
+        // Print a message to the terminal (used to surface test failures +
+        // network signals where the Cypress UI command log isn't visible).
+        log(message) {
+          console.log(String(message));
+          return null;
+        },
+        // The fixed server's base URL — same every re-run (no moving target).
+        fixedStaticUrl() {
+          return fixed.baseUrl;
+        },
+        // Journey test: boot the persistent REAL ariadne serve (cached) + run a
+        // REAL generate. Both require LLM/embedding keys in the run env.
+        async journeyServer() {
+          return bootJourneyServer();
+        },
+        journeyGenerate(args) {
+          return journeyGenerate(args);
+        },
+
         // Boot a FRESH, isolated Ariadne: a new temp config dir (empty DB +
         // empty cache) on a fresh port, plus a synthetic source directory for
         // real-backend specs. No state leaks between tests.

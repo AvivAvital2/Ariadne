@@ -15,6 +15,8 @@ import pytest
 
 from mcp.shared.memory import create_connected_server_and_client_session
 
+from ariadne_mcp.service import AriadneService
+
 
 @pytest.fixture(autouse=True)
 def _isolated_config(monkeypatch, tmp_path):
@@ -98,13 +100,32 @@ async def test_onboard_tool_over_session_streams_progress(tmp_path, monkeypatch)
     async with create_connected_server_and_client_session(mcp_server.mcp) as session:
         await session.initialize()
         await session.call_tool('ariadne_source_add', {'name': 'proj', 'path': str(src)})
+
+        # Populate the catalog with file_index docs — the REAL "files indexed"
+        # signal. Deliberately 2, distinct from the 1-file filesystem walk, so
+        # the assertion proves files_indexed reflects what was actually
+        # cataloged (the in-memory server shares this process's service
+        # singleton, so the docs are visible to the onboard tool).
+        _lib = AriadneService.get().library
+        for i in range(2):
+            _lib.add_document(
+                content_type='catalog',
+                title=f'file_index:proj:mod{i}.py',
+                content=f'Catalog index for mod{i}.py -- 1 elements.',
+                source_files=[f'proj/mod{i}.py'],
+                metadata={'kind': 'file_index', 'source_name': 'proj',
+                          'language': 'python'},
+                source_name='proj',
+            )
+
         r = await session.call_tool(
             'ariadne_onboard', {'source': 'proj'}, progress_callback=on_progress)
         assert not r.isError, r.content
         d = r.structuredContent
         assert d['docs_written'] == 5          # from the (stubbed) pipeline
         assert d['themes_found'] == 2
-        assert d['files_indexed'] == 1         # coverage over the real 1-file source
+        # Real cataloged-file count (2 file_index docs), NOT the 1-file walk.
+        assert d['files_indexed'] == 2
         assert 'coverage_percent' in d
 
     # the tool's ctx.report_progress reached the client over the MCP protocol

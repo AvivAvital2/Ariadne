@@ -21,30 +21,20 @@ const SEARCH = {
   event_id: 99,
 };
 
-// SKIPPED — headless-harness issue, NOT a product bug. Under `cypress run`,
-// cy.visit of the served page makes Cypress fail its socket injection with CDP
-// -32000 "Cannot find context with specified id"; Cypress then silently re-runs
-// the spec (before() → startAriadne) in an endless boot loop. Ruled out via a
-// `cypress:server:*` trace: not the browser (Chrome loops too), not this page
-// (jsdom exercises it 6/6 — no nav/reload/RAF), not server headers (no CSP/XFO),
-// not a renderer crash, and not host origin (bind+visit+proxy all on localhost
-// didn't clear it). Functional coverage lives in tests/test_console_ui.js (jsdom,
-// real DOM, 6/6) + the real server chain in backend-atomicity.cy.js. To debug,
-// re-enable and run headed/interactive via `cypress open`, where the runner shows
-// the injection error live.
-describe.skip('Ask console', () => {
-  let base;
-  before(() => cy.task('startAriadne').then((s) => { base = s.baseUrl; }));
-  after(() => cy.task('stopAriadne'));
-
+// Every /api is stubbed, so this spec only needs the page SERVED — it visits the
+// PERSISTENT static server (booted once in cypress.config.js, fixed URL) rather
+// than booting `ariadne serve` per spec. That per-spec boot caused the old
+// `cypress run` boot-loop: on a spec re-attempt the server re-booted on a new
+// port, so cy.visit chased a moving origin and Cypress's CDP context never
+// settled (-32000 "Cannot find context"). A fixed URL recovers cleanly, like any
+// external visit. The real server chain is covered by backend-atomicity.cy.js.
+describe('Ask console', () => {
   beforeEach(() => {
-    cy.log('server base = ' + base);   // shows in the video/command log (catches an undefined base)
     cy.intercept('POST', '/api/sources', { statusCode: 200, body: { default_source: 'proj', sources: [{ name: 'proj' }] } }).as('sources');
     cy.intercept('POST', '/api/ask', { statusCode: 200, body: ASK }).as('ask');
     cy.intercept('POST', '/api/search', { statusCode: 200, body: SEARCH }).as('search');
     cy.intercept('POST', '/api/feedback', { statusCode: 200, body: { success: true, message: 'Hit logged.' } }).as('feedback');
-    cy.log('visiting ' + base + '/static/console.html');
-    cy.visit(base + '/static/console.html');
+    cy.task('fixedStaticUrl').then((base) => cy.visit(base + '/static/console.html'));
   });
 
   it('loads with the source pill and default chips', () => {
