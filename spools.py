@@ -68,11 +68,14 @@ def is_spool_source(source_name) -> bool:
 # scip-java adapter, and js→scip-typescript. java/scala also match by their
 # extensions; they're listed here so eligibility holds when a corpus is
 # described by language name rather than by file.
-_SCIP_ELIGIBLE_ALIASES = frozenset({'java', 'scala', 'kotlin', 'javascript'})
+_SCIP_ELIGIBLE_ALIASES = frozenset(
+    {'java', 'scala', 'kotlin', 'javascript', 'golang'})
 
 # Common source extensions we can NAME when reporting an ungrounded corpus.
 _UNSUPPORTED_CODE_EXT_NAMES = {
-    '.go': 'Go', '.rb': 'Ruby', '.rs': 'Rust', '.php': 'PHP', '.cs': 'C#',
+    # NB: keep in sync with docgen.scip_languages — a language with a
+    # registered indexer (e.g. Go via scip-go) must NOT appear here.
+    '.rb': 'Ruby', '.rs': 'Rust', '.php': 'PHP', '.cs': 'C#',
     '.c': 'C', '.h': 'C', '.cpp': 'C++', '.cc': 'C++', '.hpp': 'C++',
     '.swift': 'Swift', '.m': 'Objective-C', '.mm': 'Objective-C',
     '.dart': 'Dart', '.ex': 'Elixir', '.exs': 'Elixir', '.clj': 'Clojure',
@@ -155,6 +158,11 @@ class SpoolManifest:
     # D5 delta substrate: the per-repo commit shas this pack was built from,
     # so a later `create` can reuse unchanged repos instead of rebuilding.
     corpus_shas: dict = field(default_factory=dict)
+    # The aisle's advisory lens (designs/spool-expert-aisles.md §2): the
+    # concern/opportunity/gotcha dimensions this expert applies to a caller's
+    # code (databricks: parallelism · serialization · autolog-patching · …).
+    # Consumed by the consult path to focus the aisle's answers.
+    taxonomy: tuple = field(default_factory=tuple)
 
     @classmethod
     def from_dict(cls, data: dict) -> 'SpoolManifest':
@@ -186,6 +194,7 @@ class SpoolManifest:
                 embedding_model=data.get('embedding_model'),
                 embedding_dim=int(emb_dim) if emb_dim is not None else None,
                 corpus_shas=dict(data.get('corpus_shas') or {}),
+                taxonomy=tuple(data.get('taxonomy') or ()),
             )
         except (ValueError, TypeError) as exc:
             # CRIT-3c: a type-invalid field (non-numeric pack_format/

@@ -24,3 +24,17 @@ certify:
   - spark/docs/
   - databricks-sdk-py/docs/
   - delta/docs/
+# The databricks expert's advisory lens (designs/spool-expert-aisles.md §2):
+# concern/opportunity/gotcha dimensions applied to a caller's code when this
+# aisle is consulted. Concerns/opportunities: distributing local work, row-wise
+# vs vectorized, avoiding driver-side collects; gotchas: MLflow autolog
+# silently patching sklearn.fit (catastrophic training slowdown on Spark),
+# data skew.
+taxonomy:
+  - parallelism
+  - cross-row-deps
+  - engine-coupling
+  - serialization
+  - autolog-patching
+  - data-skew
+  - collect-misuse

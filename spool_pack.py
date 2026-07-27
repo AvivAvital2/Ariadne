@@ -186,6 +186,7 @@ def build_pack(
     source_root,
     out_path,
     corpus_shas=None,
+    taxonomy=(),
 ) -> SpoolManifest:
     """Build a pack zip from ``library``'s ``environment`` source.
 
@@ -259,6 +260,7 @@ def build_pack(
         embedding_model=embedding_model,
         embedding_dim=embedding_dim,
         corpus_shas=dict(corpus_shas or {}),
+        taxonomy=tuple(taxonomy or ()),
     )
     manifest_yaml = yaml.safe_dump({
         'environment': manifest.environment,
@@ -270,6 +272,7 @@ def build_pack(
         'embedding_model': manifest.embedding_model,
         'embedding_dim': manifest.embedding_dim,
         'corpus_shas': dict(manifest.corpus_shas),
+        'taxonomy': list(manifest.taxonomy),
     }, sort_keys=False)
     with zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr('manifest.yaml', manifest_yaml)
