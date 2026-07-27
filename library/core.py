@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from library.sql_vars import chunk_ids
-from schema import CATALOG_KIND_FILE_INDEX, Chunk, ContentType, Document, Section
+from schema import CATALOG_KIND_ELEMENT, CATALOG_KIND_FILE_INDEX, Chunk, ContentType, Document, Section
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -335,6 +335,29 @@ class CoreMixin:
                 source_name=str(row[5]) if row[5] else None,
             )
             for row in rows
+        ]
+    def list_catalog_element_names(self, source_name: str) -> list[tuple[str, str | None]]:
+        """(qualified_name, first source file) of every catalog ELEMENT of one source.
+
+        The symbol-suggestion candidate pool. Deliberately per-source and
+        UNBOUNDED, selecting only the two fields the suggester needs: pooling
+        catalog docs globally under a recency LIMIT let one bulk-imported
+        source evict every other source's rows (and the tail of its own), and
+        loading full rows (content + embedding) cost seconds per lookup.
+        """
+        query = (
+            "SELECT json_extract(metadata, '$.qualified_name'), "
+            "json_extract(source_files, '$[0]') "
+            "FROM documents WHERE content_type = 'catalog' "
+            "AND json_extract(metadata, '$.kind') = ? "
+            "AND json_extract(metadata, '$.source_name') = ? "
+            "AND json_extract(metadata, '$.qualified_name') IS NOT NULL"
+        )
+        with self._conn_provider.acquire() as conn:
+            rows = conn.execute(query, (CATALOG_KIND_ELEMENT, source_name)).fetchall()
+        return [
+            (str(qn), str(f) if f is not None else None)
+            for qn, f in rows
         ]
 
     def get_embeddings_for_ids(self, doc_ids: list[str]) -> dict[str, 'NDArray[np.float32]']:

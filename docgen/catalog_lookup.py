@@ -8,6 +8,7 @@ from __future__ import annotations
 from schema import CATALOG_KIND_ELEMENT
 
 import difflib
+import re
 from typing import TYPE_CHECKING, Any
 
 from docgen.catalog_writer import _element_doc_id
@@ -77,43 +78,108 @@ def lookup_symbol(
     }                                                                                                                                                                                
  
                                                                                                                                                                                      
+_CAMEL_WORD_RE = re.compile(r'[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+')
+
+
+def _segment_word_tokens(segment: str) -> frozenset:
+    """Lowercased word tokens of one dotted-path segment — splits snake_case,
+    camelCase, PascalCase, and SCREAMING_CASE alike."""
+    return frozenset(
+        m.group(0).lower()
+        for part in segment.split('_')
+        for m in _CAMEL_WORD_RE.finditer(part)
+    )
+
+
+def rank_symbol_candidates(query: str, qualified_names, limit: int = 5) -> list[str]:
+    """Rank catalog qualified_names against a (possibly bare) symbol query.
+
+    Structural matches outrank lexical similarity, and a quality floor drops
+    far matches entirely — an unmatchable query yields [] rather than the
+    least-bad garbage. (Plain difflib over full dotted names suggested
+    unrelated symbols at ratio ~0.4 and missed case-styled constants.)
+
+    Tiers: last segment == query > last segment ==, case-folded > query is an
+    inner segment (member access under the queried symbol) > query's words are
+    a subset of the last segment's words (any naming style) > of an inner
+    segment's words > difflib on the case-folded LAST segments, floored at 0.7
+    and always ranked below every structural tier. Ties break deterministically
+    by (shorter qualified_name, lexicographic).
+    """
+    q = query.rsplit('.', 1)[-1]
+    ql = q.lower()
+    q_tokens = _segment_word_tokens(q)
+    # Necessary-condition prefilter for the token tiers: if a segment contains
+    # every query word as a word token, the longest one appears as a substring.
+    q_probe = max(q_tokens, key=len) if q_tokens else None
+
+    scored: list[tuple[float, int, str]] = []
+    difflib_pool: dict[str, list[str]] = {}
+    for qn in qualified_names:
+        segments = qn.split('.')
+        last = segments[-1]
+        if last == q:
+            score = 1.0
+        elif last.lower() == ql:
+            score = 0.95
+        elif q in segments[:-1]:
+            score = 0.9
+        elif (q_probe is not None and q_probe in last.lower()
+                and q_tokens <= _segment_word_tokens(last)):
+            score = 0.8
+        elif q_probe is not None and any(
+            q_probe in s.lower() and q_tokens <= _segment_word_tokens(s)
+            for s in segments[:-1]
+        ):
+            score = 0.7
+        else:
+            difflib_pool.setdefault(last.lower(), []).append(qn)
+            continue
+        scored.append((score, len(qn), qn))
+
+    # Lexical tier: near-typos of the LAST segment only — full dotted names
+    # inflate difflib ratios with shared prefixes and dots.
+    if difflib_pool:
+        for last_l in difflib.get_close_matches(ql, difflib_pool, n=limit * 3, cutoff=0.7):
+            ratio = difflib.SequenceMatcher(None, ql, last_l).ratio()
+            for qn in difflib_pool[last_l]:
+                scored.append((0.69 * ratio, len(qn), qn))
+
+    scored.sort(key=lambda t: (-t[0], t[1], t[2]))
+    return [qn for _, _, qn in scored[:limit]]
 def fuzzy_suggestions(
     library: "Library",
     source_name: str,
     file: str | None,
     qualified_name: str,
     limit: int = 5,
-) -> tuple[list[str], list[str]]:                                                                                                                                                    
+) -> tuple[list[str], list[str]]:
     """Return (suggestions_in_file, suggestions_in_source) — up to `limit` each.
-                                                                                                                                                                                     
-    Same-file matches are prioritized; cross-source matches fill the second list
-    excluding any already in the first. Uses difflib for lexical similarity.                                                                                                         
-    """                                                                                                                                                                              
-    all_catalog = library.list_documents(content_type='catalog', limit=100_000)                                                                                                      
-    same_file_qns: list[str] = []                                                                                                                                                    
+
+    Candidates come from the per-source, unbounded element-name pool
+    (:meth:`Library.list_catalog_element_names`) — never from a globally
+    truncated document listing, which let one bulk-imported source evict
+    every other source's suggestions. Same-file matches are prioritized;
+    matches from the source's other files fill the second list, excluding any
+    already in the first. Ranking and the quality floor live in
+    :func:`rank_symbol_candidates`.
+    """
+    pairs = library.list_catalog_element_names(source_name)
+    same_file_qns: list[str] = []
     other_qns: list[str] = []
-    for d in all_catalog:                                                                                                                                                            
-        if d.metadata.get('source_name') != source_name:
-            continue                                                                                                                                                                 
-        if d.metadata.get('kind') != CATALOG_KIND_ELEMENT:
-            continue                                                                                                                                                                 
-        qn = d.metadata.get('qualified_name') or ''
-        if not qn:                                                                                                                                                                   
-            continue
-        d_file = d.source_files[0] if d.source_files else None                                                                                                                       
+    for qn, d_file in pairs:
         if file is not None and d_file == file:
-            same_file_qns.append(qn)                                                                                                                                                 
-        else:                                                                                                                                                                        
+            same_file_qns.append(qn)
+        else:
             other_qns.append(qn)
-                                                                                                                                                                                     
-    in_file = difflib.get_close_matches(qualified_name, same_file_qns, n=limit, cutoff=0.4)
-    seen = set(in_file)                                                                                                                                                              
-    extra = [q for q in difflib.get_close_matches(
-        qualified_name, other_qns, n=limit * 3, cutoff=0.4,                                                                                                                          
-    ) if q not in seen][:limit]                                                                                                                                                      
-    return list(in_file), extra                                                                                                                                                      
-                                                                                                                                                                                     
-                
+
+    in_file = rank_symbol_candidates(qualified_name, same_file_qns, limit=limit)
+    seen = set(in_file)
+    in_source = [
+        q for q in rank_symbol_candidates(qualified_name, other_qns, limit=limit * 2)
+        if q not in seen
+    ][:limit]
+    return in_file, in_source
 def list_elements_in_file(
     library: "Library",
     source_name: str,
@@ -123,26 +189,17 @@ def list_elements_in_file(
 
     Path matching is suffix-based: the doc's source_files entry must either
     end with `file` or vice versa, mirroring `lookup_symbol`'s file scoping.
+    Reads the per-source element-name pool, not a globally truncated document
+    listing.
     """
-    all_catalog = library.list_documents(content_type='catalog', limit=100_000)
-    result: list[str] = []
-    for d in all_catalog:
-        if d.metadata.get('source_name') != source_name:
-            continue
-        if d.metadata.get('kind') != CATALOG_KIND_ELEMENT:
-            continue
-        qn = d.metadata.get('qualified_name') or ''
-        if not qn:
-            continue
-        d_file = d.source_files[0] if d.source_files else ''
-        if not d_file:
-            continue
-        if d_file.endswith(file) or file.endswith(d_file):
-            result.append(qn)
-    return result
+    pairs = library.list_catalog_element_names(source_name)
+    return [
+        qn for qn, d_file in pairs
+        if d_file and (d_file.endswith(file) or file.endswith(d_file))
+    ]
 
 
-__all__ = ['config_usage', 'fuzzy_suggestions', 'get_element_body', 'list_elements_in_file', 'lookup_symbol']
+__all__ = ['config_usage', 'fuzzy_suggestions', 'get_element_body', 'list_elements_in_file', 'lookup_symbol', 'rank_symbol_candidates']
 
 
 def get_element_body(
