@@ -1,0 +1,38 @@
+# Ariadne — one container, both doors (browser + MCP-over-HTTP), localhost only.
+# Phase 0 of designs/web-ui/console-and-deployment.md.
+#
+# Two ways to use this:
+#
+#   A) From the Ariadne repo (this file's default): `docker compose up` builds
+#      the image and documents THIS repo (mounted at /workspace) — a self-host
+#      demo. Open http://127.0.0.1:8765.
+#
+#   B) To document YOUR OWN projects: build + tag the image once from the Ariadne
+#      repo (`docker build -t ariadne:latest .`), then copy this file into the
+#      directory that holds your projects, delete the `build:` line, and run
+#      `docker compose up` there — `./` then mounts your projects.
+#
+# Requires ANTHROPIC_API_KEY + OPENAI_API_KEY in the environment (or a .env file
+# alongside this compose.yaml).
+services:
+  ariadne:
+    build: .                       # (mode B: remove this line and rely on the image)
+    image: ariadne:latest
+    ports:
+      # localhost-only bind (no auth layer — see the blueprint's exposure note).
+      - "127.0.0.1:8765:8765"      # browser UI
+      - "127.0.0.1:8000:8000"      # MCP-over-HTTP for external agents (point Claude Code at http://127.0.0.1:8000/mcp)
+    volumes:
+      # READ-WRITE: Ariadne + the SCIP indexers write into each project's tree
+      # (.ariadne/, and build tools' .venv/target/) — this is by design, not a bug.
+      - ./:/workspace
+      # All Ariadne-owned data (DB, ariadne.yaml, exported docs, run logs, spool
+      # store) persists here via ARIADNE_CONFIG=/data/ariadne.yaml.
+      - ariadne-data:/data
+    environment:
+      - ANTHROPIC_API_KEY          # doc generation (Claude)
+      - OPENAI_API_KEY             # embeddings / search
+    restart: unless-stopped
+
+volumes:
+  ariadne-data:

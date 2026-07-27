@@ -1,0 +1,35 @@
+# Keep the build context lean (and out of the image). Source packages
+# (cli/, library/, ariadne_mcp/, docgen/, web/, config.py, pyproject.toml,
+# uv.lock, spool_content/, scripts/) are intentionally NOT excluded — uv sync
+# needs them.
+.git
+.gitignore
+.venv
+**/.venv
+venv
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# Local Ariadne artifacts / generated output (rebuilt at runtime under /data)
+.ariadne
+**/.ariadne
+ariadne_runs/
+*.db
+docs/
+spool-corpus/
+*.zip
+
+# Nested/unrelated repos + editor/tooling dirs
+Diglett/
+userhub/
+.claude
+.idea
+.vscode
+.DS_Store
+
+# The compose file itself isn't needed inside the image
+compose.yaml
+docker-compose.yml
