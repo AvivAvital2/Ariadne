@@ -1,9 +1,14 @@
 name: databricks
 runtime: dbr17.3-lts
-version: 1.2.0
+version: 1.4.0
 languages:
 - python
 - scala
+# Multi-word product name forms the router must treat as the environment's
+# OWN names (route-don't-admit): not derivable from the component keys.
+name_aliases:
+- delta lake
+- apache spark
 # The runtime edition's component versions (confirmed 2026-07-27) — the
 # corpus pins below were chosen to match the runtime, so these ARE the
 # runtime's components by construction. Keys = corpus repo dirs (how
