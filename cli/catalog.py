@@ -232,11 +232,16 @@ def _print_catalog_describe_cost_estimate(
     model: str,
     force: bool,
     max_calls: int | None,
+    batch: bool = False,
 ) -> int:
     """Count candidates, multiply by per-call token estimates × model
     rate, print a cost preview, and exit. No LLM calls made.
+
+    ``batch`` prices the run at the Message Batches discount so the
+    figure matches what a ``--batch`` run would actually cost; the
+    live figure stays visible for comparison either way.
     """
-    from docgen.pricing import LLM_PRICING
+    from docgen.pricing import _BATCH_DISCOUNT, LLM_PRICING
 
     # Same candidate selection as describe_source_elements so the
     # estimate matches what the real run would actually call against.
@@ -277,7 +282,18 @@ def _print_catalog_describe_cost_estimate(
             total_input * input_per_m / 1_000_000
             + total_output * output_per_m / 1_000_000
         )
-        cost_line = f'  Estimated cost: [bold]${cost_usd:.2f}[/bold]'
+        batched_usd = cost_usd * _BATCH_DISCOUNT
+        off_pct = round((1 - _BATCH_DISCOUNT) * 100)
+        if batch:
+            cost_line = (
+                f'  Estimated cost: [bold]${batched_usd:.2f}[/bold] '
+                f'(batch, {off_pct}% off live ${cost_usd:.2f})'
+            )
+        else:
+            cost_line = (
+                f'  Estimated cost: [bold]${cost_usd:.2f}[/bold] '
+                f'[dim](${batched_usd:.2f} with --batch)[/dim]'
+            )
 
     console.print(
         f'[bold]Dry-run cost estimate for catalog-describe[/bold] '
@@ -320,17 +336,18 @@ async def cmd_catalog_describe(args: argparse.Namespace) -> int:
     library = get_library(args.db)
     try:
         if getattr(args, 'dry_run', False):
-            if getattr(args, 'batch', False) or getattr(args, 'resume', False):
+            if getattr(args, 'resume', False):
                 console.print(
-                    '[yellow]Note: --batch / --resume are ignored when '
-                    '--dry-run is set. Use `ariadne dry-run` to see both '
-                    'baseline and batched cost figures.[/yellow]',
+                    '[yellow]Note: --resume is ignored when --dry-run is '
+                    'set — resuming fetches an already-submitted batch, so '
+                    'there is nothing left to price.[/yellow]',
                 )
             return _print_catalog_describe_cost_estimate(
                 library, source_name,
                 model=args.model or cfg.model,
                 force=args.force,
                 max_calls=args.max_calls,
+                batch=getattr(args, 'batch', False),
             )
 
         # Route to batched path when --batch OR --resume is set.

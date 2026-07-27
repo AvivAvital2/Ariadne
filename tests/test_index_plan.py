@@ -58,15 +58,15 @@ def test_absent_languages_do_not_appear():
     assert [kind for kind, _, _ in plan] == ['python']
 
 
-def test_only_python_streams_file_progress():
-    """Only the Python adapter emits per-file events, so only its bar can
-    be a determinate file counter; opaque adapters (java/typescript) get
-    an animated indeterminate bar instead of a frozen 0/N."""
+def test_python_and_java_stream_progress():
+    """Python (per-file) and Java (per-module: Maven reactor / sbt
+    <module>/target) both emit progress ticks, so both get a determinate
+    bar. TypeScript is opaque (one-shot) and stays a per-scope bar."""
     from cli.index import _streams_file_progress
 
     assert _streams_file_progress('python') is True
+    assert _streams_file_progress('java') is True
     assert _streams_file_progress('typescript') is False
-    assert _streams_file_progress('java') is False
     assert _streams_file_progress('anything-else') is False
 
 
@@ -89,6 +89,16 @@ def test_index_detail_text():
     assert _index_detail_text(1337, 1337, pulse=False) == '1337/1337 files'
     # Pulse bar (Java): just the total N, no X/.
     assert _index_detail_text(2083, 0, pulse=True) == '2083 files'
+
+
+def test_index_detail_modules():
+    from cli.index import _index_detail_modules
+
+    # Java compiles by module — reactor [N/M] and sbt's <module>/target signal
+    # are both module positions, so the bar reads in modules, not files.
+    assert _index_detail_modules(12, 43, 'spark-sql') == '12/43 modules · spark-sql'
+    assert _index_detail_modules(12, 43, '') == '12/43 modules'   # reactor: no name
+    assert _index_detail_modules(3, 0, 'core') == '3 modules · core'  # total unknown
 
 
 def test_index_summary_renders_nested_indented_lines():

@@ -30,6 +30,8 @@ LLM_PRICING: dict[str, tuple[float, float]] = {
     'gpt-5.4': (2.50, 15.00),
     'gpt-5.5': (5.00, 30.00),
     'claude-sonnet-4-6': (3.00, 15.00),
+    # Introductory pricing through 2026-08-31; standard is (3.00, 15.00) after.
+    'claude-sonnet-5': (2.00, 10.00),
     'claude-opus-4-6': (5.00, 25.00),
     'claude-opus-4-7': (5.00, 25.00),
     'claude-opus-4-8': (5.00, 25.00),

@@ -247,6 +247,7 @@ _DEFAULT_MENTION_MESSAGE = (
 
 DEFAULTS = {
     'model': 'gpt-5.5',
+    'spools_model': None,  # override model for spool builds only; None → inherit model
     'ask_synthesis': True,
     'provider': 'openai',
     'db_path': 'ariadne.db',
@@ -530,6 +531,18 @@ class Config:
         ``defaults:`` section in ``ariadne.yaml``.
         """
         return self._from_defaults('model', DEFAULTS['model'])
+
+    @property
+    def spools_model(self) -> str | None:
+        """LLM model for spool builds only (``ariadne spools create``).
+
+        When set (``spools_model:`` top-level or under ``defaults:``), it
+        overrides ``model`` for the paid onboard phase of a spool build — so
+        day-to-day generation can stay on a premium model while packs build on
+        a cheaper one. ``None`` (the default) means spool builds inherit
+        ``model``.
+        """
+        return self._from_defaults('spools_model', None)
 
     @property
     def provider(self) -> str:

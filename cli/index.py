@@ -26,6 +26,7 @@ _LANGUAGE_LABELS = {
     'python': 'Python',
     'typescript': 'TypeScript',
     'java': 'Java',
+    'go': 'Go',
 }
 
 
@@ -69,6 +70,11 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
             'the scip-X cost.'
         ),
     )
+    discover_parser.add_argument(
+        '--quiet', '-q', action='store_true',
+        help='Suppress the discovered-indexers table and manifest path; keep '
+             'only errors.',
+    )
 
     # index — invoke per-language SCIP indexers, merge into one .scip
     index_parser = subparsers.add_parser(
@@ -99,6 +105,18 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
              'than the source max_staleness_days). Without this, a fresh '
              'index is reused so re-runs (e.g. onboard --approve) skip the '
              'slow indexers.',
+    )
+    index_parser.add_argument(
+        '--quiet', '-q', action='store_true',
+        help='Suppress indexer warnings (e.g. scip-python/pyright '
+             '"unsupported interpreter" / "could not read package metadata") '
+             'and per-scope detail; keep only the (transient) progress bar.',
+    )
+    index_parser.add_argument(
+        '--best-effort', action='store_true',
+        help="Don't fail the whole run when one language's indexer fails (e.g. "
+             'an old/unsupported toolchain): skip that scope, index the rest, '
+             'and fail only if NOTHING could be indexed.',
     )
 
 
@@ -170,11 +188,13 @@ def _default_indexer_registry() -> dict:
     module init (avoids circular imports — adapters import IndexerResult
     from this module). Tests bypass this by passing their own registry."""
     from docgen.scip_indexers import (
+        GoIndexerAdapter,
         JavaIndexerAdapter,
         PythonIndexerAdapter,
         TypescriptIndexerAdapter,
     )
     return {
+        'go': GoIndexerAdapter(),
         'java': JavaIndexerAdapter(),
         'python': PythonIndexerAdapter(),
         'typescript': TypescriptIndexerAdapter(),
@@ -191,14 +211,14 @@ def _scope_label(entry: dict, kind: str) -> str:
 
 
 def _streams_file_progress(kind: str) -> bool:
-    """True if the adapter for ``kind`` emits per-file progress events.
+    """True if the adapter for ``kind`` streams parseable ``current/total``
+    progress ticks.
 
-    Only scip-python streams parseable ``current/total`` ticks. scip-java
-    and scip-typescript are opaque subprocesses (they compile/index in one
-    shot), so their bars can't track files — we show an animated
-    indeterminate bar for them instead of a counter frozen at 0/N.
+    scip-python streams per-file ticks; scip-java streams Maven's reactor
+    position (``Building <module> [N/M]``). scip-typescript is opaque (indexes
+    in one shot) so it stays a per-scope bar.
     """
-    return kind == 'python'
+    return kind in ('python', 'java')
 
 
 def _pulse_bar(kind: str) -> bool:
@@ -223,6 +243,15 @@ def _index_detail_text(file_total: int, completed: int, *, pulse: bool) -> str:
     if pulse:
         return f'{int(file_total)} files'
     return f'{int(completed)}/{int(file_total)} files'
+
+
+def _index_detail_modules(current: int, total: int, module: str) -> str:
+    """Detail text for scip-java's bar, which advances by MODULE: Maven's
+    reactor ``[N/M]`` and sbt's ``<module>/target`` signal are both module
+    positions, so the bar reads ``N/M modules`` (with the current module name
+    when known) rather than a file counter. ``total`` 0/None → drop the ``/M``."""
+    head = f'{int(current)}/{int(total)} modules' if total else f'{int(current)} modules'
+    return f'{head} · {module}' if module else head
 
 
 @functools.lru_cache(maxsize=1)
@@ -414,35 +443,25 @@ def cmd_index(
 
         source_root = Path(sc.path).expanduser().resolve()
 
-        # Freshness skip: if the merged .scip is still fresh (younger than
-        # the source's max_staleness_days), reuse it rather than re-running
-        # the slow per-language indexers. The artifact SHA only gates the
-        # persist step, so the indexer skip is necessarily time-based. The
-        # persist phase below walks every configured source, so it still
-        # reloads this artifact — only the expensive indexer+merge is
-        # skipped. ``--force`` bypasses. This is what makes a re-run of
-        # ``onboard --approve`` (which re-enters the free phases) not
-        # re-index when nothing has gone stale.
-        if not getattr(args, 'force', False):
-            merged_scip = source_root / '.ariadne' / 'index.scip'
-            if merged_scip.exists():
-                max_days = cfg.effective_scip_staleness_days(source_name)
-                age_days = (
-                    datetime.now(timezone.utc).timestamp()
-                    - merged_scip.stat().st_mtime
-                ) / 86400
-                if max_days is None or age_days < max_days:
-                    if not getattr(args, 'quiet', False):
-                        detail = (
-                            'staleness-exempt'
-                            if max_days is None
-                            else f'{age_days:.1f}d < {max_days}d'
-                        )
-                        console.print(
-                            f'  [dim]Index - reusing SCIP for {source_name} '
-                            f'({detail}); pass --force to re-index[/dim]',
-                        )
-                    continue
+        # Per-SCOPE reuse (was per-source): a scope whose intermediate .scip
+        # already exists and is fresh — or whose source is staleness-exempt — is
+        # REUSED and its slow indexer is skipped. A scope whose intermediate is
+        # MISSING (e.g. one that failed last run, like spark-java) is re-run, so
+        # it retries WITHOUT --force re-indexing everything else. ``--force``
+        # re-runs all. This is what makes a re-run of ``onboard --approve`` not
+        # re-index the scopes that already succeeded.
+        def _cached_index_fresh(out: Path) -> bool:
+            if getattr(args, 'force', False) or not out.exists():
+                return False
+            max_days = cfg.effective_scip_staleness_days(source_name)
+            if max_days is None:              # staleness-exempt → always reuse
+                return True
+            age_days = (
+                datetime.now(timezone.utc).timestamp() - out.stat().st_mtime
+            ) / 86400
+            return age_days < max_days
+
+        any_indexed = False   # did any adapter actually run this pass?
 
         manifest_path = source_root / '.ariadne' / 'manifest.json'
         if not manifest_path.exists():
@@ -454,6 +473,7 @@ def cmd_index(
 
         manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
         intermediates: list[Path] = []
+        failed_scopes: list[str] = []   # best-effort: scopes we skipped on error
 
         # Select the entries this invocation will touch (honor --kind and
         # skip kinds with no registered adapter).
@@ -515,6 +535,7 @@ def cmd_index(
         user_excludes.extend(sc.exclude)
 
         quiet = getattr(args, 'quiet', False)
+        best_effort = getattr(args, 'best_effort', False)
         from rich.progress import (
             BarColumn,
             Progress,
@@ -566,6 +587,28 @@ def cmd_index(
                         / f'index-{scope}.scip'
                     )
                     entry_count = entry_counts[id(entry)]
+
+                    if _cached_index_fresh(output):
+                        # Reuse this scope's cached intermediate — skip its slow
+                        # indexer, advance the bar, and keep it in the merge set.
+                        if not quiet:
+                            progress.console.print(
+                                f'    [dim]{scope}: reusing cached index[/dim]',
+                            )
+                        entry['scip_path'] = str(
+                            output.relative_to(source_root / '.ariadne'),
+                        )
+                        intermediates.append(output)
+                        base += entry_count
+                        if not pulse:
+                            progress.update(
+                                task_id, completed=base,
+                                detail=_index_detail_text(
+                                    kind_total, base, pulse=False,
+                                ),
+                            )
+                        continue
+
                     adapter = indexer_registry.get(kind)
 
                     run_kwargs: dict = {
@@ -579,6 +622,7 @@ def cmd_index(
                         )
                         run_kwargs['excludes'] = tuple(user_excludes)
 
+                    if streams:
                         def on_progress(
                             event, _base=base, _count=entry_count,
                         ) -> None:
@@ -587,12 +631,27 @@ def cmd_index(
                                     1.0, event.current / event.total,
                                 )
                                 done = int(_base + frac * _count)
+                                # Java advances by MODULE (reactor [N/M] or sbt's
+                                # <module>/target); its detail reads in modules,
+                                # naming the current one. Python stays per-file.
+                                detail = (
+                                    _index_detail_modules(
+                                        event.current, event.total, event.text,
+                                    )
+                                    if kind == 'java'
+                                    else _index_detail_text(
+                                        kind_total, done, pulse=False,
+                                    )
+                                )
                                 progress.update(
                                     task_id,
+                                    # Setting a total flips Java's pulse bar to
+                                    # a determinate one once the first module
+                                    # ticks (harmless for Python, already
+                                    # determinate).
+                                    total=(kind_total or None),
                                     completed=done,
-                                    detail=_index_detail_text(
-                                        kind_total, done, pulse=False,
-                                    ),
+                                    detail=detail,
                                 )
                             elif event.kind == 'warning' and not quiet:
                                 progress.console.print(
@@ -605,14 +664,32 @@ def cmd_index(
 
                     result = adapter.run(**run_kwargs)
 
-                    if not result.success:
+                    # An adapter can report success yet emit no .scip (scip-java
+                    # compiling with no SemanticDB output — the spark-java case).
+                    # Treat that as a failure: feeding a missing intermediate to
+                    # the merge aborts it, and the merge never running means
+                    # index.scip is never written, so the next run can't reuse
+                    # anything and re-indexes from scratch.
+                    if not result.success or not output.exists():
+                        detail = (
+                            result.error_message
+                            or f'produced no index at {output.name}'
+                        )
                         # Name the failing scope — a language can have
                         # many, and quiet mode hides per-scope detail.
                         progress.console.print(
                             f'[red]{kind} adapter failed (scope={scope}, '
-                            f'cwd={cwd}): {result.error_message}[/red]',
+                            f'cwd={cwd}): {detail}[/red]',
                         )
-                        return 1
+                        # Strict (default, decision #5): any failure is fatal.
+                        # --best-effort: skip this scope and keep indexing the
+                        # rest (an old/unsupported toolchain for one language
+                        # must not sink the whole run); we fail at the end only
+                        # if NOTHING indexed.
+                        if not best_effort:
+                            return 1
+                        failed_scopes.append(scope)
+                        continue
 
                     if (
                         kind == 'python'
@@ -655,6 +732,7 @@ def cmd_index(
                             ),
                         )
                     intermediates.append(output)
+                    any_indexed = True   # a scope was (re)indexed → re-merge
 
                 # Finish as a full bar so a completed language reads as
                 # done. For the pulse (Java) bar we set a real total now
@@ -681,30 +759,56 @@ def cmd_index(
 
         if intermediates:
             final = source_root / '.ariadne' / 'index.scip'
-            if len(intermediates) == 1:
-                # Single-language project (or a multi-language project
-                # where only one indexer ran this invocation): no merge
-                # needed. Copy the lone intermediate directly so the
-                # external ``scip`` CLI isn't a dependency for the
-                # common single-source case.
-                import shutil
-                final.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(intermediates[0], final)
-            else:
-                ok = merger.merge(intermediates, final)
-                if not ok:
-                    # _SubprocessMerger already printed the diagnostic.
-                    return 1
-            manifest['merged_at'] = datetime.now(
-                timezone.utc,
-            ).isoformat()
-            manifest['merged_scip'] = 'index.scip'
-            manifest_path.write_text(
-                json.dumps(manifest, indent=2),
-                encoding='utf-8',
+            # Re-merge only when a scope was actually (re)indexed this pass, or
+            # the merged artifact is missing. If everything was reused from
+            # cache and index.scip already exists, it's current — skip the
+            # (potentially large) re-merge entirely.
+            if any_indexed or not final.exists():
+                if len(intermediates) == 1:
+                    # Single-language project (or a multi-language project
+                    # where only one indexer ran this invocation): no merge
+                    # needed. Copy the lone intermediate directly so the
+                    # external ``scip`` CLI isn't a dependency for the
+                    # common single-source case.
+                    import shutil
+                    final.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(intermediates[0], final)
+                else:
+                    ok = merger.merge(intermediates, final)
+                    if not ok:
+                        # _SubprocessMerger already printed the diagnostic.
+                        return 1
+                manifest['merged_at'] = datetime.now(
+                    timezone.utc,
+                ).isoformat()
+                manifest['merged_scip'] = 'index.scip'
+                manifest_path.write_text(
+                    json.dumps(manifest, indent=2),
+                    encoding='utf-8',
+                )
+                if not getattr(args, 'quiet', False):
+                    console.print(f'[green]Wrote {final}[/green]')
+            elif not getattr(args, 'quiet', False):
+                console.print(
+                    f'  [dim]Index - all scopes cached for {source_name}; '
+                    f'reused {final.name} (pass --force to re-index)[/dim]',
+                )
+
+        # Best-effort resolution: if we skipped scopes, fail only when NOTHING
+        # indexed; otherwise proceed with a summary of what was dropped.
+        if best_effort and failed_scopes:
+            if not intermediates:
+                console.print(
+                    f'[red]Indexing failed for every scope '
+                    f'({", ".join(failed_scopes)}) — nothing to build from.'
+                    f'[/red]',
+                )
+                return 1
+            console.print(
+                f'[yellow]Indexed with {len(failed_scopes)} scope(s) skipped '
+                f'after failure (best-effort): {", ".join(failed_scopes)}'
+                f'[/yellow]',
             )
-            if not getattr(args, 'quiet', False):
-                console.print(f'[green]Wrote {final}[/green]')
 
     # End-of-index step: persist the cross-source graph into
     # ``library_scip`` so downstream readers (ariadne callers /
@@ -721,6 +825,8 @@ def cmd_index(
             persist_config_values,
             persist_data_model,
             persist_express_routes,
+            persist_go_http_clients,
+            persist_go_routes,
             persist_js_http_clients,
             persist_python_http_clients,
             persist_python_routes,
@@ -825,10 +931,21 @@ def cmd_index(
         # HTTP-verb combinators and persists detected routes to
         # ``api_endpoints`` with ``resolution_source='pattern'``
         # (preserves Swagger rows).
+        #
+        # Gated on the akka-http dependency actually appearing in each
+        # source's build config (sbt/maven/gradle). Scala ≠ Akka: Spark and
+        # Delta are Scala with no akka-http, so skip — and don't announce —
+        # extraction there rather than reading the whole corpus for routes
+        # it can't contain.
         quiet = getattr(args, 'quiet', False)
-        akka_routes = persist_akka_http_endpoints(
-            Path(cfg.db_path), scoped_pairs,
-        )
+        from docgen.build_dependencies import uses_akka_http
+        akka_pairs = [p for p in scoped_pairs if uses_akka_http(p[1])]
+        akka_routes = 0
+        if akka_pairs:
+            with console.status('[bold cyan]extracting Akka HTTP routes…'):
+                akka_routes = persist_akka_http_endpoints(
+                    Path(cfg.db_path), akka_pairs,
+                )
         if akka_routes and not quiet:
             console.print(
                 f'[green]Extracted {akka_routes} Akka HTTP route(s) '
@@ -839,9 +956,10 @@ def cmd_index(
         # Walks SCIP-classified ``@app.route`` / ``@app.<verb>`` /
         # ``@router.<verb>`` decorators and persists matched routes
         # to ``api_endpoints``. Same coexistence semantics as Akka.
-        python_routes = persist_python_routes(
-            Path(cfg.db_path), scoped_pairs,
-        )
+        with console.status('[bold cyan]extracting Flask/FastAPI routes…'):
+            python_routes = persist_python_routes(
+                Path(cfg.db_path), scoped_pairs,
+            )
         if python_routes and not quiet:
             console.print(
                 f'[green]Extracted {python_routes} Flask/FastAPI '
@@ -852,13 +970,26 @@ def cmd_index(
         # Walks ``app.<verb>(path, handler)`` and
         # ``router.<verb>(...)`` call sites and persists matched
         # routes to ``api_endpoints``.
-        express_routes = persist_express_routes(
-            Path(cfg.db_path), scoped_pairs,
-        )
+        with console.status('[bold cyan]extracting Express/Koa routes…'):
+            express_routes = persist_express_routes(
+                Path(cfg.db_path), scoped_pairs,
+            )
         if express_routes and not quiet:
             console.print(
                 f'[green]Extracted {express_routes} Express/Koa '
                 f'route(s) → api_endpoints[/green]',
+            )
+
+        # Go route extraction (gin / echo / chi / net-http). The extractor
+        # reads only .go documents, so it's a cheap no-op on non-Go corpora.
+        with console.status('[bold cyan]extracting Go routes…'):
+            go_routes = persist_go_routes(
+                Path(cfg.db_path), scoped_pairs,
+            )
+        if go_routes and not quiet:
+            console.print(
+                f'[green]Extracted {go_routes} Go route(s) '
+                f'→ api_endpoints[/green]',
             )
 
         # Wave 4 Tier 4 step 1 — Python HTTP client extraction.
@@ -866,9 +997,10 @@ def cmd_index(
         # ``urllib.urlopen`` call sites and persists raw URL strings
         # to ``http_client_calls``. URL→endpoint joining (Phase 8c)
         # waits until all three client extractors are wired.
-        py_http = persist_python_http_clients(
-            Path(cfg.db_path), scoped_pairs,
-        )
+        with console.status('[bold cyan]extracting Python HTTP clients…'):
+            py_http = persist_python_http_clients(
+                Path(cfg.db_path), scoped_pairs,
+            )
         if py_http and not quiet:
             console.print(
                 f'[green]Extracted {py_http} Python HTTP call(s) '
@@ -878,9 +1010,10 @@ def cmd_index(
         # Wave 4 Tier 4 step 2 — JS / TS HTTP client extraction.
         # Walks ``fetch(...)`` / ``axios.{verb}`` /
         # ``this.$http.{verb}`` (Vue 2 / Angular) call sites.
-        js_http = persist_js_http_clients(
-            Path(cfg.db_path), scoped_pairs,
-        )
+        with console.status('[bold cyan]extracting JS/TS HTTP clients…'):
+            js_http = persist_js_http_clients(
+                Path(cfg.db_path), scoped_pairs,
+            )
         if js_http and not quiet:
             console.print(
                 f'[green]Extracted {js_http} JS/TS HTTP call(s) '
@@ -890,12 +1023,24 @@ def cmd_index(
         # Wave 4 Tier 4 step 3 — Scala HTTP client extraction.
         # Walks Akka-HTTP ``Http().singleRequest`` / sttp
         # ``basicRequest.<verb>`` call sites.
-        scala_http = persist_scala_http_clients(
-            Path(cfg.db_path), scoped_pairs,
-        )
+        with console.status('[bold cyan]extracting Scala HTTP clients…'):
+            scala_http = persist_scala_http_clients(
+                Path(cfg.db_path), scoped_pairs,
+            )
         if scala_http and not quiet:
             console.print(
                 f'[green]Extracted {scala_http} Scala HTTP call(s) '
+                f'→ http_client_calls[/green]',
+            )
+
+        # Go net/http client extraction. Reads only .go documents.
+        with console.status('[bold cyan]extracting Go HTTP clients…'):
+            go_http = persist_go_http_clients(
+                Path(cfg.db_path), scoped_pairs,
+            )
+        if go_http and not quiet:
+            console.print(
+                f'[green]Extracted {go_http} Go HTTP call(s) '
                 f'→ http_client_calls[/green]',
             )
 
@@ -904,9 +1049,10 @@ def cmd_index(
         # server templates (api_endpoints), writes resolved edges
         # to ``api_calls``. Once this lands, ariadne_trace_flow's
         # HTTP-tier hops finally return cross-language chains.
-        resolved = persist_url_resolver(
-            Path(cfg.db_path), scoped_pairs,
-        )
+        with console.status('[bold cyan]resolving URL→endpoint edges…'):
+            resolved = persist_url_resolver(
+                Path(cfg.db_path), scoped_pairs,
+            )
         if resolved and not quiet:
             console.print(
                 f'[green]Resolved {resolved} URL→endpoint edge(s) '
@@ -1054,6 +1200,8 @@ def run_discover(cfg, source_name: str) -> dict:
         elif e.kind == 'java':
             catalog_scip_languages.add('scala')
             catalog_scip_languages.add('java')
+        elif e.kind == 'go':
+            catalog_scip_languages.add('go')
 
     config_path = cfg.config_path
     if catalog_scip_languages and config_path is not None:
@@ -1272,7 +1420,8 @@ def cmd_discover(args: argparse.Namespace) -> int:
 
         _ensure_gitignore_entry(source_path, '.ariadne/')
 
-        if entries:
+        quiet = getattr(args, 'quiet', False)
+        if not quiet and entries:
             table = Table(
                 title=f'Discovered indexers for {source_name}',
             )
@@ -1286,12 +1435,13 @@ def cmd_discover(args: argparse.Namespace) -> int:
                     ', '.join(_rel(m) for m in e.markers),
                 )
             console.print(table)
-        else:
+        elif not entries:
             console.print(
                 f'[yellow]No indexer-relevant clusters found in '
                 f'{source_path}[/yellow]',
             )
-        console.print(f'[green]Wrote {manifest_path}[/green]')
+        if not quiet:
+            console.print(f'[green]Wrote {manifest_path}[/green]')
 
         # Auto-author the SCIP-related fields in ariadne.yaml so the
         # user only ever has to author path/depends_on/exclude/exclude_dirs.
@@ -1311,6 +1461,9 @@ def cmd_discover(args: argparse.Namespace) -> int:
                 # routes either file extension through scip_extractor.
                 catalog_scip_languages.add('scala')
                 catalog_scip_languages.add('java')
+            elif e.kind == 'go':
+                # scip-go: one index_kind, routed to scip_extractor for .go.
+                catalog_scip_languages.add('go')
 
         config_path = cfg.config_path
         if catalog_scip_languages and config_path is not None:

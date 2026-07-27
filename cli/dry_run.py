@@ -341,9 +341,19 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
         quiet=not verbose,
     )
     index_summary: list = []
-    with _passthrough_phase('Indexing symbols (per-language SCIP)'):
+    # When the index is reused (staleness-exempt sources — e.g. a spool's
+    # pinned corpus), no per-language indexer bar runs and the persist into
+    # library_scip is silent for large graphs (Spark = minutes), so the phase
+    # looks stuck. Show a spinner + elapsed timer in that case; otherwise let
+    # the native per-language progress bar through.
+    _index_label = 'Indexing symbols (per-language SCIP)'
+    _index_reused = cfg.effective_scip_staleness_days(source_name) is None
+    _index_phase = _silence_fast_phase if _index_reused else _passthrough_phase
+    with _index_phase(_index_label):
         rc = cmd_index(index_args, phase_summary=index_summary)
     if rc != 0:
+        if _index_reused:
+            _replay_captured(_index_label)
         return rc
     if not verbose:
         console.print('  [green]✓[/green] Index — SCIP graph persisted to library_scip')
@@ -442,6 +452,16 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
         requested_doc_types = (
             tuple(t.strip() for t in args.types.split(',') if t.strip())
             if getattr(args, 'types', None) else DEFAULT_GENERATE_DOC_TYPES
+        )
+        # --doc-types-off: types shown in the explorer but UNchecked by
+        # default (opt-in). Spool builds pass architecture,qa,diagram so a
+        # reference pack defaults lean; empty → all checked, as before.
+        _off_raw = getattr(args, 'doc_types_off', None)
+        _off_types = frozenset(
+            t.strip() for t in _off_raw.split(',') if t.strip()
+        ) if _off_raw else frozenset()
+        default_checked_doc_types = tuple(
+            t for t in requested_doc_types if t not in _off_types
         )
         _restrict, _ = (
             _commit_scope(
@@ -695,7 +715,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
                 try:
                     app = await run_explorer_tui(
                         state, doc_types=requested_doc_types,
-                        selected=requested_doc_types, recost=_recost,
+                        selected=default_checked_doc_types, recost=_recost,
                         offer_staleness=offer_staleness,
                         staleness_source=source_name,
                         staleness_exempt=currently_exempt)

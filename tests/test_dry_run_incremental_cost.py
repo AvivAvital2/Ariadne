@@ -203,9 +203,11 @@ async def test_interactive_explorer_reflects_pending_set(
     monkeypatch.setattr('sys.stdin.isatty', lambda: True)
     monkeypatch.setattr('sys.stdout.isatty', lambda: True)
     opened: list = []
+    explorer_selected: list = []
 
     async def _fake_explorer(state, **kwargs):
         opened.append(state)
+        explorer_selected.append(kwargs.get('selected'))
         return SimpleNamespace(
             selected_doc_types=kwargs.get('selected'),
             staleness_exempt=kwargs.get('staleness_exempt', False),
@@ -252,6 +254,20 @@ async def test_interactive_explorer_reflects_pending_set(
     assert state.cost_of('src/alpha.py') is None, (
         'explorer must not price already-generated files'
     )
+
+    # ---- Phase 1b: --doc-types-off pre-unchecks those types in the explorer
+    # (spool builds default architecture/qa/diagram off). beta.py is still
+    # pending here, so the explorer opens.
+    opened.clear(); explorer_selected.clear()
+    off_args = _args()
+    off_args.doc_types_off = 'architecture,qa,diagram'
+    rc = await cmd_dry_run(off_args)
+    assert rc == 0
+    capsys.readouterr()
+    assert explorer_selected[-1] == tuple(
+        t for t in DEFAULT_GENERATE_DOC_TYPES
+        if t not in {'architecture', 'qa', 'diagram'}
+    ), 'explorer must start with the off-by-default types unchecked'
 
     # ---- Phase 2: beta.py done too → nothing pending ---------------------
     _mark_generated('beta.py')

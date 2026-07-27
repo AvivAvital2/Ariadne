@@ -250,7 +250,7 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
     invoked.clear(); seen_args.clear()
     monkeypatch.setattr(
         'cli.onboard._select_generate_doc_types',
-        lambda defaults: ('explanation', 'qa'),
+        lambda defaults, off=frozenset(): ('explanation', 'qa'),
     )
     rc = await cmd_onboard(_args(approve=True))
     assert rc == 0
@@ -263,7 +263,7 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
     invoked.clear(); seen_args.clear()
     monkeypatch.setattr(
         'cli.onboard._select_generate_doc_types',
-        lambda defaults: (_ for _ in ()).throw(
+        lambda defaults, off=frozenset(): (_ for _ in ()).throw(
             AssertionError('--types must skip the interactive picker'),
         ),
     )
@@ -285,3 +285,14 @@ async def test_onboard_evolves_through_contract(monkeypatch, capsys):
     assert rc == 0
     assert dry_run_calls[-1].interactive is True      # browser always opens
     assert dry_run_calls[-1].offer_staleness is True  # staleness modal offered
+
+
+def test_select_generate_doc_types_off_defaults_are_dropped() -> None:
+    """``off_types`` start off: on a non-TTY the picker returns the remaining
+    types in order (a spool build defaults architecture/qa/diagram off).
+    No ``off_types`` keeps the prior all-on behavior."""
+    types = ('explanation', 'architecture', 'qa', 'gotcha', 'diagram')
+    assert onboard._select_generate_doc_types(
+        types, frozenset({'architecture', 'qa', 'diagram'}),
+    ) == ('explanation', 'gotcha')
+    assert onboard._select_generate_doc_types(types) == types

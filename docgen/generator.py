@@ -51,6 +51,8 @@ _CLASS_LIKE_SUBTYPES = frozenset({
     'scala_class', 'scala_object', 'scala_trait',
     # Java
     'java_class', 'java_interface', 'java_enum',
+    # Go — struct (aggregate) + interface (contract) are the class-like types.
+    'go_struct', 'go_interface',
 })
 
 _CALLABLE_SUBTYPES = frozenset({
@@ -62,6 +64,9 @@ _CALLABLE_SUBTYPES = frozenset({
     'scala_def', 'scala_implicit',
     # Java
     'java_method', 'java_constructor',
+    # Go — top-level funcs and receiver methods (method-vs-function is on
+    # parent_qualified_name, same as Scala).
+    'go_function', 'go_method',
 })
 
 

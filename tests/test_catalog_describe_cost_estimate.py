@@ -11,10 +11,19 @@ WITHOUT making any LLM calls.
 """
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+
+from cli.catalog import (
+    _DESCRIBE_INPUT_TOKENS_PER_CALL,
+    _DESCRIBE_OUTPUT_TOKENS_PER_CALL,
+    cmd_catalog_describe,
+)
+from docgen.pricing import _BATCH_DISCOUNT, LLM_PRICING
+from library import Library
 
 
 class TestCatalogDescribeDryRun:
@@ -139,4 +148,89 @@ class TestCatalogDescribeDryRun:
         # Dollar figure visible (any $ amount).
         assert '$' in out, (
             f'expected a $ cost figure in dry-run output; got: {out!r}'
+        )
+
+    # ---- demand 3: --dry-run prices the --batch discount ----------------
+    @pytest.mark.asyncio
+    async def test_dry_run_with_batch_prints_discounted_cost(
+        self, tmp_path: Path, monkeypatch, capsys,
+    ) -> None:
+        """``--batch`` alongside ``--dry-run`` must price the run at the
+        batch discount — not silently ignore the flag — while keeping the
+        live figure visible for comparison. ``--resume`` stays meaningless
+        under dry-run (it fetches an already-submitted batch; nothing left
+        to price) and the output must say so.
+        """
+        library = Library(tmp_path / 'library.db')
+        try:
+            for i in range(40):
+                library.add_document(
+                    content_type='catalog',
+                    title=f'product.func{i}',
+                    content=f'def func{i}(): pass',
+                    source_name='product',
+                    source_files=['product/mod.py'],
+                    metadata={
+                        'kind': 'element',
+                        'source_name': 'product',
+                        'qualified_name': f'product.func{i}',
+                        'subtype': 'function',
+                    },
+                )
+        finally:
+            library.close()
+
+        monkeypatch.setattr(
+            'docgen.catalog_describer.chat_complete',
+            AsyncMock(side_effect=AssertionError(
+                'chat_complete called during dry-run',
+            )),
+        )
+        monkeypatch.setattr(
+            'cli.catalog.get_library',
+            lambda *_a, **_kw: Library(tmp_path / 'library.db'),
+        )
+
+        in_rate, out_rate = LLM_PRICING['claude-opus-4-7']
+        live_usd = (
+            40 * _DESCRIBE_INPUT_TOKENS_PER_CALL * in_rate / 1_000_000
+            + 40 * _DESCRIBE_OUTPUT_TOKENS_PER_CALL * out_rate / 1_000_000
+        )
+        batched_usd = live_usd * _BATCH_DISCOUNT
+        live_str, batched_str = f'${live_usd:.2f}', f'${batched_usd:.2f}'
+        # Sanity: the two figures must be tellable apart at 2 decimals,
+        # otherwise the assertions below prove nothing.
+        assert live_str != batched_str
+
+        args = argparse.Namespace(
+            source='product', force=False, model='claude-opus-4-7',
+            concurrency=4, max_calls=None, db=None, dry_run=True,
+            batch=True, resume=False,
+        )
+        rc = await cmd_catalog_describe(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert batched_str in out, (
+            f'expected batched figure {batched_str} in output; got: {out!r}'
+        )
+        assert live_str in out, (
+            f'expected live figure {live_str} kept for comparison; '
+            f'got: {out!r}'
+        )
+        assert 'ignored' not in out, (
+            f'--batch must be priced, not ignored; got: {out!r}'
+        )
+
+        # --resume under dry-run: still estimates, and says the flag is
+        # ignored (there is nothing to price in a resume).
+        args.batch, args.resume = False, True
+        rc = await cmd_catalog_describe(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert '--resume is ignored' in out, (
+            f'expected an honest --resume note; got: {out!r}'
+        )
+        assert live_str in out, (
+            f'resume dry-run must still print the live estimate; '
+            f'got: {out!r}'
         )

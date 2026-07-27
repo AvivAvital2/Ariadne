@@ -22,7 +22,9 @@ the run with a non-zero exit code.
 from __future__ import annotations
 
 import argparse
+import io
 import json
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -44,11 +46,15 @@ class FakeAdapter:
         version: str = 'fake-indexer/0.1',
         scip_bytes: bytes = b'\x08\x01synthetic',
         error_message: str = '',
+        write_output: bool = True,
     ) -> None:
         self.success = success
         self.version = version
         self.scip_bytes = scip_bytes
         self.error_message = error_message
+        # ``write_output=False`` simulates an adapter that reports success but
+        # emits no .scip (e.g. scip-java compiling with no SemanticDB output).
+        self.write_output = write_output
         self.calls: list[dict] = []
 
     def run(
@@ -79,7 +85,7 @@ class FakeAdapter:
             'entry_kind': entry_kind,
             'excludes': tuple(excludes),
         })
-        if self.success:
+        if self.success and self.write_output:
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(self.scip_bytes)
         from cli.index import IndexerResult
@@ -516,3 +522,157 @@ class TestFlags:
         )
         assert rc == 0
         assert len(py_adapter.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Best-effort semantics (opt-in): one language failing must not sink the run
+# ---------------------------------------------------------------------------
+
+
+class TestBestEffort:
+    """--best-effort: a single language's indexer failure (e.g. an old/
+    unsupported toolchain) skips that scope and indexes the rest; the run fails
+    only if NOTHING could be indexed. Default stays hard-fail (TestHardFail)."""
+
+    def _polyglot(self, tmp_path: Path) -> None:
+        (tmp_path / 'mypkg').mkdir()
+        (tmp_path / 'mypkg' / '__init__.py').write_text('def f(): ...')
+        (tmp_path / 'build.sbt').write_text('name := "x"')
+        _write_manifest(tmp_path, [
+            {'kind': 'python', 'cwd': '.', 'markers': ['mypkg/__init__.py']},
+            {'kind': 'java', 'cwd': '.', 'markers': ['build.sbt']},
+        ])
+        yaml_path = tmp_path / 'ariadne.yaml'
+        yaml_path.write_text(f'sources:\n  mysrc:\n    path: {tmp_path}\n')
+        _activate_yaml(yaml_path)
+
+    def test_skips_failed_language_and_succeeds(self, tmp_path: Path) -> None:
+        from cli.index import cmd_index
+
+        self._polyglot(tmp_path)
+        rc = cmd_index(
+            _make_args(source='mysrc', best_effort=True),
+            indexer_registry={
+                'python': FakeAdapter(success=True),
+                'java': FakeAdapter(success=False,
+                                    error_message='unsupported jdk'),
+            },
+            merger=FakeMerger(),
+        )
+        assert rc == 0                                    # partial success
+        assert (tmp_path / '.ariadne' / 'index.scip').exists()  # python indexed
+
+    def test_fails_when_every_language_fails(self, tmp_path: Path) -> None:
+        from cli.index import cmd_index
+
+        self._polyglot(tmp_path)
+        rc = cmd_index(
+            _make_args(source='mysrc', best_effort=True),
+            indexer_registry={
+                'python': FakeAdapter(success=False, error_message='old py'),
+                'java': FakeAdapter(success=False, error_message='old jdk'),
+            },
+            merger=FakeMerger(),
+        )
+        assert rc != 0                                    # nothing indexed
+        assert not (tmp_path / '.ariadne' / 'index.scip').exists()
+
+    def test_default_is_still_hard_fail(self, tmp_path: Path) -> None:
+        from cli.index import cmd_index
+
+        self._polyglot(tmp_path)
+        rc = cmd_index(
+            _make_args(source='mysrc'),                   # no best_effort
+            indexer_registry={
+                'python': FakeAdapter(success=True),
+                'java': FakeAdapter(success=False, error_message='x'),
+            },
+            merger=FakeMerger(),
+        )
+        assert rc != 0                                    # strict: one fails → fatal
+
+
+# ---------------------------------------------------------------------------
+# discover --quiet: the discovered-indexers table is noise in some scopes
+# ---------------------------------------------------------------------------
+
+
+def _discover_args(**kwargs) -> argparse.Namespace:
+    defaults = {'source': None, 'all': False, 'dry_run': False,
+                'review': False, 'config_only': False, 'quiet': False}
+    defaults.update(kwargs)
+    return argparse.Namespace(**defaults)
+
+
+class TestDiscoverQuiet:
+    def test_quiet_suppresses_table_and_manifest_line(
+        self, python_source: Path, configured_for: Path,
+    ) -> None:
+        from cli.index import cmd_discover
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cmd_discover(_discover_args(source='mysrc', quiet=True))
+        out = buf.getvalue()
+        assert 'Discovered indexers' not in out
+        assert 'Wrote' not in out
+
+    def test_default_shows_table(
+        self, python_source: Path, configured_for: Path,
+    ) -> None:
+        from cli.index import cmd_discover
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cmd_discover(_discover_args(source='mysrc', quiet=False))
+        assert 'Discovered indexers' in buf.getvalue()
+
+
+class TestMissingOutputIsFailure:
+    """An adapter can exit 0 yet emit no .scip (scip-java compiling with no
+    SemanticDB — the spark-java case). Feeding that missing file to the merge
+    crashes it, so a 'successful' run with no output must be treated as a
+    failure: skipped under --best-effort, fatal by default."""
+
+    def _polyglot(self, tmp_path: Path) -> None:
+        (tmp_path / 'mypkg').mkdir()
+        (tmp_path / 'mypkg' / '__init__.py').write_text('def f(): ...')
+        (tmp_path / 'build.sbt').write_text('name := "x"')
+        _write_manifest(tmp_path, [
+            {'kind': 'python', 'cwd': '.', 'markers': ['mypkg/__init__.py']},
+            {'kind': 'java', 'cwd': '.', 'markers': ['build.sbt']},
+        ])
+        yaml_path = tmp_path / 'ariadne.yaml'
+        yaml_path.write_text(f'sources:\n  mysrc:\n    path: {tmp_path}\n')
+        _activate_yaml(yaml_path)
+
+    def test_best_effort_skips_output_less_success(self, tmp_path: Path) -> None:
+        from cli.index import cmd_index
+
+        self._polyglot(tmp_path)
+        rc = cmd_index(
+            _make_args(source='mysrc', best_effort=True),
+            indexer_registry={
+                'python': FakeAdapter(success=True),
+                'java': FakeAdapter(success=True, write_output=False),
+            },
+            merger=FakeMerger(),
+        )
+        assert rc == 0                                    # java skipped, python OK
+        assert (tmp_path / '.ariadne' / 'index.scip').exists()
+
+    def test_default_hard_fails_on_output_less_success(
+        self, tmp_path: Path,
+    ) -> None:
+        from cli.index import cmd_index
+
+        self._polyglot(tmp_path)
+        rc = cmd_index(
+            _make_args(source='mysrc'),
+            indexer_registry={
+                'python': FakeAdapter(success=True),
+                'java': FakeAdapter(success=True, write_output=False),
+            },
+            merger=FakeMerger(),
+        )
+        assert rc != 0                                    # no-output → fatal

@@ -75,6 +75,10 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help='Comma-separated doc types for the generate phase '
              '(explanation,architecture,qa,gotcha,diagram). Omit to pick '
              'interactively after the cost preview (all on a non-TTY).')
+    onboard_parser.add_argument('--doc-types-off', default=None,
+        help='Comma-separated doc types to leave UNchecked by default in '
+             'the interactive picker (still selectable; excluded on a '
+             'non-TTY). Spool builds pass architecture,qa,diagram.')
     # --live / --batch skip the interactive picker (useful for CI /
     # scripted runs). Without either, onboard prompts. Names mirror
     # the picker labels so users don't have to map between "what they
@@ -167,7 +171,9 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
     # ---- Paid phases --------------------------------------------------
     # Which doc types to generate (the generate-phase cost driver). An
     # explicit --types wins; otherwise let the user pick from the set
-    # whose per-type cost the preview just showed (non-TTY → all).
+    # whose per-type cost the preview just showed. --doc-types-off pre-
+    # unchecks types in the picker (opt-in) and drops them on a non-TTY;
+    # spool builds pass architecture,qa,diagram to default a leaner pack.
     from cli.generate import DEFAULT_GENERATE_DOC_TYPES
     explicit_types = getattr(args, 'types', None)
     if explicit_types:
@@ -175,8 +181,12 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
             t.strip() for t in explicit_types.split(',') if t.strip()
         )
     else:
+        off_raw = getattr(args, 'doc_types_off', None)
+        off_types = frozenset(
+            t.strip() for t in off_raw.split(',') if t.strip()
+        ) if off_raw else frozenset()
         selected_doc_types = _select_generate_doc_types(
-            DEFAULT_GENERATE_DOC_TYPES,
+            DEFAULT_GENERATE_DOC_TYPES, off_types,
         )
 
     # Resolve batch mode. Explicit flag wins; otherwise prompt.
@@ -481,27 +491,35 @@ def _arrow_key_multiselect(
     return [v for i, (v, _) in enumerate(options) if i in selected]
 
 
-def _select_generate_doc_types(default_types: tuple[str, ...]) -> tuple[str, ...]:
+def _select_generate_doc_types(
+    default_types: tuple[str, ...],
+    off_types: frozenset[str] = frozenset(),
+) -> tuple[str, ...]:
     """Let the user pick which doc types ``generate`` should produce.
 
-    All types start checked. A non-interactive context (no TTY) or a
-    cancelled/empty selection returns all ``default_types`` — so we never
-    silently generate nothing.
+    All ``default_types`` are listed; those in ``off_types`` start
+    UNchecked (opt-in) — spool builds default architecture/qa/diagram off
+    for a leaner pack. A non-interactive context (no TTY) or a
+    cancelled/empty selection returns the on-by-default set
+    (``default_types`` minus ``off_types``) — so we never silently
+    generate nothing.
     """
     import sys
 
+    on_default = tuple(t for t in default_types if t not in off_types)
     options = [(t, t) for t in default_types]
+    preselected = {i for i, t in enumerate(default_types) if t not in off_types}
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        return tuple(default_types)
+        return on_default
     try:
         chosen = _arrow_key_multiselect(
             options,
             title='Doc types to generate (per-type cost shown above)',
-            selected=set(range(len(options))),
+            selected=preselected,
         )
     except Exception:
-        return tuple(default_types)
-    return tuple(chosen) if chosen else tuple(default_types)
+        return on_default
+    return tuple(chosen) if chosen else on_default
 
 
 def _dependency_candidates(cfg, source_name: str) -> list[str]:

@@ -131,6 +131,38 @@ class TestConfig:
         assert cfg.default_source is None
         assert cfg.model is not None  # Has a default
 
+    def test_spools_model_overrides_model_for_spool_builds(self, tmp_path: Path) -> None:
+        """``spools_model`` is exposed independently of ``model`` so a spool
+        build can use a cheaper model while day-to-day generation keeps the
+        premium one. When set it takes precedence; when absent it is None so
+        spool builds inherit ``model``."""
+        cfg_path = tmp_path / 'ariadne.yaml'
+        cfg_path.write_text(yaml.dump({
+            'model': 'claude-opus-4-8',
+            'spools_model': 'claude-sonnet-5',
+        }))
+        cfg = Config(str(cfg_path))
+        assert cfg.model == 'claude-opus-4-8'         # day-to-day unchanged
+        assert cfg.spools_model == 'claude-sonnet-5'  # spool override wins
+
+        # Honored under the nested defaults: section too (not only top-level).
+        cfg_path.write_text(yaml.dump({
+            'model': 'claude-opus-4-8',
+            'defaults': {'spools_model': 'claude-sonnet-5'},
+        }))
+        nested = Config(str(cfg_path))
+        assert nested.spools_model == 'claude-sonnet-5'
+        assert nested.model == 'claude-opus-4-8'
+
+    def test_spools_model_absent_is_none(self, tmp_path: Path) -> None:
+        """Without ``spools_model`` the property is None, so spool builds fall
+        back to ``model`` (no override)."""
+        cfg_path = tmp_path / 'ariadne.yaml'
+        cfg_path.write_text(yaml.dump({'model': 'claude-opus-4-8'}))
+        cfg = Config(str(cfg_path))
+        assert cfg.spools_model is None
+        assert cfg.model == 'claude-opus-4-8'
+
     def test_invalid_yaml_uses_defaults(self, tmp_path: Path) -> None:
         """Invalid YAML should use defaults without error."""
         bad = tmp_path / 'bad.yaml'
