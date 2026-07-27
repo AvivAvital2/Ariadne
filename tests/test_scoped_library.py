@@ -614,12 +614,14 @@ class TestScopedLibrary:
     #     'product|spool:alpha'): admitted iff EVERY source it spans is in
     #     the closure (unchanged).
     #   - base pass (''): member-grounded — admitted iff the scope's
-    #     sources hold at least _BASE_THEME_MIN_MEMBER_SHARE of the
-    #     theme's membership. "Always visible" was the leak (the base
-    #     global pass clusters the WHOLE store), and any-single-member
-    #     admission still leaked whole-cluster summaries across scopes: a
-    #     theme's CONTENT is written over ALL its members, so one stray
-    #     in-scope member must not admit a foreign cluster's summary.
+    #     NON-SPOOL sources hold at least _BASE_THEME_MIN_MEMBER_SHARE of
+    #     the theme's TOTAL membership. "Always visible" was the leak (the
+    #     base global pass clusters the WHOLE store), any-single-member
+    #     admission still leaked whole-cluster summaries, and SPOOL members
+    #     never ground a base theme at all: a spool's relevance flows
+    #     through its OWN association pass (build_spool_internal_themes),
+    #     so legacy corpus themes stranded in the base pass go dark instead
+    #     of leaking mixed-cluster summaries into spool scopes.
     #   - a theme doc with NO themes row (a stale orphan from an earlier
     #     rebuild) is never admitted — fail closed.
     def test_t8_theme_docs_gated_by_association_closure(
@@ -735,15 +737,16 @@ class TestScopedLibrary:
                 'product-doc', 'base-theme', 'xsrc-theme',
             }
 
-            # Both spool sources in scope: every tracked theme is admitted
-            # (the corpus theme via its spool:beta member), plus the spool
-            # member doc itself as a regular in-closure doc. The orphan
-            # stays hidden — fail closed.
+            # Both spool sources in scope: the scoped-association themes
+            # join and the spool member doc appears as a regular in-closure
+            # doc — but the base-pass CORPUS theme stays hidden even now:
+            # spool members never ground a base theme (its content belongs
+            # to the spool's own pass). The orphan stays hidden.
             assert titles_for(
                 {'product', 'shared', 'spool:alpha', 'spool:beta'},
             ) == {
                 'product-doc', 'spool-member-doc', 'base-theme',
-                'corpus-theme', 'xsrc-theme', 'spool-internal-theme',
+                'xsrc-theme', 'spool-internal-theme',
             }
 
             # Member grounding scopes cross-repo themes to where their
@@ -795,5 +798,5 @@ class TestScopedLibrary:
                 {'product', 'shared', 'spool:beta'},
             ).get_documents_batch(all_theme_ids)
             assert {d.id for d in batch_beta} == {
-                base_theme.id, corpus_theme.id, spool_theme.id,
+                base_theme.id, spool_theme.id,
             }

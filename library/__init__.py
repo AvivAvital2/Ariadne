@@ -704,9 +704,11 @@ class ScopedLibrary:
 
         A scoped association is admitted iff every source it spans is in
         the closure (:meth:`_theme_association_admitted`). A base-pass
-        ('') theme is member-grounded: admitted iff the closure's sources
-        hold at least ``_BASE_THEME_MIN_MEMBER_SHARE`` of its membership,
-        and a LONE in-scope member only admits a cluster it co-dominates
+        ('') theme is member-grounded: admitted iff the closure's
+        NON-SPOOL sources hold at least ``_BASE_THEME_MIN_MEMBER_SHARE``
+        of its TOTAL membership (spool members never ground a base theme —
+        a spool's relevance flows through its own association pass), and a
+        LONE in-scope member only admits a cluster it co-dominates
         (>= half the membership) —
         a theme's content summarizes ALL its members, so pass-level or
         any-single-member admission leaked foreign clusters' summaries
@@ -729,7 +731,15 @@ class ScopedLibrary:
                     f'(SELECT COUNT(*) FROM theme_members tm '
                     f'JOIN documents md ON md.id = tm.element_id '
                     f'WHERE tm.cluster_id = t.cluster_id '
-                    f'AND md.source_name IN ({src_placeholders})), '
+                    f'AND md.source_name IN ({src_placeholders}) '
+                    # Spool members NEVER ground a base theme: a spool's
+                    # relevance flows through its OWN association pass, so
+                    # legacy corpus themes stranded in the base pass go
+                    # dark instead of carrying mixed-cluster summaries into
+                    # spool scopes. Denominator stays TOTAL members, so a
+                    # spool-heavy theme can't sneak into repo scopes through
+                    # a shrunken denominator either.
+                    f"AND md.source_name NOT LIKE 'spool:%'), "
                     f'(SELECT COUNT(*) FROM theme_members tm '
                     f'WHERE tm.cluster_id = t.cluster_id) '
                     f'FROM themes t WHERE t.doc_id IN ({id_placeholders})',

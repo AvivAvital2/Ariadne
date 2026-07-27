@@ -237,6 +237,41 @@ def _copy_version_facts(src, dest, source_name):
         dconn.commit()
 
 
+def _copy_spool_themes(src, dest, spool_name) -> list:
+    """Ship the spool's OWN theme pass (docs + themes rows + members —
+    Slice 3). Theme docs are cross-source by design (source_name=NULL) and
+    gate by ASSOCIATION: it is already the reserved spool id
+    (build_spool_internal_themes), so the consumer's scope rule admits them
+    iff the spool is enabled. Base-pass themes never ship. Existing rows
+    for the association are replaced (idempotent reinstall). Returns the
+    doc ids newly inserted into ``dest`` (the install rollback tracks them).
+    """
+    from spools import spool_source_id
+
+    association = spool_source_id(spool_name)
+    dest.delete_themes_for_association(association)
+    inserted = []
+    for theme in src.list_themes(coherent_only=False, association=association):
+        doc = src.get_document(theme.doc_id)
+        if doc is None:
+            continue
+        if dest.get_document(doc.id) is None:
+            inserted.append(doc.id)
+        _copy_doc_with_sections(
+            dest, doc, embedding=doc.embedding, metadata=dict(doc.metadata),
+            source_name=None, sections=src.get_sections(doc.id),
+        )
+        dest.add_theme(
+            cluster_id=theme.cluster_id, doc_id=theme.doc_id,
+            member_count=theme.member_count, resolution=theme.resolution,
+            summary_hash=theme.summary_hash, coherent=theme.coherent,
+            dirty=theme.dirty, association=association,
+        )
+        dest.set_theme_members(
+            theme.cluster_id, src.get_theme_members(theme.cluster_id))
+    return inserted
+
+
 def _gather_attribution(source_root):
     """Scan corpus clones under ``source_root`` (each marked with the fetch's
     ``.ariadne-corpus-sha``) for their top-level LICENSE/NOTICE files, so the
@@ -389,6 +424,7 @@ def build_pack(
             _copy_source_scip(library, pack, environment,
                               strip_path_prefix=root_prefix)
             _copy_version_facts(library, pack, environment)
+            _copy_spool_themes(library, pack, environment)
         _checkpoint(db_path)
         db_blob = db_path.read_bytes()
 
@@ -598,6 +634,8 @@ def install_pack(library, pack_path, *, cache_dir,
                     dest_source_name=install_source,
                 )
                 _copy_version_facts(pack, library, manifest.environment)
+                newly_inserted.extend(
+                    _copy_spool_themes(pack, library, manifest.environment))
         except Exception:
             for doc_id in newly_inserted:
                 library.delete_document(doc_id)

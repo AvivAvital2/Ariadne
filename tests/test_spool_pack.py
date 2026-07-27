@@ -720,6 +720,63 @@ class TestSpoolPack:
                 ).fetchall()
         assert ('spark.sql.shuffle.partitions', '200', doc_source) in cfg
 
+    def test_spool_themes_travel_with_pack(self, tmp_path, monkeypatch):
+        # Slice 3: the spool's OWN theme pass (association = the reserved
+        # spool id, built by build_spool_internal_themes) ships in the pack —
+        # docs + themes rows + members — and lands on the consumer, where
+        # the T8 association rule admits them iff the spool is enabled.
+        # Base-pass themes never ship (they're the leak's old home).
+        import embedding
+        monkeypatch.setattr(embedding, 'EMBEDDING_DIM', 2)  # match _vec dims
+
+        from spools import spool_source_id
+
+        root = tmp_path / 'corpus'
+        root.mkdir()
+        with Library(tmp_path / 'builder.db') as builder:
+            member = builder.add_document(
+                'explanation', 'Mesh Compaction Guide', 'body',
+                embedding=_vec(1.0, 0.0), source_name='fakebricks',
+            )
+            theme_doc = builder.add_document(
+                'theme', 'Mesh Compaction Patterns',
+                'summary of the corpus compaction cluster',
+                embedding=_vec(0.9, 0.1), source_name=None,
+            )
+            builder.add_theme(
+                cluster_id='c-mesh', doc_id=theme_doc.id, member_count=1,
+                resolution=1.0, summary_hash='h-mesh', dirty=False,
+                association=spool_source_id('fakebricks'),
+            )
+            builder.set_theme_members('c-mesh', [(member.id, 1.0)])
+            # A base-pass theme must NOT ship.
+            stray = builder.add_document(
+                'theme', 'Stray Base Theme', 'base pass summary',
+                embedding=_vec(0.1, 0.9), source_name=None,
+            )
+            builder.add_theme(
+                cluster_id='c-stray', doc_id=stray.id, member_count=1,
+                resolution=1.0, summary_hash='h-stray', association='',
+            )
+            build_pack(
+                builder, environment='fakebricks', version='1.0',
+                target_runtime='fake-17.3', certified_docs=(),
+                source_root=root, out_path=tmp_path / 'pack.zip',
+            )
+
+        with Library(tmp_path / 'consumer.db') as consumer:
+            install_pack(consumer, tmp_path / 'pack.zip',
+                         cache_dir=tmp_path / 'c')
+            from library import ScopedLibrary
+            with_spool = ScopedLibrary(
+                consumer, frozenset({'src1', 'spool:fakebricks'}))
+            titles = {d.title for d in with_spool.list_documents_lite()}
+            assert 'Mesh Compaction Patterns' in titles
+            assert 'Stray Base Theme' not in titles
+            without_spool = ScopedLibrary(consumer, frozenset({'src1'}))
+            titles = {d.title for d in without_spool.list_documents_lite()}
+            assert 'Mesh Compaction Patterns' not in titles
+
     def test_version_facts_travel_with_pack(self, tmp_path):
         # Slice 2: build extracts the corpus's version markers from the
         # LOCATED source lines into version_facts, the pack ships them, and
