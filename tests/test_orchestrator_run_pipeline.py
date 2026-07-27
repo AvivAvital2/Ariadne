@@ -1066,7 +1066,7 @@ class TestPostProcessFullPath:
 
         async def fake_refresh(
             library, writer, *, enabled, summarize_kwargs,
-        ):
+                    cluster_kwargs=None, batch_strategy=None):
             on_progress = summarize_kwargs.get('on_progress')
             if on_progress:
                 # Fire both branches of _theme_progress: with
