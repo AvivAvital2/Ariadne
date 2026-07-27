@@ -303,3 +303,30 @@ def test_ddl_placeholder_names_are_not_emitted_as_schema(conn):
         "SELECT canonical_id FROM schema_symbols WHERE source_name = 'src1'")}
     assert not any('__ariadne_ph__' in n for n in nodes)   # placeholder dropped
     assert 'data sql src1 _._.orders#status' in nodes      # a real DDL still binds
+
+
+def test_parse_sql_swallows_sqlglot_valueerror(monkeypatch):
+    """sqlglot can raise a plain ValueError (e.g. "Cannot convert empty name
+    into var." from an empty identifier deep in a corpus string), NOT only
+    SqlglotError. The SQL detector must treat that as "not SQL" and return None
+    — never let it escape and abort the whole `ariadne index` persist step."""
+    import sqlglot
+
+    def _boom(*a, **k):
+        raise ValueError('Cannot convert empty name into var.')
+
+    monkeypatch.setattr(sqlglot, 'parse_one', _boom)
+    assert _parse_sql('SELECT 1', 'postgres') is None
+
+
+def test_parse_sql_swallows_sqlglot_decimal_error():
+    """sqlglot raises ``decimal.InvalidOperation`` (an ArithmeticError, NOT a
+    ValueError/SqlglotError) when a 1-based-index dialect type-annotates a
+    bracket subscript whose number token isn't a valid Decimal. The real corpus
+    trigger: the JSONPath-ish literal ``$.1.2.3[0]`` under 'postgres' — sqlglot
+    tokenises ``1.2.3`` as one number and, resolving the ``[…]`` index offset,
+    calls ``Decimal('1.2.3')`` → ConversionSyntax. The detector must treat it as
+    'not SQL' and return None, never let it abort the persist step (the source's
+    configured dialect is passed first, so this path is real, not hypothetical)."""
+    assert _parse_sql("$.1.2.3[0]", 'postgres') is None
+    assert _parse_sql("$.1.2.3['0']", 'postgres') is None

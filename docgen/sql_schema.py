@@ -54,7 +54,11 @@ def parse_schema_ddl(sql, *, dialect='postgres'):
     tables = []
     try:
         statements = sqlglot.parse(sql, read=dialect)
-    except SqlglotError:
+    except (SqlglotError, ValueError, ArithmeticError):
+        # sqlglot may raise beyond SqlglotError on pathological input: a plain
+        # ValueError (empty-identifier "Cannot convert empty name into var.") or
+        # decimal.InvalidOperation (an ArithmeticError) when a 1-based dialect
+        # annotates a bracket subscript with a non-Decimal number token.
         return tables
     for stmt in statements:
         if not isinstance(stmt, exp.Create) or not isinstance(stmt.this, exp.Schema):

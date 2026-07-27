@@ -44,6 +44,7 @@ _JS_EXTS: tuple[str, ...] = (
     '.js', '.jsx', '.ts', '.tsx', '.mjs',
 )
 _SCALA_EXTS: tuple[str, ...] = ('.scala', '.sbt')
+_GO_EXTS: tuple[str, ...] = ('.go',)
 
 
 def _detect_lang(path: Path) -> str | None:
@@ -54,6 +55,8 @@ def _detect_lang(path: Path) -> str | None:
         return 'javascript'
     if ext in _SCALA_EXTS:
         return 'scala'
+    if ext in _GO_EXTS:
+        return 'go'
     return None
 def _docstring_constants(tree: ast.AST) -> set:
     """The string-literal ``Constant`` nodes that are docstrings — the bare
@@ -283,6 +286,33 @@ def _extract_scala_literals(text: str) -> list[tuple[int, int, str]]:
         r = node.range()
         out.append((r.start.line + 1, r.start.column, value))
     return out
+
+
+def _extract_go_literals(text: str) -> list[tuple[int, int, str]]:
+    """Return ``(line_1indexed, col_0indexed, value)`` for every Go string
+    literal: ``interpreted_string_literal`` (``"..."``) and
+    ``raw_string_literal`` (`` `...` ``). Go has no string interpolation, so
+    both forms are plain values."""
+    try:
+        root = SgRoot(text, 'go').root()
+    except Exception:
+        return []
+    out: list[tuple[int, int, str]] = []
+    for node in root.find_all(kind='interpreted_string_literal'):
+        value = _strip_outer_quotes(node.text(), single_kinds=('"',))
+        if value is None:
+            continue
+        r = node.range()
+        out.append((r.start.line + 1, r.start.column, value))
+    for node in root.find_all(kind='raw_string_literal'):
+        value = _strip_outer_quotes(node.text(), single_kinds=('`',))
+        if value is None:
+            continue
+        r = node.range()
+        out.append((r.start.line + 1, r.start.column, value))
+    return out
+
+
 def lookup_literal_at_position(
     conn: 'Connection',
     *,
@@ -368,6 +398,8 @@ def ingest_string_literals(
             tagged = [(ln, cs, v, 'plain') for (ln, cs, v) in _extract_javascript_literals(text)]
         elif lang == 'scala':
             tagged = [(ln, cs, v, 'plain') for (ln, cs, v) in _extract_scala_literals(text)]
+        elif lang == 'go':
+            tagged = [(ln, cs, v, 'plain') for (ln, cs, v) in _extract_go_literals(text)]
 
         file_str = str(path.resolve())
         for line_start, col_start, value, kind in tagged:

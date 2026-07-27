@@ -331,6 +331,62 @@ SCALA_HTTP_CLIENT_SINKS: tuple[SinkSpec, ...] = (
 
 
 # ---------------------------------------------------------------------------
+# Go HTTP client entries (net/http stdlib)
+# ---------------------------------------------------------------------------
+
+
+def _build_go_http_client_sinks() -> tuple[SinkSpec, ...]:
+    """Go ``net/http`` client primitives. ``language='go'`` per the
+    LANGUAGES registry (scip-go). The Go client extractor reads the URL as
+    a direct string-literal argument; ``arg_index`` locates it.
+
+    Package-level helpers (``http.Get`` etc.) take the URL first; the
+    ``*http.Client`` methods mirror them (no ``PostForm`` on Client).
+    ``NewRequest`` / ``NewRequestWithContext`` carry an explicit method arg
+    we don't resolve yet, so ``http_method`` is None and ``arg_index``
+    points at the URL (1 and 2). Suffixes follow scip-go descriptor
+    conventions for the stdlib ``net/http`` package.
+    """
+    out: list[SinkSpec] = []
+    for fn, method in (
+        ('Get', 'GET'), ('Post', 'POST'), ('Head', 'HEAD'),
+        ('PostForm', 'POST'),
+    ):
+        out.append(SinkSpec(
+            name=f'net/http.{fn}',
+            symbol_suffixes=(f'net/http/{fn}().', f'net/http/{fn}.'),
+            kind='http_client', language='go', arg_index=0,
+            http_method=method,
+        ))
+        if fn in ('Get', 'Post', 'Head'):
+            out.append(SinkSpec(
+                name=f'net/http.Client.{fn}',
+                symbol_suffixes=(
+                    f'net/http/Client#{fn}().', f'net/http/Client#{fn}.',
+                ),
+                kind='http_client', language='go', arg_index=0,
+                http_method=method,
+            ))
+    out.append(SinkSpec(
+        name='net/http.NewRequest',
+        symbol_suffixes=('net/http/NewRequest().', 'net/http/NewRequest.'),
+        kind='http_client', language='go', arg_index=1, http_method=None,
+    ))
+    out.append(SinkSpec(
+        name='net/http.NewRequestWithContext',
+        symbol_suffixes=(
+            'net/http/NewRequestWithContext().',
+            'net/http/NewRequestWithContext.',
+        ),
+        kind='http_client', language='go', arg_index=2, http_method=None,
+    ))
+    return tuple(out)
+
+
+GO_HTTP_CLIENT_SINKS: tuple[SinkSpec, ...] = _build_go_http_client_sinks()
+
+
+# ---------------------------------------------------------------------------
 # Process invocation sinks (Phase 2t)
 # ---------------------------------------------------------------------------
 
@@ -470,6 +526,7 @@ DEFAULT_SINK_REGISTRY = SinkRegistry(
         PYTHON_HTTP_CLIENT_SINKS
         + JAVASCRIPT_HTTP_CLIENT_SINKS
         + SCALA_HTTP_CLIENT_SINKS
+        + GO_HTTP_CLIENT_SINKS
         + PYTHON_PROCESS_SINKS
         + JAVASCRIPT_PROCESS_SINKS
         + JVM_PROCESS_SINKS
@@ -484,6 +541,7 @@ __all__ = [
     'PYTHON_HTTP_CLIENT_SINKS',
     'JAVASCRIPT_HTTP_CLIENT_SINKS',
     'SCALA_HTTP_CLIENT_SINKS',
+    'GO_HTTP_CLIENT_SINKS',
     'PYTHON_PROCESS_SINKS',
     'JAVASCRIPT_PROCESS_SINKS',
     'JVM_PROCESS_SINKS',

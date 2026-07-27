@@ -12,15 +12,21 @@ from pathlib import Path
 from typing import Literal
 
 from ast_grep_py import SgRoot
-from attrs import frozen
+from attrs import evolve, frozen
 
 Language = Literal[
     'python', 'html', 'javascript', 'json', 'yaml', 'markdown',
     'scala', 'java',
+    # Go — SCIP-backed (scip-go), routed like scala/java (no ast-grep grammar).
+    'go',
     # HOCON (Typesafe Config) — file_index only; ast-grep does not
     # parse HOCON, so per-element extraction returns empty. Discovery
     # and search via the file_index doc still work.
     'hocon',
+    # INI-style `.conf` (Sphinx theme.conf, setup.cfg, systemd units) —
+    # `.conf` is overloaded, so a `[section]` header routes here instead
+    # of HOCON. Per-section + per-key elements from a line scan.
+    'ini',
     # CSS — file_index only (no semantic symbols to extract). Closes
     # the multi-language coverage gap for products that ship CSS
     # alongside HTML / JS / TS.
@@ -32,15 +38,21 @@ Language = Literal[
 ]
 Subtype = Literal[
     'function', 'async_function', 'class', 'method', 'variable',
+    'py_test_case', 'py_test_suite',
     'html_element',
     'js_function', 'js_class', 'js_export', 'js_branch',
     'js_test_suite', 'js_test_case', 'json_key', 'yaml_key', 'md_section',
     'hocon_key',
+    'ini_section', 'ini_key',
     'scala_class', 'scala_object', 'scala_trait', 'scala_def',
     'scala_val', 'scala_var', 'scala_implicit', 'scala_type',
     'scala_package_object',
     'scala_test_suite', 'scala_test_case', 'java_class', 'java_interface', 'java_enum',
     'java_method', 'java_constructor', 'java_field',
+    # Go (SCIP-backed, scip-go): struct/interface are the aggregates,
+    # func/method the callables, plus package-level fields/consts/vars/types.
+    'go_struct', 'go_interface', 'go_function', 'go_method',
+    'go_field', 'go_const', 'go_var', 'go_type',
     'rst_section',
     # Dockerfile (Phase 2): one stage per FROM, plus ENV/ARG/EXPOSE instructions.
     'dockerfile_stage', 'dockerfile_env', 'dockerfile_arg', 'dockerfile_expose',
@@ -110,6 +122,8 @@ def _detect_language(path: Path) -> Language | None:
         return 'scala'
     if ext == '.java':
         return 'java'
+    if ext == '.go':
+        return 'go'
     if ext == '.conf':
         return 'hocon'
     if ext == '.css':
@@ -168,8 +182,84 @@ def _is_method(fn_node) -> bool:
         return False
     grand = parent.parent()
     return grand is not None and grand.kind() == 'class_definition'                                                                                                                  
- 
-                                                                                                                                                                                     
+
+
+_SKIP_DECORATORS = frozenset({'skip', 'skipif', 'skipIf', 'skipUnless'})
+
+
+_XFAIL_DECORATORS = frozenset({'xfail', 'expectedFailure'})
+
+
+def _is_pytest_test(fn, name: str) -> bool:
+    """True if ``fn`` (a function_definition named ``name``) is a test pytest
+    would collect: a module-level ``test_*`` function, or a ``test_*`` method of
+    a ``Test*`` class. A ``test_*`` method of a non-``Test*`` class, a nested
+    function, and non-``test_*`` names are not."""
+    if not name.startswith('test_'):
+        return False
+    scope = fn.parent()
+    if scope.kind() == 'decorated_definition':
+        scope = scope.parent()
+    if scope.kind() != 'block':
+        return scope.kind() == 'module'
+    cls = scope.parent()
+    return (cls.kind() == 'class_definition'
+            and (_first_identifier(cls) or '').startswith('Test'))
+
+
+def _pytest_markers(fn) -> tuple:
+    """Disabled-status markers from a test's decorators: skip/skipif/skipIf/
+    skipUnless -> 'skipped'; xfail/expectedFailure -> 'xfail'. Other decorators
+    (asyncio, parametrize, fixture, patch) carry no status."""
+    deco = fn.parent()
+    if deco.kind() != 'decorated_definition':
+        return ()
+    found: list = []
+    for child in deco.children():
+        if child.kind() != 'decorator':
+            continue
+        last = child.text().lstrip('@').split('(', 1)[0].strip().split('.')[-1]
+        if last in _SKIP_DECORATORS:
+            found.append('skipped')
+        elif last in _XFAIL_DECORATORS:
+            found.append('xfail')
+    return tuple(dict.fromkeys(found))
+
+
+def _is_pytest_test_file(path: Path) -> bool:
+    """pytest collects tests only from files matching its ``python_files``
+    default — ``test_*.py`` / ``*_test.py``. A ``test_*`` function elsewhere
+    (a helper that happens to be named that way) is not a pytest test."""
+    name = path.name
+    return name.endswith('.py') and (
+        name.startswith('test_') or name.endswith('_test.py'))
+
+
+def _relabel_pytest(elements, root):
+    """Relabel pytest tests among extracted Python elements: ``test_*``
+    functions/methods -> ``py_test_case`` (carrying skip/xfail markers),
+    ``Test*`` classes -> ``py_test_suite``. Python routes through ast-grep, so
+    this always runs."""
+    fn_by_line = {
+        fn.range().start.line + 1: fn
+        for fn in root.find_all(kind='function_definition')
+    }
+    out = []
+    for e in elements:
+        name = e.qualified_name.rsplit('.', 1)[-1]
+        if e.subtype in ('function', 'method', 'async_function'):
+            fn = fn_by_line[e.line_start]
+            if _is_pytest_test(fn, name):
+                out.append(evolve(
+                    e, subtype='py_test_case', markers=_pytest_markers(fn)))
+                continue
+        elif e.subtype == 'class' and name.startswith('Test'):
+            out.append(evolve(e, subtype='py_test_suite'))
+            continue
+        out.append(e)
+    return out
+
+
 def _extract_python(src: str, path: Path, source_root: Path) -> list[ElementInfo]:
     module_qn = _py_module_qn(path, source_root)                                                                                                                                     
     root = SgRoot(src, 'python').root()
@@ -231,6 +321,8 @@ def _extract_python(src: str, path: Path, source_root: Path) -> list[ElementInfo
             body_sha=_sha(asn.text()),
         ))                                                                                                                                                                           
                 
+    if _is_pytest_test_file(path):
+        out = _relabel_pytest(out, root)
     return out
 
 
@@ -911,14 +1003,14 @@ def extract_elements(
     # SCIP routing for Scala/Java when the source declares it. This is
     # checked BEFORE reading the file so a missing index fails loud
     # without ever touching ast-grep — the load-bearing tripwire.
-    if lang in ('scala', 'java'):
+    if lang in ('scala', 'java', 'go'):
         from docgen import scip_config as _scip_config
         index = _scip_config.resolve_index(source_config, lang)
         if index is not None:
             from docgen.scip_extractor import extract as _scip_extract
             return _scip_extract(path, source_root=source_root, index=index)
         # SCIP not declared for this language → no ast-grep grammar for
-        # Scala/Java in this codebase, so return empty.
+        # Scala/Java/Go in this codebase, so return empty.
         return []
 
     # SCIP routing for JavaScript / TypeScript when the source declares
@@ -961,6 +1053,13 @@ def extract_elements(
     if lang == 'rst':
         return _extract_rst(src, path, source_root)
     if lang == 'hocon':
+        # `.conf` is overloaded. An INI `[section]` header routes to the INI
+        # extractor (per-key elements); everything else stays HOCON-or-(file
+        # -index). HOCON reads `[x]` as an array, so a section header is an
+        # unambiguous INI signal.
+        from docgen.ini_extractor import _extract_ini, looks_like_ini
+        if looks_like_ini(src):
+            return _extract_ini(src, path, source_root)
         from docgen.hocon_extractor import _extract_hocon
         return _extract_hocon(src, path, source_root)
     if lang == "dockerfile":

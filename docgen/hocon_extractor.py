@@ -220,12 +220,14 @@ def _extract_hocon(
     try:
         tree = _parse(src)
     except UnexpectedInput as e:
-        # Don't mask it: a parse failure means this file degrades to
-        # file-index-only (no per-key catalog elements). Surface which file
-        # and where so a silently-uncatalogued config is visible — then
+        # A parse failure means this file degrades to file-index-only (no
+        # per-key catalog elements) — the file still gets a text doc. This
+        # is an expected fallthrough for a non-HOCON `.conf` (INI is routed
+        # away upstream by the `[section]` sniff; other `.conf` dialects
+        # legitimately land here), so it's DEBUG, not a WARNING — and we
         # return [] so one bad file never aborts the batch catalog-sync.
         loc = f'line {e.line}, col {e.column}' if getattr(e, 'line', None) else 'unknown location'
-        _logger.warning(
+        _logger.debug(
             'HOCON parse failed for %s (%s) — catalogued as file-index only, '
             'no per-key elements extracted.', path, loc,
         )

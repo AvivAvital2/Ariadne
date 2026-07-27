@@ -138,22 +138,26 @@ def _parse_scip_python_line(line: str) -> IndexerProgress | None:
 def _stream_progress(
     lines: Iterable[str],
     progress_callback: Callable[[IndexerProgress], None],
+    parse: Callable[[str], 'IndexerProgress | None'] | None = None,
 ) -> list[str]:
     """Drain an iterable of subprocess output lines, feeding parsed
     events to ``progress_callback`` and returning the buffered raw
-    lines (so callers can surface them on failure).
+    lines (so callers can surface them on failure). ``parse`` is the
+    per-tool line parser (defaults to scip-python's; scip-java passes
+    :func:`_parse_scip_java_line`).
 
     Factored out of the Popen invocation so tests can drive it with
     canned input — no real subprocess required to exercise the parser
     + dispatch logic.
     """
+    parse = parse or _parse_scip_python_line
     buffered: list[str] = []
     for line in lines:
         line = line.rstrip()
         if not line:
             continue
         buffered.append(line)
-        event = _parse_scip_python_line(line)
+        event = parse(line)
         if event is not None:
             progress_callback(event)
     return buffered
@@ -655,7 +659,296 @@ class TypescriptIndexerAdapter:
         )
 
 
+_GO_INDEXER_VERSION = 'scip-go/unknown'
+
+
+class GoIndexerAdapter:
+    """Drives ``scip-go`` in a subprocess. scip-go type-checks the Go module
+    rooted at ``cwd`` (a ``go.mod`` directory) via ``go/packages`` and writes a
+    ``.scip`` index. Unlike scip-java there is no build tool to detect or
+    orchestrate — the Go toolchain compiles directly — so this is the simplest
+    adapter: one command, one fast pass per module.
+
+    Requires ``scip-go`` on PATH and a working Go toolchain. Install with
+    ``go install github.com/scip-code/scip-go/cmd/scip-go@latest``.
+    """
+
+    def __init__(self, *, runner: Callable | None = None) -> None:
+        self._runner = runner if runner is not None else subprocess.run
+
+    def run(
+        self,
+        *,
+        cwd: Path,
+        output: Path,
+        env_hints: dict[str, str],
+    ) -> IndexerResult:
+        # env_hints is accepted for adapter-contract uniformity; scip-go needs
+        # no interpreter/build-tool/JDK hint — just the ambient Go toolchain.
+        cmd = ['scip-go', '--output', str(output)]
+        try:
+            result = self._runner(
+                cmd,
+                cwd=cwd,
+                capture_output=True,
+                env=dict(os.environ),
+            )
+        except FileNotFoundError:
+            return IndexerResult(
+                success=False,
+                indexer_version='',
+                error_message=(
+                    'scip-go binary not found on PATH — install with '
+                    '`go install github.com/scip-code/scip-go/cmd/'
+                    'scip-go@latest` (needs a working Go toolchain)'
+                ),
+            )
+
+        if result.returncode != 0:
+            return IndexerResult(
+                success=False,
+                indexer_version='',
+                error_message=_failure_detail(
+                    result, 'scip-go returned nonzero exit',
+                ),
+            )
+        # A zero exit with no .scip is still a failure — feeding a phantom
+        # intermediate to the merge aborts it (the spark-java lesson).
+        if not output.exists():
+            return IndexerResult(
+                success=False,
+                indexer_version='',
+                error_message=_failure_detail(
+                    result,
+                    f'scip-go exited 0 but produced no index at {output}',
+                ),
+            )
+        return IndexerResult(
+            success=True,
+            indexer_version=_GO_INDEXER_VERSION,
+        )
+
+
 _JAVA_INDEXER_VERSION = 'scip-java/unknown'
+
+# Maven's reactor position, e.g. ``Building Apache Spark Core 4.0.0  [12/34]``.
+_MAVEN_REACTOR_RE = __import__('re').compile(r'Building\b.*?\[(\d+)/(\d+)\]')
+
+
+def _parse_scip_java_line(line: str) -> 'IndexerProgress | None':
+    """Parse one scip-java/Maven output line into a structured event.
+
+    scip-java compiles via Maven, whose reactor prints ``Building <module>
+    <ver> [N/M]`` per module — the one countable progress signal in an
+    otherwise opaque build. That becomes a ``tick``; ``Warning:`` /
+    ``unsupported`` lines become ``warning`` (like scip-python); everything
+    else is a silent ``message``."""
+    line = line.rstrip()
+    if not line:
+        return None
+    m = _MAVEN_REACTOR_RE.search(line)
+    if m:
+        return IndexerProgress(
+            kind='tick', current=int(m.group(1)), total=int(m.group(2)),
+        )
+    if line.startswith('Warning:') or 'unsupported' in line.lower():
+        return IndexerProgress(kind='warning', text=line)
+    return IndexerProgress(kind='message', text=line)
+
+
+# A module's build output dir, e.g. ``…/core/target/scala-2.13/classes``. The
+# directory right before ``/target/`` is the module — the one determinate signal
+# both Maven and sbt print (sbt has no Maven-style reactor ``[N/M]``).
+_MODULE_TARGET_RE = __import__('re').compile(r'/([A-Za-z0-9._-]+)/target/')
+
+
+def _build_module_names(cwd) -> frozenset:
+    """Leaf directory names of the corpus's build modules — one per ``pom.xml``
+    (excluding the root aggregator and any under ``target/``). This is the valid
+    set the module-count bar checks against, so spurious ``<root>/target`` and
+    sbt ``project/target`` hits, and leaf-name collisions, can't push it past
+    100%. Empty when no modules are found (bar then stays indeterminate)."""
+    cwd = Path(cwd)
+    names = set()
+    for pom in cwd.rglob('pom.xml'):
+        if 'target' in pom.parts or pom.parent == cwd:
+            continue  # generated pom, or the root aggregator (not a module)
+        names.add(pom.parent.name)
+    return frozenset(names)
+
+
+class _JavaBuildProgress:
+    """Stateful scip-java line parser driving a DETERMINATE bar by module count.
+    Both Maven and sbt print each module's ``<module>/target/`` path as they
+    compile it; we count DISTINCT modules from the corpus's known set (``sbt``
+    has no Maven ``[N/M]`` reactor). Maven's reactor position is still used
+    directly when present. Warnings/messages behave as ``_parse_scip_java_line``.
+
+    Keyed off a fixed module set (not raw hits) so the repo root, sbt's
+    ``project/`` meta-build, and duplicate target subpaths never over-count."""
+
+    def __init__(self, modules) -> None:
+        self.modules = frozenset(modules)
+        self.total = len(self.modules)
+        self.seen: set = set()
+        self.saw_reactor = False
+
+    def __call__(self, line: str) -> 'IndexerProgress | None':
+        line = line.rstrip()
+        if not line:
+            return None
+        m = _MAVEN_REACTOR_RE.search(line)
+        if m:
+            self.saw_reactor = True
+            return IndexerProgress(
+                kind='tick', current=int(m.group(1)), total=int(m.group(2)))
+        m = _MODULE_TARGET_RE.search(line)
+        if m:
+            # Maven's ordered reactor is authoritative once seen; the
+            # <module>/target signal only drives the bar for sbt (no reactor),
+            # else the two scales (reactor total vs module-set size) interleave.
+            module = m.group(1)
+            if (not self.saw_reactor and module in self.modules
+                    and module not in self.seen):
+                self.seen.add(module)
+                return IndexerProgress(
+                    kind='tick', current=len(self.seen),
+                    total=self.total or None, text=module)
+            return None  # dup, non-module, or reactor already driving
+        if line.startswith('Warning:') or 'unsupported' in line.lower():
+            return IndexerProgress(kind='warning', text=line)
+        return IndexerProgress(kind='message', text=line)
+
+
+def _run_streaming_java_indexer(cmd, cwd, env, progress_callback):
+    """Spawn scip-java via Popen, parse its (Maven) output live for reactor
+    progress, and feed ``tick`` events to ``progress_callback``. Returns
+    ``(returncode, raw_output)`` — the raw output is kept so the caller can
+    detect the "multiple build tools" error and surface failures."""
+    process = subprocess.Popen(
+        cmd, cwd=str(cwd), env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+    )
+    assert process.stdout is not None
+    # Determinate bar by module count — tool-agnostic (Maven's [N/M] reactor OR
+    # each module's <module>/target/ path), so sbt gets real progress too.
+    buffered = _stream_progress(
+        process.stdout, progress_callback,
+        parse=_JavaBuildProgress(_build_module_names(cwd)),
+    )
+    process.wait()
+    return process.returncode, '\n'.join(buffered)
+
+
+# Preference order when scip-java can't pick among several build tools. sbt is
+# FIRST because scip-java indexes SCALA through the sbt path (it drives
+# semanticdb-scalac via its sbt plugin); its Maven support is effectively
+# Java-only, so on a Scala repo that ships both (e.g. spark: a Maven pom.xml AND
+# an sbt build) Maven compiles but emits no Scala SemanticDB → "produced no
+# index". sbt-present ⇒ Scala project ⇒ sbt is the indexable build.
+_BUILD_TOOL_PREFERENCE = ('sbt', 'maven', 'gradle', 'bazel', 'mill')
+
+
+def _build_tool_from_error(text: str) -> str | None:
+    """If ``text`` is scip-java's "Multiple build tools detected: A, B" error
+    (spark ships both a Maven ``pom.xml`` and an sbt build), return the
+    preferred build tool among the ones it named — so a retry can force
+    ``--build-tool``. Returns None when the text is any other error."""
+    import re
+    m = re.search(r'Multiple build tools detected:\s*([^.\n]+)', text or '')
+    if not m:
+        return None
+    named = {n.strip().lower()
+             for n in re.split(r'[,\s]+', m.group(1)) if n.strip()}
+    return next((t for t in _BUILD_TOOL_PREFERENCE if t in named), None)
+
+
+def _normalize_java_major(value: str) -> int:
+    """``'17'`` → 17, ``'1.8'`` → 8, ``'21.0.1'`` → 21 (JDK major version)."""
+    parts = str(value).strip().split('.')
+    if parts[0] == '1' and len(parts) > 1:
+        return int(parts[1])
+    return int(parts[0])
+
+
+def _required_java_version(cwd) -> 'int | None':
+    """Deduce the JDK major version the corpus's build DECLARES, so scip-java
+    compiles with a matching JDK (Spark 4.0's pom.xml declares Java 17 — on a
+    newer JDK the SemanticDB often isn't emitted → "produced no index"). Reads,
+    in priority order: ``.java-version`` / ``.tool-versions`` (jenv/asdf), then
+    Maven ``pom.xml`` compiler properties. None when nothing declares one."""
+    import re
+    cwd = Path(cwd)
+    jvf = cwd / '.java-version'
+    if jvf.is_file():
+        m = re.search(r'(\d[\d.]*)', jvf.read_text(errors='replace'))
+        if m:
+            return _normalize_java_major(m.group(1))
+    tvf = cwd / '.tool-versions'
+    if tvf.is_file():
+        m = re.search(r'^\s*java\s+\S*?(\d[\d.]*)',
+                      tvf.read_text(errors='replace'), re.MULTILINE)
+        if m:
+            return _normalize_java_major(m.group(1))
+    pom = cwd / 'pom.xml'
+    if pom.is_file():
+        text = pom.read_text(errors='replace')
+        for tag in ('maven.compiler.release', 'java.version',
+                    'maven.compiler.target', 'maven.compiler.source'):
+            m = re.search(
+                rf'<{re.escape(tag)}>\s*([\d.]+)\s*</{re.escape(tag)}>', text)
+            if m:
+                return _normalize_java_major(m.group(1))
+    return None
+
+
+# Where JDKs live on macOS (system JVMs, Homebrew, asdf, sdkman). Each home has
+# a ``release`` file with ``JAVA_VERSION="..."`` — the authoritative version.
+_JDK_HOME_GLOBS = (
+    '/Library/Java/JavaVirtualMachines/*/Contents/Home',
+    '/opt/homebrew/opt/openjdk@*/libexec/openjdk.jdk/Contents/Home',
+    '/usr/local/opt/openjdk@*/libexec/openjdk.jdk/Contents/Home',
+    '~/.asdf/installs/java/*',
+    '~/.sdkman/candidates/java/*',
+)
+
+
+def _jdk_major(home) -> 'int | None':
+    """Major version of the JDK at ``home`` from its ``release`` file, or None."""
+    import re
+    rel = Path(home) / 'release'
+    if not rel.is_file():
+        return None
+    m = re.search(r'JAVA_VERSION="?([\d._]+)', rel.read_text(errors='replace'))
+    if not m:
+        return None
+    try:
+        return _normalize_java_major(m.group(1).split('_')[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def _locate_jdk(version: int, *, globs=_JDK_HOME_GLOBS) -> 'str | None':
+    """Find an installed JDK of major ``version`` by reading each candidate's
+    ``release`` file — ``/usr/libexec/java_home`` is unreliable for non-Oracle
+    JDKs (it reports "no Java" even when JDKs are present). None if none match."""
+    import glob as _glob
+    for pattern in globs:
+        for path in sorted(_glob.glob(os.path.expanduser(pattern))):
+            home = Path(path)
+            if (home / 'bin' / 'java').exists() and _jdk_major(home) == version:
+                return str(home)
+    return None
+
+
+def _resolve_java_home(cwd, *, locate=None) -> 'str | None':
+    """The JDK home scip-java should compile ``cwd`` with — the version deduced
+    from the build config, located on the system. None when undeducible or no
+    matching JDK is installed (scip-java then falls back to the ambient JDK)."""
+    version = _required_java_version(cwd)
+    if version is None:
+        return None
+    return (locate or _locate_jdk)(version)
 
 
 class JavaIndexerAdapter:
@@ -678,19 +971,42 @@ class JavaIndexerAdapter:
         cwd: Path,
         output: Path,
         env_hints: dict[str, str],
+        progress_callback: 'Callable[[IndexerProgress], None] | None' = None,
     ) -> IndexerResult:
-        cmd = [
-            'scip-java', 'index',
-            '--output', str(output),
-        ]
+        base = ['scip-java', 'index', '--output', str(output)]
+        hint = env_hints.get('build_tool')
+        env = dict(os.environ)
+        # Compile with the JDK the corpus DECLARES (Spark 4.0 → Java 17). On a
+        # mismatched JDK scip-java's SemanticDB often isn't emitted, which shows
+        # up as "produced no index". env_hints['java_home'] overrides.
+        java_home = env_hints.get('java_home') or _resolve_java_home(cwd)
+        if java_home:
+            env['JAVA_HOME'] = str(java_home)
+            env['PATH'] = f"{java_home}/bin:{env.get('PATH', '')}"
+
+        def _invoke(extra) -> tuple[int, str]:
+            """Run scip-java once → (returncode, raw_output). Streams Maven
+            reactor progress live when a callback is given (production);
+            otherwise uses the injected runner (tests / capture)."""
+            if progress_callback is not None:
+                return _run_streaming_java_indexer(
+                    base + extra, cwd, env, progress_callback,
+                )
+            result = self._runner(
+                base + extra, cwd=cwd, capture_output=True, env=env,
+            )
+            return result.returncode, _failure_detail(result, '')
 
         try:
-            result = self._runner(
-                cmd,
-                cwd=cwd,
-                capture_output=True,
-                env=dict(os.environ),
-            )
+            rc, err = _invoke([f'--build-tool={hint}'] if hint else [])
+            # scip-java can't auto-pick when a repo has several build tools
+            # (spark ships both Maven and sbt): it exits nonzero listing them.
+            # Parse that list and retry with the preferred one. An explicit
+            # env_hints['build_tool'] was already forced above, so skip.
+            if rc != 0 and not hint:
+                tool = _build_tool_from_error(err)
+                if tool:
+                    rc, err = _invoke([f'--build-tool={tool}'])
         except FileNotFoundError:
             return IndexerResult(
                 success=False,
@@ -701,13 +1017,11 @@ class JavaIndexerAdapter:
                 ),
             )
 
-        if result.returncode != 0:
+        if rc != 0:
             return IndexerResult(
                 success=False,
                 indexer_version='',
-                error_message=_failure_detail(
-                    result, 'scip-java returned nonzero exit',
-                ),
+                error_message=err or 'scip-java returned nonzero exit',
             )
 
         return IndexerResult(

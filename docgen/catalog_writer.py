@@ -45,6 +45,8 @@ CATALOG_EXTS = {
     '.md', '.markdown',
     # SCIP-backed languages (Catalog transition + SCIP plan Phase C).
     '.scala', '.sbt', '.java',
+    # Go (scip-go) — SCIP-backed catalog, routed like scala/java.
+    '.go',
     # Vue SFCs route through the javascript SCIP path (see
     # catalog_extractor._detect_language). The .vue.script.* companions
     # the extractor leaves behind are skipped via is_vue_companion so

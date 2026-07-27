@@ -389,6 +389,40 @@ def persist_js_http_clients(
     return total
 
 
+def persist_go_http_clients(
+    db_path: 'Path',
+    sources: 'Iterable[tuple[str, Path]]',
+) -> int:
+    """For each ``(source_name, source_root)``, extract Go ``net/http``
+    client call sites from the source's merged ``.scip`` and persist raw
+    URL strings to ``http_client_calls``.
+
+    Patterns caught: ``http.Get``/``Post``/``Head``/``PostForm``,
+    ``(*http.Client).Get``/``Post``/``Head``, and
+    ``http.NewRequest``/``NewRequestWithContext`` (URL arg). Same
+    per-source isolation as the JS/Python/Scala client wrappers; the
+    extractor reads only ``.go`` documents.
+    """
+    from docgen.scip_go_http_client_extractor import ingest_go_http_clients
+    from library import Library
+
+    library = Library(db_path)
+    total = 0
+    try:
+        for source_name, source_root in sources:
+            with library._conn_provider.acquire() as conn:
+                count = ingest_go_http_clients(
+                    source_name=source_name,
+                    source_root=source_root,
+                    conn=conn,
+                )
+                conn.commit()
+                total += count
+    finally:
+        library.close()
+    return total
+
+
 def persist_python_http_clients(
     db_path: 'Path',
     sources: 'Iterable[tuple[str, Path]]',
@@ -453,6 +487,39 @@ def persist_express_routes(
         for source_name, source_root in sources:
             with library._conn_provider.acquire() as conn:
                 count = ingest_express_routes(
+                    source_name=source_name,
+                    source_root=source_root,
+                    conn=conn,
+                )
+                conn.commit()
+                total += count
+    finally:
+        library.close()
+    return total
+
+
+def persist_go_routes(
+    db_path: 'Path',
+    sources: 'Iterable[tuple[str, Path]]',
+) -> int:
+    """For each ``(source_name, source_root)``, extract Go HTTP routes
+    from the source's merged ``.scip`` and persist to ``api_endpoints``
+    with ``resolution_source='pattern'`` (preserves Swagger rows).
+
+    Patterns caught: gin/echo verb methods (``r.GET``/``e.POST``/…), chi
+    Title-case verbs (``r.Get``/…), and net/http ``HandleFunc``/``Handle``
+    (method ``ANY``). Same coexistence semantics as the Akka/Express/Python
+    route wrappers; the extractor reads only ``.go`` documents.
+    """
+    from docgen.scip_go_route_extractor import ingest_go_routes
+    from library import Library
+
+    library = Library(db_path)
+    total = 0
+    try:
+        for source_name, source_root in sources:
+            with library._conn_provider.acquire() as conn:
+                count = ingest_go_routes(
                     source_name=source_name,
                     source_root=source_root,
                     conn=conn,
@@ -682,7 +749,7 @@ def persist_data_model(db_path, sources, *, index_factory=None, strategies=None,
 
 
 __all__ = [
-    'persist_akka_http_endpoints', 'persist_all_sources', 'persist_api_endpoints', 'persist_config_reads', 'persist_config_values', 'persist_express_routes', 'persist_js_http_clients', 'persist_python_http_clients', 'persist_python_routes', 'persist_scala_http_clients', 'persist_string_literals', 'persist_url_resolver', 'persist_data_model'
+    'persist_akka_http_endpoints', 'persist_all_sources', 'persist_api_endpoints', 'persist_config_reads', 'persist_config_values', 'persist_express_routes', 'persist_go_http_clients', 'persist_go_routes', 'persist_js_http_clients', 'persist_python_http_clients', 'persist_python_routes', 'persist_scala_http_clients', 'persist_string_literals', 'persist_url_resolver', 'persist_data_model'
 ]
 
 

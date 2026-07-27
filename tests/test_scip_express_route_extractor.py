@@ -802,3 +802,45 @@ class TestReIngest:
         assert ('POST', '/new') in rows
         # Swagger row preserved
         assert ('GET', '/swagger') in rows
+
+
+def test_non_js_documents_are_not_read(
+    tmp_path: Path, conn: sqlite3.Connection, monkeypatch,
+) -> None:
+    """Only JS/TS-family docs are read for routes. A Python/Scala doc —
+    e.g. a Databricks spool's Spark/SDK source — must be skipped WITHOUT
+    being read/parsed, so the extractor doesn't walk the whole corpus file
+    by file for routes it cannot contain. The sibling HTTP-client
+    extractors already guard this way; the route extractor now matches.
+
+    Asserted on the read itself (not route output) because non-JS text is
+    already inert to extraction — the defect this guards is the wasted
+    per-file read/parse over a large non-JS corpus.
+    """
+    keep = "app.get('/keep', (req, res) => res.send('ok'));\n"
+    (tmp_path / 'api.js').write_text(keep)
+    (tmp_path / 'service.py').write_text("app.get('/drop', h);\n")
+    (tmp_path / 'Engine.scala').write_text("app.get('/nope', h)\n")
+
+    read_paths: list[str] = []
+    real_read_text = Path.read_text
+
+    def _spy_read_text(self, *a, **k):
+        read_paths.append(self.name)
+        return real_read_text(self, *a, **k)
+    monkeypatch.setattr(Path, 'read_text', _spy_read_text)
+
+    index = ScipIndex(
+        documents=tuple(
+            _ScipDoc(relative_path=rel, occurrences=(), symbols=())
+            for rel in ('api.js', 'service.py', 'Engine.scala')
+        ),
+        source_root=tmp_path,
+    )
+    ingest_express_routes(
+        source_name='myapi', source_root=tmp_path,
+        conn=conn, index_factory=lambda: index,
+    )
+    assert 'api.js' in read_paths          # JS doc is read
+    assert 'service.py' not in read_paths  # non-JS docs are skipped, not read
+    assert 'Engine.scala' not in read_paths

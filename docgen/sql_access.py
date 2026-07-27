@@ -112,7 +112,15 @@ def _parse_sql(sql, dialect=None):
             tried.add(d)
             try:
                 stmt = sqlglot.parse_one(sql, read=d)
-            except (SqlglotError, RecursionError):
+            except (SqlglotError, RecursionError, ValueError, ArithmeticError):
+                # sqlglot can raise beyond SqlglotError on pathological strings,
+                # and these escape a SqlglotError-only guard: a plain ValueError
+                # ("Cannot convert empty name into var." from an empty
+                # identifier), or decimal.InvalidOperation (an ArithmeticError)
+                # when a 1-based dialect type-annotates a bracket subscript whose
+                # number token isn't a valid Decimal — e.g. the JSONPath literal
+                # "$.1.2.3[0]" under 'postgres' → Decimal('1.2.3'). Either way an
+                # unparseable string is simply not SQL.
                 continue
             return stmt if isinstance(stmt, _STATEMENTS) else None
         return None

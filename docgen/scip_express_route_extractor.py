@@ -55,6 +55,14 @@ if TYPE_CHECKING:
     from sqlite3 import Connection
 
 
+# JS/TS source extensions Express/Koa routes can live in. Mirrors the
+# sibling HTTP-client extractors (scip_js_http_client_extractor et al.) so
+# a non-JS corpus — e.g. a Databricks spool's Python/Scala source — isn't
+# read and parsed file-by-file for routes it can't contain.
+_JS_EXTS: tuple[str, ...] = (
+    '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
+)
+
 # HTTP verbs Express/Koa expose as method names on Application/Router.
 # `use` (middleware) and `all` (multi-method) are intentionally excluded
 # from this initial contract.
@@ -303,6 +311,8 @@ def ingest_express_routes(
 
     for doc in index.documents:
         js_path = source_root / doc.relative_path
+        if js_path.suffix.lower() not in _JS_EXTS:
+            continue
         try:
             text = js_path.read_text(
                 encoding='utf-8', errors='replace',

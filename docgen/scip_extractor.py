@@ -352,6 +352,25 @@ def _subtype(
             )
         if kind in ('Variable', 'Field'):
             return 'variable'
+    elif language == 'go':
+        # scip-go emits standard SCIP kinds. Go has no classes: a struct type
+        # is the class-like aggregate, an interface the abstract contract.
+        # Kind names track scip-go's output; a receiver (parent type) marks a
+        # method vs a top-level func, mirroring the python/js dispatch.
+        if kind == 'Struct':
+            return 'go_struct'
+        if kind == 'Interface':
+            return 'go_interface'
+        if kind in ('Method', 'Function'):
+            return 'go_method' if parent_descriptor_kind == 'type' else 'go_function'
+        if kind == 'Field':
+            return 'go_field'
+        if kind == 'Constant':
+            return 'go_const'
+        if kind == 'Variable':
+            return 'go_var'
+        if kind in ('Type', 'TypeAlias'):
+            return 'go_type'
     return None
 
 
@@ -388,6 +407,11 @@ def extract(
         # before this runs, so document_for('Foo.vue') finds the doc.
         language = 'javascript'
         parse_doc = parse_jsdoc
+    elif suffix == '.go':
+        # Godoc doc-comment parsing not yet wired; SCIP signature_text
+        # provides the typed signature, doc comments stay as raw strings
+        # (same posture as python).
+        language = 'go'
     else:
         return []
 

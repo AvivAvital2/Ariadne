@@ -332,22 +332,26 @@ def test_malformed_hocon_returns_empty(tmp_path: Path):
 
 
 def test_parse_failure_is_logged_not_silent(tmp_path: Path, caplog) -> None:
-    """A `.conf` that isn't valid HOCON (an INI-style pip.conf, a PAM
-    limits.conf, or a genuinely malformed file) must NOT be silently
-    swallowed. The extractor logs a warning naming the file — so a config
-    that degraded to file-index-only is visible — then returns [] so the
-    batch sync still keeps going."""
+    """A `.conf` that isn't valid HOCON — a genuinely malformed file, or a
+    non-INI dialect (PAM limits.conf, …) — must NOT be silently swallowed.
+    The extractor logs at DEBUG naming the file (so a config that degraded
+    to file-index-only stays visible when you look) — then returns [] so
+    the batch sync keeps going.
+
+    DEBUG, not WARNING: this fallthrough is expected, not an error. INI-style
+    `.conf` (a `[section]` header) is routed to the INI extractor upstream,
+    so it never reaches this path."""
     import logging
 
     from docgen.catalog_extractor import extract_elements
 
     f = _write(tmp_path, 'broken.conf', 'foo { unclosed = 1\nbar = ')
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG, logger='docgen.hocon_extractor'):
         elements = extract_elements(f, tmp_path)
 
     assert elements == []
     assert any('broken.conf' in r.getMessage() for r in caplog.records), (
-        f"parse failure was not surfaced; warnings="
+        f"parse failure was not surfaced; logs="
         f"{[r.getMessage() for r in caplog.records]}"
     )
 

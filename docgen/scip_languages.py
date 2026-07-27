@@ -85,6 +85,18 @@ LANGUAGES: tuple[LanguageDef, ...] = (
         # endpoint files.
         can_index_standalone=False,
     ),
+    LanguageDef(
+        name='go',
+        source_extensions=frozenset({'.go'}),
+        marker_files=frozenset({'go.mod'}),
+        indexer_kind='go',
+        # scip-go type-checks a Go module via go/packages, so it needs a
+        # go.mod-rooted module — no standalone single-file mode. Each go.mod
+        # is its own scope (like a JVM build marker), but unlike scip-java
+        # there's no build-tool lifecycle to orchestrate: the Go toolchain
+        # compiles fast, so indexing is a single quick pass per module.
+        can_index_standalone=False,
+    ),
 )
 
 
