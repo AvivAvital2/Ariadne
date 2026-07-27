@@ -1010,7 +1010,7 @@ class JavaIndexerAdapter:
                 indexer_version='',
                 error_message=(
                     'scip-java binary not found on PATH — install via '
-                    'Coursier: `cs install scip-java`'
+                    'Coursier: `cs install --contrib scip-java`'
                 ),
             )
 

@@ -3,20 +3,29 @@
 #
 # Two ways to use this:
 #
-#   A) From the Ariadne repo (this file's default): `docker compose up` builds
-#      the image and documents THIS repo (mounted at /workspace) — a self-host
-#      demo. Open http://127.0.0.1:8765.
+#   A) From the Ariadne repo (this file's default): `docker compose up --build`
+#      builds the image and documents THIS repo (mounted at /workspace) — a
+#      self-host demo. Open http://127.0.0.1:8765.
 #
 #   B) To document YOUR OWN projects: build + tag the image once from the Ariadne
 #      repo (`docker build -t ariadne:latest .`), then copy this file into the
-#      directory that holds your projects, delete the `build:` line, and run
+#      directory that holds your projects, delete the `build:` block, and run
 #      `docker compose up` there — `./` then mounts your projects.
 #
-# Requires ANTHROPIC_API_KEY + OPENAI_API_KEY in the environment (or a .env file
-# alongside this compose.yaml).
+# Keys: copy .env.example → .env (ANTHROPIC_API_KEY + OPENAI_API_KEY), or export
+# them in your shell. Never commit .env.
 services:
   ariadne:
-    build: .                       # (mode B: remove this line and rely on the image)
+    build:                         # (mode B: remove this block and rely on the image)
+      context: .
+      args:
+        # Match the host uid so files written into the mounted /workspace are
+        # yours on the host (moot on Docker Desktop; matters on a Linux host —
+        # run `UID=$(id -u) GID=$(id -g) docker compose build`).
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+        # WITH_JVM=0 → slim image without Scala/Java indexing.
+        WITH_JVM: ${WITH_JVM:-1}
     image: ariadne:latest
     ports:
       # localhost-only bind (no auth layer — see the blueprint's exposure note).
@@ -29,9 +38,12 @@ services:
       # All Ariadne-owned data (DB, ariadne.yaml, exported docs, run logs, spool
       # store) persists here via ARIADNE_CONFIG=/data/ariadne.yaml.
       - ariadne-data:/data
+    env_file:
+      - path: .env               # ANTHROPIC_API_KEY + OPENAI_API_KEY
+        required: false          # ok to omit if you export them in the shell instead
     environment:
-      - ANTHROPIC_API_KEY          # doc generation (Claude)
-      - OPENAI_API_KEY             # embeddings / search
+      - ANTHROPIC_API_KEY        # doc generation (Claude) — shell override wins over .env
+      - OPENAI_API_KEY           # embeddings / search
     restart: unless-stopped
 
 volumes:
