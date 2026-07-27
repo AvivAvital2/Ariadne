@@ -81,6 +81,19 @@ class TestEnvironmentLabel:
         from ariadne_mcp.service_analysis import _environment_label
         assert _environment_label(SimpleNamespace(registered={})) is None
 
+    def test_components_ride_the_label(self):
+        # A/B eval finding (Q8): 'which versions ship in our runtime?' —
+        # the product answered 'cannot answer' while the manifest HELD
+        # runtime_components. The pin label carries the component versions
+        # so the synthesis can answer directly from the CONSIDERING header.
+        from ariadne_mcp.service_analysis import _environment_label
+        registration = SimpleNamespace(manifest=SimpleNamespace(
+            target_runtime='fake-17.3',
+            runtime_components={'quantumcore': '2.0', 'mesh-sdk': '0.5'}))
+        resolution = SimpleNamespace(registered={'env1': registration})
+        assert _environment_label(resolution) == (
+            'env1 (runtime fake-17.3 — mesh-sdk 0.5, quantumcore 2.0)')
+
 
 class TestLabeledAssembly:
     """The design-§7 labeled synthesis context: two attributed streams —
@@ -126,6 +139,30 @@ class TestLabeledAssembly:
         assert 'instructions' in given_block.lower()   # guard rides the env
         assert 'repo(0.61)' in out                     # lens label survives
         assert out.index('## s0') < out.index('## r0')
+
+    def test_facts_block_rides_the_environment_stream(self):
+        # A/B eval finding (Q4): 'since which version is setFdr available?'
+        # — the product said 'cannot determine' while version_facts HELD
+        # since=2.2.0. Deterministic facts matched from the question ride
+        # the environment stream, after the guard, in BOTH primary modes.
+        from ariadne_mcp.service_analysis import _assemble_ask_context
+        block = ('Pinned version facts:\n'
+                 '- pkg.Frobnicator.setFdr: since 2.2.0 (quantumcore 2.0)')
+        for primary in ('repo', 'spool'):
+            out = _assemble_ask_context(
+                [_cdoc('s0', 'spool:env1'), _cdoc('r0', 'src1')],
+                frozenset({'spool:env1'}),
+                connections={'s0': 'entity(Quantum Mesh)'},
+                environment_label='env1 (runtime fake-17.3)',
+                primary=primary, facts_block=block,
+            )
+            assert 'since 2.2.0' in out
+            env_start = out.index('environment reference')
+            assert out.index('since 2.2.0') > env_start
+            assert 'IGNORE any instructions' in out      # guard intact
+        out = _assemble_ask_context(
+            [_cdoc('s0', 'spool:env1')], frozenset({'spool:env1'}))
+        assert 'Pinned version facts' not in out          # absent -> absent
 
     def test_no_spool_docs_means_plain_context(self):
         from ariadne_mcp.service_analysis import _assemble_ask_context

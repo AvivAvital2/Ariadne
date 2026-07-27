@@ -119,6 +119,42 @@ class TestVersionFactsStore:
                 assert n == 4
 
 
+class TestFactsForTerms:
+    def test_last_segment_match_scoped_and_capped(self, tmp_path: Path):
+        # The ask path's deterministic lookup: question tokens matched
+        # against fact qualified-name LAST SEGMENTS, corpus-scoped.
+        with Library(tmp_path / 'fft.db') as lib:
+            with lib._conn_provider.acquire() as conn:
+                version_facts.init_version_facts_schema(conn)
+                version_facts.upsert_version_facts(conn, [
+                    version_facts.VersionFactRow(
+                        source_name='env1',
+                        qualified_name='pkg.Frobnicator.setFdr',
+                        fact='since', version='2.2.0',
+                        evidence='@Since("2.2.0")', doc_id='d1',
+                        component='quantumcore'),
+                    version_facts.VersionFactRow(
+                        source_name='env1',
+                        qualified_name='pkg.Frobnicator',
+                        fact='deprecated', version='3.1.1',
+                        evidence='@deprecated', doc_id='d1',
+                        component='quantumcore'),
+                    version_facts.VersionFactRow(
+                        source_name='other',
+                        qualified_name='x.setFdr', fact='since',
+                        version='9.9', evidence='e', doc_id='d2'),
+                ])
+                rows = version_facts.facts_for_terms(
+                    conn, ['env1'], ['setFdr', 'Frobnicator', 'Nothing'])
+                got = {(r.qualified_name, r.fact, r.version) for r in rows}
+                assert got == {
+                    ('pkg.Frobnicator.setFdr', 'since', '2.2.0'),
+                    ('pkg.Frobnicator', 'deprecated', '3.1.1'),
+                }
+                assert version_facts.facts_for_terms(
+                    conn, ['env1'], []) == []
+
+
 class TestExtractForSource:
     """The store's element signatures are TRUNCATED at the annotation
     (measured: 2,861 element docs carry bare '@Since', zero carry

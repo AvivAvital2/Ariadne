@@ -317,3 +317,34 @@ def runtime_components_from_resolution(resolution) -> dict:
             components = manifest.get('runtime_components')
         merged.update(components or {})
     return merged
+
+
+def facts_for_terms(conn, source_names, terms, *, limit: int = 12) -> list:
+    """Facts whose qualified-name LAST SEGMENT matches one of ``terms`` —
+    the ask path's deterministic lookup (the A/B eval showed the synthesis
+    saying "cannot determine" on facts this table held). Corpus-scoped,
+    capped."""
+    terms = [t for t in terms if t]
+    if not terms or not source_names:
+        return []
+    src_ph = ','.join('?' * len(source_names))
+    term_ph = ','.join('?' * len(terms))
+    rows = conn.execute(
+        f"SELECT source_name, qualified_name, fact, version, evidence, "
+        f"doc_id, component FROM version_facts "
+        f"WHERE source_name IN ({src_ph}) "
+        f"AND (qualified_name IN ({term_ph}) OR "
+        + ' OR '.join(["qualified_name LIKE '%.' || ?"] * len(terms))
+        + f") LIMIT {int(limit)}",
+        (*source_names, *terms, *terms),
+    ).fetchall()
+    out = []
+    term_set = set(terms)
+    for row in rows:
+        last = row[1].rsplit('.', 1)[-1]
+        if last in term_set or row[1] in term_set:
+            out.append(VersionFactRow(
+                source_name=row[0], qualified_name=row[1], fact=row[2],
+                version=row[3], evidence=row[4], doc_id=row[5],
+                component=row[6]))
+    return out
