@@ -96,6 +96,9 @@ async def test_run_onboard_pipeline_evolves_through_contract(_fakes):
     assert generate_args['concurrency'] == 6
     assert themes_args['themes_action'] == 'build'
     assert themes_args['model'] == 'claude-opus-4-8'
+    # the themes phase must batch too when the user chose batch — otherwise it
+    # silently runs live at full price despite the batch choice.
+    assert themes_args.get('batch') is True
 
     # D3: progress fired once per phase, rising, labelled, total == 3.
     assert [e[0] for e in progress_events] == [
@@ -124,6 +127,7 @@ async def test_run_onboard_pipeline_evolves_through_contract(_fakes):
     assert vars(calls[0][1])['concurrency'] == 4
     assert vars(calls[1][1])['batch_mode'] == 'never'
     assert vars(calls[1][1])['concurrency'] == 3
+    assert vars(calls[2][1]).get('batch') is False  # themes live when mode='live'
 
     # ---- D5b: a fatal (generate) failure raises; themes NOT reached --
     calls.clear()

@@ -111,6 +111,10 @@ async def run_onboard_pipeline(
     )
     themes_args = argparse.Namespace(
         source=source, themes_action='build', model=model,
+        # Honor the run's batch choice for themes too — otherwise theme
+        # summarization silently runs live at full price even when the user
+        # picked batch (~50% off) for the rest of the onboard.
+        batch=use_batch,
         quiet=not verbose, db=db_path, concurrency=cc,
     )
 
