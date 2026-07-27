@@ -88,7 +88,9 @@ def _trim_related_documents(content: str, max_links: int = 5) -> str:
 # v12 = the package: name-blind dominance + breadth-with-floor participation
 # (two-hop fallback + 0.52 fill gate retired; undecided primaries flip on
 # measured evidence).
-_RETRIEVAL_CACHE_VERSION = 12
+# v13 = sentence-initial titlecase rule replaces the request-verb stopword
+# list (routing inputs change).
+_RETRIEVAL_CACHE_VERSION = 13
 
 class SearchMixin:
     """Search implementation with multi-phase ranking.

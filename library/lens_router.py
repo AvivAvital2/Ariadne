@@ -118,12 +118,7 @@ def match_symbol(term: str, qualified_names) -> bool:
 _STOP_WORDS = frozenset(
     'a an and are as at be by can do does for from how i in is it my of on '
     'or our should that the this to we what when where which will with you '
-    # Imperative request verbs: sentence-initial capitalization makes them
-    # look entity-shaped ('Show' resolved via Dataset.show / SHOW COLUMNS
-    # docs and dragged junk into a name lookup) — they carry no entity
-    # meaning in a question.
-    'your show tell give list explain describe find display provide '
-    'compare summarize'.split()
+    'your'.split()
 )
 
 _WORD_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_'-]*")
@@ -143,6 +138,14 @@ def extract_candidate_terms(question: str, max_words: int = 3) -> list:
             # Stop words at the EDGES trim the gram; one in the MIDDLE means
             # the gram spans two phrases ('data and Python') — not a term.
             if any(w.lower() in _STOP_WORDS for w in gram):
+                continue
+            # The first word's capitalization is orthography, not shape: a
+            # sentence-initial titlecase-only SINGLE word ('Show', 'List',
+            # any English word) is never a candidate term — it replaced the
+            # unmaintainable request-verb word list. Interior capitals and
+            # multi-word grams keep their evidence.
+            if (n == 1 and i == 0 and len(gram[0]) > 1
+                    and gram[0][:1].isupper() and gram[0][1:].islower()):
                 continue
             term = ' '.join(gram)
             if not is_distinctive(term):

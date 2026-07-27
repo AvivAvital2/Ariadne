@@ -237,18 +237,26 @@ class TestExtraction:
         assert 'Quantum Mesh' in terms
         assert 'shipping data' in terms
 
-    def test_imperative_request_verbs_are_stopwords(self):
-        # LOOKUP-probe wart (live): sentence-initial 'Show' resolved as a
-        # crisp entity via Dataset.show / 'SHOW COLUMNS' docs and dragged
-        # junk into a name lookup. Request verbs carry no entity meaning in
-        # questions — they are stop words, as boundaries AND as bare terms.
+    def test_sentence_initial_titlecase_carries_no_shape(self):
+        # GENERAL rule replacing the stop-verb word list (ladder #2): the
+        # first word's capitalization is orthography, not shape — a
+        # sentence-initial titlecase-only SINGLE word ('Show', 'List',
+        # 'Compare', any English word) is never a candidate term. Interior
+        # capitals ('FrobnicateSelector') and multi-word grams starting at
+        # position 0 ('Delta Lake handles...') keep their evidence.
         terms = lens_router.extract_candidate_terms(
             'Show me the Quantum Mesh overview')
         assert 'Show' not in terms
         assert 'Quantum Mesh' in terms             # the real entity survives
-        for verb in ('List', 'Explain', 'Describe', 'Display'):
+        for verb in ('List', 'Explain', 'Wrangle', 'Ponder'):
             assert verb not in lens_router.extract_candidate_terms(
                 f'{verb} the shared ledger limits')
+        # Multi-word gram at position 0 keeps the product entity.
+        assert 'Delta Lake' in lens_router.extract_candidate_terms(
+            'Delta Lake handles concurrent writes how?')
+        # Interior capitals stay symbol-shaped wherever they appear.
+        assert 'FrobnicateSelector' in lens_router.extract_candidate_terms(
+            'FrobnicateSelector still available?')
 
     def test_symbol_shaped_single_tokens_survive(self):
         terms = lens_router.extract_candidate_terms(
