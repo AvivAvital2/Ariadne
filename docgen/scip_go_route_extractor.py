@@ -39,14 +39,19 @@ from typing import TYPE_CHECKING, Callable
 from ast_grep_py import SgRoot
 
 from docgen.scip_extractor import ScipIndex, _ScipDoc
+from docgen.scip_go_ast import (
+    _GO_EXTS,
+    _GO_STRING_KINDS,
+    _argument_expressions,
+    _argument_list,
+    _build_call_index,
+    _select_call_with_args,
+)
 from docgen.scip_string_literal_extractor import lookup_literal_at_position
 
 if TYPE_CHECKING:
     from sqlite3 import Connection
 
-
-# Go source extension — matches the LANGUAGES registry's go entry.
-_GO_EXTS: tuple[str, ...] = ('.go',)
 
 # HTTP verbs gin/echo expose as UPPERCASE method names and chi exposes as
 # Title-case. Classification accepts both forms and normalizes to uppercase.
@@ -90,49 +95,6 @@ def _classify_symbol(symbol: str) -> str | None:
     return None
 
 
-def _node_start(node) -> tuple[int, int]:
-    r = node.range()
-    return (r.start.line, r.start.column)
-
-
-def _callee_position(call_node) -> tuple[int, int] | None:
-    """Position of the method-name token scip-go anchors: the
-    ``field_identifier`` of a ``selector_expression`` callee
-    (``obj.Method`` / ``pkg.Func``), or a bare ``identifier`` callee."""
-    children = list(call_node.children())
-    if not children:
-        return None
-    func = children[0]
-    kind = func.kind()
-    if kind == 'selector_expression':
-        for c in reversed(list(func.children())):
-            if c.kind() == 'field_identifier':
-                return _node_start(c)
-        return None
-    if kind == 'identifier':
-        return _node_start(func)
-    return None
-
-
-def _argument_list(call_node):
-    for c in call_node.children():
-        if c.kind() == 'argument_list':
-            return c
-    return None
-
-
-def _argument_expressions(args_node) -> list:
-    return [
-        c for c in args_node.children()
-        if c.kind() not in ('(', ')', ',')
-    ]
-
-
-_GO_STRING_KINDS: tuple[str, ...] = (
-    'interpreted_string_literal', 'raw_string_literal',
-)
-
-
 def _path_literal(
     node, *, conn: 'Connection', source_name: str, file: str,
 ) -> str | None:
@@ -154,22 +116,6 @@ def _path_literal(
 
 def _normalize_path(path: str) -> str:
     return _GO_PARAM_RE.sub(r'{\1}', path)
-
-
-def _build_call_index(root) -> dict[tuple[int, int], list]:
-    out: dict[tuple[int, int], list] = {}
-    for call in root.find_all(kind='call_expression'):
-        pos = _callee_position(call)
-        if pos is not None:
-            out.setdefault(pos, []).append(call)
-    return out
-
-
-def _select_call_with_args(calls: list):
-    for call in calls:
-        if _argument_list(call) is not None:
-            return call
-    return None
 
 
 def _extract_routes_from_doc(

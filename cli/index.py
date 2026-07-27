@@ -201,6 +201,14 @@ def _default_indexer_registry() -> dict:
     }
 
 
+def _source_has_go(root) -> bool:
+    """True if any Go source lives under ``root``. Gates the Go SCIP extractors:
+    they load the whole SCIP index before filtering to ``.go``, so a non-Go
+    corpus would pay that load for nothing without this cheap filesystem check
+    (mirrors how the Akka extractor gates on ``uses_akka_http``)."""
+    return any(Path(root).rglob('*.go'))
+
+
 def _scope_label(entry: dict, kind: str) -> str:
     """Label for an intermediate .scip file. ``cwd='.'`` becomes just
     the kind; nested cwd flattens slashes for safe filenames."""
@@ -450,10 +458,12 @@ def cmd_index(
         # it retries WITHOUT --force re-indexing everything else. ``--force``
         # re-runs all. This is what makes a re-run of ``onboard --approve`` not
         # re-index the scopes that already succeeded.
+        # Invariant across this source's scopes → compute once, capture below.
+        max_days = cfg.effective_scip_staleness_days(source_name)
+
         def _cached_index_fresh(out: Path) -> bool:
             if getattr(args, 'force', False) or not out.exists():
                 return False
-            max_days = cfg.effective_scip_staleness_days(source_name)
             if max_days is None:              # staleness-exempt → always reuse
                 return True
             age_days = (
@@ -980,12 +990,16 @@ def cmd_index(
                 f'route(s) → api_endpoints[/green]',
             )
 
-        # Go route extraction (gin / echo / chi / net-http). The extractor
-        # reads only .go documents, so it's a cheap no-op on non-Go corpora.
-        with console.status('[bold cyan]extracting Go routes…'):
-            go_routes = persist_go_routes(
-                Path(cfg.db_path), scoped_pairs,
-            )
+        # Go route extraction (gin / echo / chi / net-http). Gated on Go
+        # actually being present: the extractor loads the whole SCIP index
+        # before filtering to .go, so skip non-Go sources rather than pay that
+        # load for an empty result (same shape as the Akka gate above). The
+        # filtered set is reused by the Go HTTP-client extractor below.
+        go_pairs = [p for p in scoped_pairs if _source_has_go(p[1])]
+        go_routes = 0
+        if go_pairs:
+            with console.status('[bold cyan]extracting Go routes…'):
+                go_routes = persist_go_routes(Path(cfg.db_path), go_pairs)
         if go_routes and not quiet:
             console.print(
                 f'[green]Extracted {go_routes} Go route(s) '
@@ -1033,11 +1047,12 @@ def cmd_index(
                 f'→ http_client_calls[/green]',
             )
 
-        # Go net/http client extraction. Reads only .go documents.
-        with console.status('[bold cyan]extracting Go HTTP clients…'):
-            go_http = persist_go_http_clients(
-                Path(cfg.db_path), scoped_pairs,
-            )
+        # Go net/http client extraction — gated on the same Go-presence set as
+        # the Go routes above (reused, so the tree is walked once).
+        go_http = 0
+        if go_pairs:
+            with console.status('[bold cyan]extracting Go HTTP clients…'):
+                go_http = persist_go_http_clients(Path(cfg.db_path), go_pairs)
         if go_http and not quiet:
             console.print(
                 f'[green]Extracted {go_http} Go HTTP call(s) '
@@ -1058,6 +1073,13 @@ def cmd_index(
                 f'[green]Resolved {resolved} URL→endpoint edge(s) '
                 f'→ api_calls[/green]',
             )
+
+        # Stamp the extraction-coverage version on each indexed source so a
+        # later `check` / `sync --status` can detect SCIP data that predates a
+        # coverage change (content-based staleness can't see a code-level one).
+        from docgen.extraction_coverage import stamp_coverage
+        for _name, _root in scoped_pairs:
+            stamp_coverage(_root)
 
     return 0
 

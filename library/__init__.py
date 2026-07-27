@@ -623,14 +623,6 @@ class ScopedLibrary:
             if self._edge_in_closure(e)
         ]
 
-    # SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999 (pre-3.32) or
-    # 32766 (3.32+). We keep the per-query total under the conservative
-    # 999 limit so whole-catalog calls (e.g.,
-    # graph_builder.update_semantic_edges_for) don't trip the limit on
-    # older sqlite. The chunk size is adjusted for the closure size
-    # below: id_placeholders + src_placeholders ≤ _FILTER_VAR_BUDGET.
-    _FILTER_VAR_BUDGET = 800
-
     def _filter_ids_by_closure(self, doc_ids):
         """Return the subset of ``doc_ids`` whose ``source_name`` is in
         the closure. Caller passes any sequence of ids; we intersect at
@@ -640,18 +632,16 @@ class ScopedLibrary:
             return []
         if not self._closure:
             return []
+        from library.sql_vars import chunk_ids
         doc_ids = list(doc_ids)
         closure_params = self._closure_params
         src_placeholders = ','.join('?' * len(closure_params))
-        # Total bound params per query = chunk_size + len(closure_params);
-        # cap chunk_size accordingly so a wide closure cannot push the
-        # query over SQLite's variable limit. At least 1, so progress
-        # still happens even with absurdly wide closures.
-        chunk_size = max(1, self._FILTER_VAR_BUDGET - len(closure_params))
         allowed: list[str] = []
         with self._library._conn_provider.acquire() as conn:
-            for i in range(0, len(doc_ids), chunk_size):
-                chunk = doc_ids[i:i + chunk_size]
+            # Each chunk's query also binds the closure params, so reserve their
+            # width from the budget — a wide closure shrinks the chunk instead
+            # of pushing the statement over SQLite's variable limit.
+            for chunk in chunk_ids(doc_ids, reserved=len(closure_params)):
                 id_placeholders = ','.join('?' * len(chunk))
                 # Admit NULL-source theme rows alongside in-closure
                 # sources: themes are cross-source by design (see

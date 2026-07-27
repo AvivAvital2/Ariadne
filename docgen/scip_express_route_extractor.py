@@ -59,9 +59,8 @@ if TYPE_CHECKING:
 # sibling HTTP-client extractors (scip_js_http_client_extractor et al.) so
 # a non-JS corpus — e.g. a Databricks spool's Python/Scala source — isn't
 # read and parsed file-by-file for routes it can't contain.
-_JS_EXTS: tuple[str, ...] = (
-    '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
-)
+# One authoritative source (docgen/scip_languages.py) — no drift, no misroute.
+from docgen.scip_languages import JS_GRAMMAR_EXTS as _JS_EXTS  # noqa: E402
 
 # HTTP verbs Express/Koa expose as method names on Application/Router.
 # `use` (middleware) and `all` (multi-method) are intentionally excluded

@@ -147,6 +147,14 @@ async def cmd_check(args: argparse.Namespace) -> int:
 
     console.print(table)
 
+    # Extraction-coverage staleness: a code-level change to what the SCIP
+    # extractors cover is invisible to the content-based staleness above.
+    # Surfaced regardless of ignore_staleness (a self-clearing upgrade signal).
+    from docgen.extraction_coverage import coverage_notice
+    _cov = coverage_notice(source_name or str(source_path), source_path)
+    if _cov:
+        console.print(f'[yellow]⚠ {_cov}[/yellow]')
+
     if args.verbose and status['stale_paths']:
         console.print()
         console.print('[yellow]Stale files:[/yellow]')

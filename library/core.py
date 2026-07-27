@@ -7,28 +7,13 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from library.sql_vars import chunk_ids
 from schema import CATALOG_KIND_FILE_INDEX, Chunk, ContentType, Document, Section
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 _logger = logging.getLogger(__name__)
-
-# Max bind variables per ``WHERE id IN (...)`` query. SQLite's
-# SQLITE_MAX_VARIABLE_NUMBER is 999 on older builds (32766 on newer); 900 is
-# safely under both. Batch-by-id reads chunk their id list to this so a large
-# corpus (e.g. a Databricks spool's ~38k scoped docs) never trips
-# ``sqlite3.OperationalError: too many SQL variables``.
-_SQL_MAX_VARS = 900
-
-
-def _chunked(seq, size: int | None = None):
-    """Yield successive slices of ``seq``. ``size`` defaults to the
-    module-level ``_SQL_MAX_VARS`` read at CALL time (so tests can lower it)."""
-    step = size if (size and size > 0) else _SQL_MAX_VARS
-    for i in range(0, len(seq), step):
-        yield seq[i:i + step]
-
 
 # file_index docs are pure derived index data (one per source file, listing
 # its element ids). They are stored deliberately unembedded, so a NULL
@@ -363,7 +348,7 @@ class CoreMixin:
 
         result: dict[str, NDArray[np.float32]] = {}
         with self._conn_provider.acquire() as conn:
-            for chunk in _chunked(doc_ids):
+            for chunk in chunk_ids(doc_ids):
                 placeholders = ','.join('?' * len(chunk))
                 rows = conn.execute(
                     f'SELECT id, embedding FROM documents WHERE id IN ({placeholders}) AND embedding IS NOT NULL',
@@ -385,7 +370,7 @@ class CoreMixin:
 
         doc_map: dict[str, Document] = {}
         with self._conn_provider.acquire() as conn:
-            for chunk in _chunked(doc_ids):
+            for chunk in chunk_ids(doc_ids):
                 placeholders = ','.join('?' * len(chunk))
                 rows = conn.execute(
                     f'''SELECT id, content_type, title, content, source_files, embedding,
@@ -605,7 +590,7 @@ class CoreMixin:
             return {}
         result: dict[str, list[Section]] = {did: [] for did in doc_ids}
         with self._conn_provider.acquire() as conn:
-            for chunk in _chunked(doc_ids):
+            for chunk in chunk_ids(doc_ids):
                 placeholders = ','.join('?' * len(chunk))
                 rows = conn.execute(
                     f'''SELECT document_id, idx, heading, description, content, embedding

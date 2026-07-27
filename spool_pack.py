@@ -6,6 +6,7 @@ spool source's documents, embeddings included, so installing never
 re-embeds (design §9 knowledge pack · §17 storage · §18.6.1/.2 tagging).
 """
 import hashlib
+import shutil
 import sqlite3
 import tempfile
 import zipfile
@@ -14,6 +15,7 @@ from pathlib import Path
 import yaml
 
 from config import OFFICIAL_DOC_PROVENANCE
+from docgen.extraction_coverage import EXTRACTION_COVERAGE_VERSION
 from spools import SpoolError, SpoolManifest, spool_source_id
 
 # The pack container format this Ariadne writes and reads. Bump on any
@@ -152,15 +154,23 @@ def _copy_source_scip(src, dest, source_name, *, dest_source_name=None):
                 'VALUES (?,?,?,?,?,?,?,?,?,?)',
                 [(r[0], target_source, *r[2:]) for r in sym_rows],
             )
+            # Chunk the id list so a large corpus's symbol set can't exceed
+            # SQLite's bind-variable limit (each chunk is bound twice by the
+            # caller/callee OR → copies=2). An edge whose caller and callee land
+            # in different chunks is fetched twice; the INSERT OR IGNORE below
+            # dedupes it on the edge primary key.
+            from library.sql_vars import chunk_ids
             ids = [r[0] for r in sym_rows]
-            placeholders = ','.join('?' * len(ids))
-            edge_rows = sconn.execute(
-                'SELECT caller_canonical_id, callee_canonical_id, edge_type, '
-                f'file, line, confidence FROM scip_edges WHERE '
-                f'caller_canonical_id IN ({placeholders}) OR '
-                f'callee_canonical_id IN ({placeholders})',
-                ids + ids,
-            ).fetchall()
+            edge_rows = []
+            for chunk in chunk_ids(ids, copies=2):
+                placeholders = ','.join('?' * len(chunk))
+                edge_rows.extend(sconn.execute(
+                    'SELECT caller_canonical_id, callee_canonical_id, edge_type, '
+                    f'file, line, confidence FROM scip_edges WHERE '
+                    f'caller_canonical_id IN ({placeholders}) OR '
+                    f'callee_canonical_id IN ({placeholders})',
+                    chunk + chunk,
+                ).fetchall())
             dconn.executemany(
                 'INSERT OR IGNORE INTO scip_edges (caller_canonical_id, '
                 'callee_canonical_id, edge_type, file, line, confidence) '
@@ -261,19 +271,9 @@ def build_pack(
         embedding_dim=embedding_dim,
         corpus_shas=dict(corpus_shas or {}),
         taxonomy=tuple(taxonomy or ()),
+        extraction_coverage_version=EXTRACTION_COVERAGE_VERSION,
     )
-    manifest_yaml = yaml.safe_dump({
-        'environment': manifest.environment,
-        'version': manifest.version,
-        'target_runtime': manifest.target_runtime,
-        'certified_docs': list(manifest.certified_docs),
-        'checksum': manifest.checksum,
-        'pack_format': manifest.pack_format,
-        'embedding_model': manifest.embedding_model,
-        'embedding_dim': manifest.embedding_dim,
-        'corpus_shas': dict(manifest.corpus_shas),
-        'taxonomy': list(manifest.taxonomy),
-    }, sort_keys=False)
+    manifest_yaml = yaml.safe_dump(manifest.to_dict(), sort_keys=False)
     with zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr('manifest.yaml', manifest_yaml)
         zf.writestr('pack.db', db_blob)
@@ -316,14 +316,10 @@ def install_pack(library, pack_path, *, cache_dir,
     (§5 requires signature + checksum + pinned registry); that is a hard
     prerequisite, tracked in the design, not a nice-to-have.
     """
-    import hashlib
-    import shutil
-    import tempfile as _tempfile
-
     from library import Library
 
     pack_path = Path(pack_path)
-    with _tempfile.TemporaryDirectory() as staging:
+    with tempfile.TemporaryDirectory() as staging:
         staged_db = Path(staging) / 'pack.db'
         try:
             with zipfile.ZipFile(pack_path) as zf:
@@ -469,8 +465,6 @@ def uninstall_pack(library, environment: str, *, cache_dir) -> int:
     real source — and removes the cache dir. Returns the doc count removed.
     Idempotent: uninstalling an absent spool removes nothing and returns 0.
     """
-    import shutil
-
     source_id = spool_source_id(environment)
     doc_ids = [
         meta.id for meta in library.list_documents_lite()

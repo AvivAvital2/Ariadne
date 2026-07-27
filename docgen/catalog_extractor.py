@@ -102,37 +102,16 @@ def _signature(node_text: str, max_lines: int = 1) -> str:
     return ' '.join(lines[:max_lines])                                                                                                                                               
                 
 def _detect_language(path: Path) -> Language | None:
-    ext = path.suffix.lower()
-    if ext == '.py':
-        return 'python'
-    if ext in ('.html', '.htm'):
-        return 'html'
-    if ext in ('.js', '.jsx', '.ts', '.tsx', '.mjs', '.vue'):
-        # .vue routes through the javascript SCIP path; symbols come from
-        # the vue-mapped index (the .vue.script.* companion's occurrences
-        # translated back to .vue), never from ast-grep on raw SFC source.
-        return 'javascript'
-    if ext == '.json':
-        return 'json'
-    if ext in ('.yaml', '.yml'):
-        return 'yaml'
-    if ext in ('.md', '.markdown'):
-        return 'markdown'
-    if ext in ('.scala', '.sbt'):
-        return 'scala'
-    if ext == '.java':
-        return 'java'
-    if ext == '.go':
-        return 'go'
-    if ext == '.conf':
-        return 'hocon'
-    if ext == '.css':
-        return 'css'
-    if ext == '.rst':
-        return 'rst'
-    if path.name == 'Dockerfile' or path.name.startswith('Dockerfile.') or ext == '.dockerfile':
-        return 'dockerfile'
-    return None
+    """The doc-generation language for ``path`` — delegates to the single shared
+    detector (:func:`docgen.doc_languages.detect_doc_language`) so catalog
+    extraction and cost estimation can't disagree on a file's language.
+
+    ``.vue`` maps to javascript: symbols come from the vue-mapped index (the
+    ``.vue.script.*`` companion's occurrences translated back to ``.vue``),
+    never from ast-grep on raw SFC source.
+    """
+    from docgen.doc_languages import detect_doc_language
+    return detect_doc_language(path)  # type: ignore[return-value]
 def _first_identifier(node) -> str | None:
     for child in node.children():
         if child.kind() == 'identifier':

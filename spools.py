@@ -63,14 +63,6 @@ def is_spool_source(source_name) -> bool:
 # built from the low-confidence raw-file / ast-grep fallback — that path is
 # exactly what a Spool exists to replace, so faking it defeats the point.
 
-# Human language names for the umbrella SCIP indexers: the whole JVM family
-# (java/scala/kotlin and any other scip-java-indexed source) routes to the one
-# scip-java adapter, and js→scip-typescript. java/scala also match by their
-# extensions; they're listed here so eligibility holds when a corpus is
-# described by language name rather than by file.
-_SCIP_ELIGIBLE_ALIASES = frozenset(
-    {'java', 'scala', 'kotlin', 'javascript', 'golang'})
-
 # Common source extensions we can NAME when reporting an ungrounded corpus.
 _UNSUPPORTED_CODE_EXT_NAMES = {
     # NB: keep in sync with docgen.scip_languages — a language with a
@@ -99,11 +91,9 @@ def is_scip_eligible(language) -> bool:
     norm = str(language or '').strip().lower().lstrip('.')
     if not norm:
         return False
-    if any(norm == lang.name for lang in LANGUAGES):
+    if any(norm == lang.name or norm in lang.aliases for lang in LANGUAGES):
         return True
-    if ('.' + norm) in _EXT_TO_LANG:
-        return True
-    return norm in _SCIP_ELIGIBLE_ALIASES
+    return ('.' + norm) in _EXT_TO_LANG
 
 
 def unsupported_corpus_language(root) -> str | None:
@@ -163,6 +153,31 @@ class SpoolManifest:
     # code (databricks: parallelism · serialization · autolog-patching · …).
     # Consumed by the consult path to focus the aisle's answers.
     taxonomy: tuple = field(default_factory=tuple)
+    # Extraction-coverage version the pack was built under (0 = pre-tracking →
+    # treated as behind). Lets a consumer flag a pack whose SCIP intelligence
+    # predates a coverage change; the fix is a rebuild (`ariadne spools
+    # create`), since the corpus isn't shipped for a local re-index. See
+    # docgen.extraction_coverage.
+    extraction_coverage_version: int = 0
+
+    def to_dict(self) -> dict:
+        """The manifest as a plain dict for YAML serialization — the inverse of
+        :meth:`from_dict`. Field order matches the dataclass so the dumped
+        manifest stays stable; tuples become lists so a SafeDumper accepts them.
+        """
+        return {
+            'environment': self.environment,
+            'version': self.version,
+            'target_runtime': self.target_runtime,
+            'certified_docs': list(self.certified_docs),
+            'checksum': self.checksum,
+            'pack_format': self.pack_format,
+            'embedding_model': self.embedding_model,
+            'embedding_dim': self.embedding_dim,
+            'corpus_shas': dict(self.corpus_shas),
+            'taxonomy': list(self.taxonomy),
+            'extraction_coverage_version': self.extraction_coverage_version,
+        }
 
     @classmethod
     def from_dict(cls, data: dict) -> 'SpoolManifest':
@@ -195,6 +210,8 @@ class SpoolManifest:
                 embedding_dim=int(emb_dim) if emb_dim is not None else None,
                 corpus_shas=dict(data.get('corpus_shas') or {}),
                 taxonomy=tuple(data.get('taxonomy') or ()),
+                extraction_coverage_version=int(
+                    data.get('extraction_coverage_version', 0) or 0),
             )
         except (ValueError, TypeError) as exc:
             # CRIT-3c: a type-invalid field (non-numeric pack_format/

@@ -25,7 +25,9 @@ from docgen.orm_bindings.engine import Col, Table
 if TYPE_CHECKING:
     from docgen.scip_extractor import ScipIndex
 
-_SCALA_EXTS = ('.scala', '.sbt')
+# One authoritative source; str.endswith needs a tuple, hence the coercion.
+from docgen.scip_languages import SCALA_GRAMMAR_EXTS  # noqa: E402
+_SCALA_EXTS = tuple(SCALA_GRAMMAR_EXTS)
 
 
 class SlickStrategy:

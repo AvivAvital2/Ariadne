@@ -41,6 +41,11 @@ class LanguageDef:
     marker_files: frozenset[str]
     indexer_kind: str
     can_index_standalone: bool
+    # Human names for this language that aren't the internal ``name``: the
+    # umbrella-indexer members (jvm ← java/scala/kotlin) and common synonyms
+    # (typescript ← javascript, go ← golang). One source for name-based
+    # lookups (e.g. spool eligibility) so they can't drift from the registry.
+    aliases: frozenset[str] = frozenset()
 
 
 LANGUAGES: tuple[LanguageDef, ...] = (
@@ -68,6 +73,7 @@ LANGUAGES: tuple[LanguageDef, ...] = (
         # --infer-tsconfig lets scip-typescript work without a real
         # tsconfig.json — handles standalone files.
         can_index_standalone=True,
+        aliases=frozenset({'javascript'}),
     ),
     LanguageDef(
         name='jvm',
@@ -84,6 +90,7 @@ LANGUAGES: tuple[LanguageDef, ...] = (
         # path. Layer C may still target them as cross-language
         # endpoint files.
         can_index_standalone=False,
+        aliases=frozenset({'java', 'scala', 'kotlin'}),
     ),
     LanguageDef(
         name='go',
@@ -96,6 +103,7 @@ LANGUAGES: tuple[LanguageDef, ...] = (
         # there's no build-tool lifecycle to orchestrate: the Go toolchain
         # compiles fast, so indexing is a single quick pass per module.
         can_index_standalone=False,
+        aliases=frozenset({'golang'}),
     ),
 )
 
@@ -113,9 +121,40 @@ _MARKER_TO_LANG: dict[str, LanguageDef] = {
 }
 
 
+# --- Tree-sitter grammar extension sets (SCIP extractor file-filters) --------
+# The SCIP-driven extractors parse source with a tree-sitter grammar to read
+# call structure / string literals. Which files each grammar handles is defined
+# ONCE here so no extractor hand-rolls (and drifts) its own list — and so a file
+# is never handed to the wrong language's grammar.
+
+_TYPESCRIPT = next(lang for lang in LANGUAGES if lang.name == 'typescript')
+
+# The 'javascript' grammar parses JS and TS alike (scip-typescript indexes both;
+# the grammar parses TS leniently — a deliberate, working reuse). Derived from
+# the typescript indexer entry, minus .vue: a raw .vue isn't valid JS, so the
+# Vue path emits a .vue.script.{js,ts} companion that this grammar parses.
+JS_GRAMMAR_EXTS: frozenset[str] = _TYPESCRIPT.source_extensions - frozenset({'.vue'})
+
+# The 'scala' grammar parses .scala plus .sbt build definitions (also Scala
+# syntax). NOT derived from the jvm indexer entry: that bucket also covers
+# .java/.kt (one scip-java indexer), and feeding those to tree-sitter-scala
+# would conflate languages. .sbt is not an indexer source extension. Deriving
+# this would require splitting jvm into scala/java/kotlin — a larger change.
+SCALA_GRAMMAR_EXTS: frozenset[str] = frozenset({'.scala', '.sbt'})
+
+PY_GRAMMAR_EXTS: frozenset[str] = next(
+    lang for lang in LANGUAGES if lang.name == 'python').source_extensions
+GO_GRAMMAR_EXTS: frozenset[str] = next(
+    lang for lang in LANGUAGES if lang.name == 'go').source_extensions
+
+
 __all__ = [
+    'GO_GRAMMAR_EXTS',
+    'JS_GRAMMAR_EXTS',
     'LANGUAGES',
     'LanguageDef',
+    'PY_GRAMMAR_EXTS',
+    'SCALA_GRAMMAR_EXTS',
     '_EXT_TO_LANG',
     '_MARKER_TO_LANG',
 ]

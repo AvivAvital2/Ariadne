@@ -43,9 +43,8 @@ if TYPE_CHECKING:
 
 # Extensions scip-typescript indexes; matches the LANGUAGES registry's
 # typescript entry.
-_JS_EXTS: tuple[str, ...] = (
-    '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
-)
+# One authoritative source (docgen/scip_languages.py) — no drift, no misroute.
+from docgen.scip_languages import JS_GRAMMAR_EXTS as _JS_EXTS  # noqa: E402
 
 
 def _occ_position(occ: _ScipOccurrence) -> tuple[int, int]:

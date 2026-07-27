@@ -91,15 +91,21 @@ def _build_index(
 
 
 def _delete_semantic_for_ids(conn, ids: list[str]) -> None:
-    """Delete semantic_neighbor edges where source or target is in `ids`."""
-    if not ids:
-        return
-    placeholders = ','.join('?' * len(ids))
-    conn.execute(
-        f"DELETE FROM doc_graph WHERE edge_type = 'semantic_neighbor' "
-        f"AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
-        ids + ids,
-    )
+    """Delete semantic_neighbor edges where source or target is in `ids`.
+
+    OR-semantics chunk cleanly: an edge touching any id is cleared when that
+    id's chunk is processed, so the id list is chunked (each chunk is bound
+    twice → ``copies=2``) to stay under SQLite's variable limit.
+    """
+    from library.sql_vars import chunk_ids
+
+    for chunk in chunk_ids(ids, copies=2):
+        placeholders = ','.join('?' * len(chunk))
+        conn.execute(
+            f"DELETE FROM doc_graph WHERE edge_type = 'semantic_neighbor' "
+            f"AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
+            chunk + chunk,
+        )
 
 
 def _delete_semantic_within_ids(conn, ids: list[str]) -> None:
@@ -110,15 +116,24 @@ def _delete_semantic_within_ids(conn, ids: list[str]) -> None:
     element to an out-of-scope one — e.g. a base project↔project edge — is
     left intact. (Contrast ``_delete_semantic_for_ids``, which clears any edge
     touching an id and is right for a single-source refresh.)
+
+    Both-endpoints-in-set can't be chunked by binding id slices — an edge whose
+    endpoints fall in different chunks would be missed — so the ids are staged
+    in a temp table and matched via subquery, which is limit-proof for any
+    ``len(ids)``.
     """
     if not ids:
         return
-    placeholders = ','.join('?' * len(ids))
     conn.execute(
-        f"DELETE FROM doc_graph WHERE edge_type = 'semantic_neighbor' "
-        f"AND source_id IN ({placeholders}) AND target_id IN ({placeholders})",
-        ids + ids,
-    )
+        'CREATE TEMP TABLE IF NOT EXISTS _within_ids (id TEXT PRIMARY KEY)')
+    conn.execute('DELETE FROM _within_ids')
+    conn.executemany(
+        'INSERT OR IGNORE INTO _within_ids VALUES (?)', [(i,) for i in ids])
+    conn.execute(
+        "DELETE FROM doc_graph WHERE edge_type = 'semantic_neighbor' "
+        "AND source_id IN (SELECT id FROM _within_ids) "
+        "AND target_id IN (SELECT id FROM _within_ids)")
+    conn.execute('DROP TABLE _within_ids')
 
 
 def _clear_prior_semantic(conn, source, scope, ids: list[str]) -> None:

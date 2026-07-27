@@ -43,7 +43,8 @@ if TYPE_CHECKING:
     from sqlite3 import Connection
 
 
-_SCALA_EXTS: tuple[str, ...] = ('.scala', '.sbt')
+# One authoritative source (docgen/scip_languages.py) — no drift, no misroute.
+from docgen.scip_languages import SCALA_GRAMMAR_EXTS as _SCALA_EXTS  # noqa: E402
 
 
 def _occ_position(occ: _ScipOccurrence) -> tuple[int, int]:

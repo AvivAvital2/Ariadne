@@ -594,21 +594,30 @@ def _record_theme_synced_hashes(
     """Stamp the current body hash of each (synced) catalog element so it is not
     re-detected next run. ``element_ids=None`` stamps every catalog element
     (first build / one-time baseline adoption)."""
-    sql = (
+    base = (
         "INSERT INTO theme_synced_hashes (element_id, content_hash) "
         "SELECT id, COALESCE(json_extract(metadata, '$.sha_at_sync'), '') "
         "FROM documents WHERE content_type = 'catalog'"
     )
-    params: list = []
+    conflict = (
+        " ON CONFLICT(element_id) DO UPDATE "
+        "SET content_hash = excluded.content_hash"
+    )
+    ids = None
     if element_ids is not None:
         ids = list(element_ids)
         if not ids:
             return
-        sql += f" AND id IN ({', '.join('?' * len(ids))})"
-        params = ids
-    sql += " ON CONFLICT(element_id) DO UPDATE SET content_hash = excluded.content_hash"
     with library._conn_provider.acquire() as conn:
-        conn.execute(sql, params)
+        if ids is None:
+            conn.execute(base + conflict)
+        else:
+            # Chunk the id list so a large changed-element set never exceeds
+            # SQLite's bind-variable limit.
+            from library.sql_vars import chunk_ids
+            for chunk in chunk_ids(ids):
+                ph = ', '.join('?' * len(chunk))
+                conn.execute(f"{base} AND id IN ({ph}){conflict}", chunk)
         conn.commit()
 
 

@@ -15,7 +15,6 @@ import sqlite3
 
 import numpy as np
 
-import library.core as core
 from library import Library
 
 _VAR_CAP = 100   # SQLite variable ceiling for this test's connections
@@ -31,10 +30,9 @@ def test_batch_id_reads_chunk_under_sqlite_var_limit(tmp_path, monkeypatch):
         return conn
 
     monkeypatch.setattr(sqlite3, 'connect', _capped)
-    # Chunk well below the cap. raising=False so the pre-fix module (no such
-    # constant) still gets it set — the pre-fix unchunked query then blows the
-    # cap, i.e. this test is red before the fix and green after.
-    monkeypatch.setattr(core, '_SQL_MAX_VARS', 5, raising=False)
+    # Chunk well below the cap so a single unchunked IN(...) would blow it —
+    # the shared budget lives in library.sql_vars now.
+    monkeypatch.setattr('library.sql_vars.SQL_MAX_VARS', 5)
 
     lib = Library(tmp_path / 'lib.db')
     try:

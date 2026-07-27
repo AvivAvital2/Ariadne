@@ -40,11 +40,12 @@ if TYPE_CHECKING:
     from sqlite3 import Connection
 
 
-_PY_EXTS: tuple[str, ...] = ('.py',)
-_JS_EXTS: tuple[str, ...] = (
-    '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
+# One authoritative source (docgen/scip_languages.py) — no drift, no misroute.
+from docgen.scip_languages import (  # noqa: E402
+    JS_GRAMMAR_EXTS as _JS_EXTS,
+    PY_GRAMMAR_EXTS as _PY_EXTS,
+    SCALA_GRAMMAR_EXTS as _SCALA_EXTS,
 )
-_SCALA_EXTS: tuple[str, ...] = ('.scala', '.sbt')
 
 
 def _detect_language(path: Path) -> str | None:

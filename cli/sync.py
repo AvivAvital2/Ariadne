@@ -425,6 +425,12 @@ async def cmd_sync(args: argparse.Namespace) -> int:
                     console.print(f'[yellow]{commit_count} commits behind.[/yellow]')
                 except subprocess.CalledProcessError:
                     console.print('[yellow]Changes detected.[/yellow]')
+            # Code-level extractor-coverage staleness (invisible to the
+            # git-diff staleness above); surfaced regardless of ignore_staleness.
+            from docgen.extraction_coverage import coverage_notice
+            _cov = coverage_notice(source_name, source_path)
+            if _cov:
+                console.print(f'[yellow]⚠ {_cov}[/yellow]')
             return 0
 
         if last_hash == current_hash:

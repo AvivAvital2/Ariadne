@@ -122,27 +122,27 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
 
 def cmd_spools(args: argparse.Namespace) -> int:
     """Dispatch the spools subaction (default: status)."""
-    action = getattr(args, 'spools_action', None)
-    if action == 'create':
-        return _create(args)
-    if action == 'build':
-        return _build(args)
-    if action == 'install':
-        return _install(args)
-    if action == 'acquire':
-        return _acquire(args)
-    if action == 'enable':
-        return _enable(args)
-    if action == 'disable':
-        return _disable(args)
-    if action == 'reconcile':
-        return _reconcile(args)
-    return _status(args)
+    actions = {
+        'create': _create,
+        'build': _build,
+        'install': _install,
+        'acquire': _acquire,
+        'enable': _enable,
+        'disable': _disable,
+        'reconcile': _reconcile,
+    }
+    return actions.get(getattr(args, 'spools_action', None), _status)(args)
 
 
 def _cache_dir(args, config) -> Path:
     cache = getattr(args, 'cache_dir', None)
     return Path(cache) if cache else default_cache_dir(config)
+
+
+def _gaps_by_spool(args, config) -> dict:
+    """Structured resolution gaps keyed by spool name (empty → all ready)."""
+    return {g.spool: g for g in
+            resolve_spools(config, cache_dir=_cache_dir(args, config)).gaps}
 
 
 def _status(args: argparse.Namespace) -> int:
@@ -151,6 +151,7 @@ def _status(args: argparse.Namespace) -> int:
     if not enabled_spools(config):
         print('No spools enabled (add a `spools:` mapping to ariadne.yaml).')
         return 0
+    from docgen.extraction_coverage import EXTRACTION_COVERAGE_VERSION
     resolution = resolve_spools(config, cache_dir=_cache_dir(args, config))
     for name, registration in sorted(resolution.registered.items()):
         manifest = registration.manifest
@@ -158,6 +159,16 @@ def _status(args: argparse.Namespace) -> int:
             f'  registered  {name}  (kind={registration.kind}, '
             f'runtime {manifest.target_runtime}, version {manifest.version})'
         )
+        # Advisory (not a gap — the pack is still usable, so this doesn't
+        # affect the exit code): its SCIP intelligence predates a coverage
+        # change, so a rebuild would refresh it.
+        if manifest.extraction_coverage_version < EXTRACTION_COVERAGE_VERSION:
+            print(
+                f'              ⚠ built under older extraction coverage '
+                f'(v{manifest.extraction_coverage_version}, current '
+                f'v{EXTRACTION_COVERAGE_VERSION}) — rebuild the pack '
+                f'(`ariadne spools create`) to refresh its SCIP intelligence.'
+            )
     for gap in resolution.gaps:
         print(f'  gap         {gap.spool}  [{gap.reason}] {gap.message}')
     return 1 if resolution.gaps else 0
@@ -228,8 +239,6 @@ def _create(args: argparse.Namespace) -> int:
     version) then build it. ``--yes`` skips the interactive setup and
     builds an existing ./spools.yaml unattended (pair with --batch/--live).
     """
-    from pathlib import Path
-
     from spool_acquire import _load_spoolfile, create_spool, setup_recipe
 
     spoolfile = 'spools.yaml'
@@ -279,8 +288,7 @@ def _enable(args: argparse.Namespace) -> int:
     # MEDIUM-2: reconcile only if the spool is actually registered; otherwise
     # surface WHY (not installed / unpinned / mismatched) rather than silently
     # build nothing.
-    gaps = {g.spool: g for g in
-            resolve_spools(config, cache_dir=_cache_dir(args, config)).gaps}
+    gaps = _gaps_by_spool(args, config)
     if args.spool in gaps:
         print(f'  Spool not ready — no cross-source themes built: '
               f'{gaps[args.spool].message}')
@@ -343,8 +351,7 @@ def _reconcile(args: argparse.Namespace) -> int:
     names = [target] if target else sorted(enabled)
     # MEDIUM-2: skip (loudly) any spool that isn't registered — reconciling a
     # not-installed / unpinned / mismatched spool would build nothing silently.
-    gaps = {g.spool: g for g in
-            resolve_spools(config, cache_dir=_cache_dir(args, config)).gaps}
+    gaps = _gaps_by_spool(args, config)
     total_dirty = 0
     with Library(getattr(args, 'db', None) or config.db_path) as library:
         for name in names:

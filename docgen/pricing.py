@@ -19,9 +19,22 @@ producing a misleading number.
 """
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 from attrs import frozen
+
+# claude-sonnet-5 launched on introductory pricing that reverts to the standard
+# rate after this date; resolved by date (below) rather than left in a comment
+# so an estimate run after the cutoff can't silently under-report.
+_SONNET_5_INTRO_END = date(2026, 8, 31)
+
+
+def _sonnet_5_price(today: date) -> tuple[float, float]:
+    """claude-sonnet-5's per-million (input, output) price: introductory
+    (2.00, 10.00) through 2026-08-31, standard (3.00, 15.00) afterward."""
+    return (2.00, 10.00) if today <= _SONNET_5_INTRO_END else (3.00, 15.00)
+
 
 # Per-million-token prices in USD: (input, output).
 # Verified against published rates as of 2026-04. Bump when prices change.
@@ -30,8 +43,7 @@ LLM_PRICING: dict[str, tuple[float, float]] = {
     'gpt-5.4': (2.50, 15.00),
     'gpt-5.5': (5.00, 30.00),
     'claude-sonnet-4-6': (3.00, 15.00),
-    # Introductory pricing through 2026-08-31; standard is (3.00, 15.00) after.
-    'claude-sonnet-5': (2.00, 10.00),
+    'claude-sonnet-5': _sonnet_5_price(date.today()),
     'claude-opus-4-6': (5.00, 25.00),
     'claude-opus-4-7': (5.00, 25.00),
     'claude-opus-4-8': (5.00, 25.00),
@@ -98,34 +110,12 @@ _BATCH_DISCOUNT: float = 0.50
 
 
 def _detect_language(path: Path) -> str | None:
-    """Mirror of catalog_extractor._detect_language for the languages we
-    can estimate. Kept inline to avoid importing the heavy extractor
-    just to read a file extension.
-    """
-    ext = path.suffix.lower()
-    if ext == '.py':
-        return 'python'
-    if ext in ('.html', '.htm'):
-        return 'html'
-    if ext in ('.js', '.jsx', '.ts', '.tsx', '.mjs'):
-        return 'javascript'
-    if ext == '.json':
-        return 'json'
-    if ext in ('.yaml', '.yml'):
-        return 'yaml'
-    if ext in ('.md', '.markdown'):
-        return 'markdown'
-    if ext in ('.scala', '.sbt'):
-        return 'scala'
-    if ext == '.java':
-        return 'java'
-    if ext == '.go':
-        return 'go'
-    if ext == '.rst':
-        return 'rst'
-    if path.name == 'Dockerfile' or path.name.startswith('Dockerfile.') or ext == '.dockerfile':
-        return 'dockerfile'
-    return None
+    """The doc-generation language for ``path`` — the single shared detector
+    (:func:`docgen.doc_languages.detect_doc_language`), so cost estimates can't
+    drift from what catalog extraction actually processes (previously this was a
+    hand-copied mirror that had fallen behind on ``.vue``/``.conf``/``.css``)."""
+    from docgen.doc_languages import detect_doc_language
+    return detect_doc_language(path)
 
 
 def _supported_doc_types_for(language: str | None) -> tuple[str, ...]:

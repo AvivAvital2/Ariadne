@@ -39,12 +39,14 @@ if TYPE_CHECKING:
 # ``javascript`` ast-grep grammar (matching ``catalog_extractor.py``'s
 # convention) — TypeScript-specific syntax outside our area of interest
 # is parsed leniently by tree-sitter-javascript.
-_PY_EXTS: tuple[str, ...] = ('.py',)
-_JS_EXTS: tuple[str, ...] = (
-    '.js', '.jsx', '.ts', '.tsx', '.mjs',
+# Grammar file-filters come from the one authoritative source in
+# docgen/scip_languages.py — no per-extractor list to drift or misroute.
+from docgen.scip_languages import (  # noqa: E402
+    GO_GRAMMAR_EXTS as _GO_EXTS,
+    JS_GRAMMAR_EXTS as _JS_EXTS,
+    PY_GRAMMAR_EXTS as _PY_EXTS,
+    SCALA_GRAMMAR_EXTS as _SCALA_EXTS,
 )
-_SCALA_EXTS: tuple[str, ...] = ('.scala', '.sbt')
-_GO_EXTS: tuple[str, ...] = ('.go',)
 
 
 def _detect_lang(path: Path) -> str | None:
