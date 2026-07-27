@@ -48,6 +48,14 @@ def append_source_excludes(
     # anyway; this is just defaults for new keys we create.
     yaml.indent(mapping=2, sequence=4, offset=2)
 
+    # SAFETY: `yaml` here is a ruamel.yaml.YAML instance (round-trip
+    # loader, typ='rt'), NOT the PyYAML module — so `yaml.load` below
+    # does NOT honor `!!python/*` tags and cannot deserialize arbitrary
+    # objects (verified: every classic PyYAML RCE payload loads as inert
+    # data through this exact path). Static scanners that string-match
+    # `yaml.load(` flag it as unsafe PyYAML; that is a false positive.
+    # Defense in depth: the runtime config reader (config.py) uses
+    # yaml.safe_load, which fails closed (ConstructorError) on such tags.
     with yaml_path.open('r', encoding='utf-8') as f:
         data = yaml.load(f)
 
@@ -124,6 +132,9 @@ def write_source_scip_config(
     yaml.preserve_quotes = True
     yaml.indent(mapping=2, sequence=4, offset=2)
 
+    # SAFETY: ruamel round-trip loader, not PyYAML — safe by default.
+    # See the note in append_source_excludes above re: why `yaml.load`
+    # here cannot execute arbitrary code (scanner false positive).
     with yaml_path.open('r', encoding='utf-8') as f:
         data = yaml.load(f)
 
