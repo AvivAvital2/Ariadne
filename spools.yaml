@@ -18,6 +18,18 @@ runtime_components:
   spark: '4.0.0'
   delta: '4.0.0'
   databricks-sdk-py: '0.121.0'
+# The expert's advisory lens dimensions (concern/opportunity/gotcha) — rides
+# the pack manifest. v1.4.0 shipped `taxonomy: []` because this field lived
+# only in the shipped recipe and an existing spools.yaml seeds `create`
+# wholesale; declared here so the next build carries it.
+taxonomy:
+  - parallelism
+  - cross-row-deps
+  - engine-coupling
+  - serialization
+  - autolog-patching
+  - data-skew
+  - collect-misuse
 # Interaction surfaces (PROVISIONAL, hand-drafted): surface name → keyword
 # STEMS, matched word-start-bounded ('serializ' hits serialization/serializer,
 # never mid-word). The build's tag pass marks doc-grade docs, the pack ships

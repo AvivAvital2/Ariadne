@@ -128,3 +128,40 @@ class TestAisleTaxonomy:
         assert {'parallelism', 'serialization'} <= set(tax)
         # the autolog-patching gotcha is declared, not just generic concerns
         assert 'autolog-patching' in tax
+class TestShippedRecipes:
+    """Shipped recipes seed `spools create` and round-trip verbatim into the
+    working spools.yaml, which is the ONLY file the pack build reads — so a
+    fresh create inherits exactly what the shipped recipe declares. These
+    pins keep the knowledge fields (and honest naming) in that seed."""
+
+    def test_databricks_recipe_declares_knowledge_fields(self) -> None:
+        recipe = yaml.safe_load(
+            Path('spool_content/recipes/databricks.yaml').read_text())
+        assert 'delta lake' in (recipe.get('name_aliases') or [])
+        components = recipe.get('runtime_components') or {}
+        assert {'spark', 'delta', 'databricks-sdk-py'} <= set(components)
+        assert all(components.values())
+        surfaces = recipe.get('surfaces') or {}
+        assert {'serialization', 'parallelism', 'io', 'memory',
+                'state', 'lifecycle'} <= set(surfaces)
+        assert all(isinstance(stems, list) and stems
+                   for stems in surfaces.values())
+
+    def test_databricks_recipe_pins_every_corpus_tag(self) -> None:
+        # A moving branch (main/master) is not a pin; the blessed versions
+        # are known, so the shipped recipe carries real tags.
+        recipe = yaml.safe_load(
+            Path('spool_content/recipes/databricks.yaml').read_text())
+        for repo, spec in recipe['corpus'].items():
+            assert spec.get('tag', '').startswith('v'), repo
+
+    def test_opentofu_recipe_replaces_terraform(self) -> None:
+        # The artifact is named for its actual corpus: OpenTofu (MPL-2.0)
+        # is redistribution-safe; Terraform (BUSL 1.1) is not, and the
+        # shipped name must not brand the pack with it.
+        recipes = Path('spool_content/recipes')
+        assert not (recipes / 'terraform.yaml').exists()
+        recipe = yaml.safe_load((recipes / 'opentofu.yaml').read_text())
+        assert recipe['name'] == 'opentofu'
+        assert recipe['corpus']['opentofu']['url'] == (
+            'https://github.com/opentofu/opentofu')

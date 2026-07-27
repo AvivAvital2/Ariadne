@@ -1130,32 +1130,45 @@ def test_acquire_counts_files_before_clone(tmp_path, fixture_repo, monkeypatch):
     assert events == ['count', ('clone', 7)]
 
 
-def test_setup_recipe_placeholder_pin_falls_back_to_real_tags(tmp_path):
-    """When the compat query can't resolve a repo (the real case: the SDK's
-    releases aren't tied to the DBR runtime, so the live LLM returns null for
-    it) AND its blessed pin is a moving branch (the template's 'main'/'master'
-    placeholders), the picker must offer the repo's real release TAGS — never
-    pin the branch. A spool is a VERSIONED pack; 'main' is not a reproducible
-    pin. Even hitting Enter takes the newest real release, not the placeholder."""
-    import yaml
+def test_setup_recipe_placeholder_pin_falls_back_to_real_tags(
+        tmp_path, monkeypatch):
+    """When the compat query can't resolve a repo (the real case: a repo
+    whose releases aren't tied to the runtime, so the live LLM returns null
+    for it) AND its blessed pin is a moving branch (a template's
+    'main'/'master' placeholder), the picker must offer the repo's real
+    release TAGS — never pin the branch. A spool is a VERSIONED pack; 'main'
+    is not a reproducible pin. Even hitting Enter takes the newest real
+    release, not the placeholder. Synthetic recipe: the shipped ones pin
+    real tags, so the placeholder case lives here."""
+    recipes = tmp_path / 'recipes'
+    recipes.mkdir()
+    (recipes / 'phenv.yaml').write_text(yaml.safe_dump({
+        'name': 'phenv', 'runtime': 'r1', 'version': '1.0.0',
+        'languages': ['python'],
+        'corpus': {
+            'core': {'url': 'https://example.test/core', 'tag': 'v4.0.0'},
+            'sdk': {'url': 'https://example.test/sdk', 'tag': 'main'},
+        },
+    }))
+    monkeypatch.setattr(spool_acquire, '_RECIPES_DIR', recipes)
     out = tmp_path / 'ph.yaml'
 
     def tags_fn(url):
         if 'sdk' in url:
-            return ['0.121.0', '0.120.0']         # real releases, newest-first
+            return ['2.5.0', '2.4.0']              # real releases, newest-first
         return ['v4.0.0']
 
-    # compat resolves spark + delta but NOT the sdk — the exact live-LLM
-    # behaviour ({"databricks-sdk-py": null}) that produced `tag: main`.
+    # compat resolves core but NOT the sdk — the exact live-LLM behaviour
+    # ({"sdk": null}) that the 'tag: main' placeholder used to produce.
     setup_recipe(
-        'databricks', out_path=out, available=['databricks'],
+        'phenv', out_path=out, available=['phenv'],
         prompt=lambda p: '',                       # Enter everywhere
         tags_fn=tags_fn,
-        compat_fn=lambda *a, **k: {'spark': '4.0', 'delta': '4.0'},
-        order_fn=lambda *a, **k: ['spark', 'databricks-sdk-py', 'delta'])
+        compat_fn=lambda *a, **k: {'core': '4.0'},
+        order_fn=lambda *a, **k: ['core', 'sdk'])
     corpus = yaml.safe_load(out.read_text())['corpus']
-    assert corpus['databricks-sdk-py']['tag'] == '0.121.0'   # newest real tag
-    assert corpus['databricks-sdk-py']['tag'] != 'main'      # NEVER the branch
+    assert corpus['sdk']['tag'] == '2.5.0'     # newest real tag
+    assert corpus['sdk']['tag'] != 'main'      # NEVER the branch
 
 
 class TestThemeSpool:
