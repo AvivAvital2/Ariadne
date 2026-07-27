@@ -116,6 +116,15 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     disable_parser.add_argument('--project', required=True,
         help='Project to stop cross-checking against the spool')
 
+    theme_parser = spools_sub.add_parser(
+        'theme',
+        help="Build/refresh a spool's own themes (clustering is free; "
+             'summaries are the paid step — --batch halves the price)',
+    )
+    theme_parser.add_argument('spool', help='Spool/source name')
+    theme_parser.add_argument('--batch', action='store_true',
+        help='Submit summaries via the provider Batch API (~half price)')
+
     reconcile_parser = spools_sub.add_parser(
         'reconcile',
         help='Refresh cross-source themes for enabled spools (after base '
@@ -123,6 +132,36 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     reconcile_parser.add_argument('--spool', default=None,
         help='Reconcile only this spool (default: all enabled)')
+
+
+def _theme(args: argparse.Namespace) -> int:
+    """Cluster + summarize a spool's own themes (`spools theme`)."""
+    from cli.generate import resolve_batch_strategy
+    from spool_acquire import theme_spool
+
+    config = get_config()
+    strategy = None
+    if args.batch:
+        # Bind the strategy to the SPOOL model (spools_model override wins).
+        setattr(args, 'model', config.spools_model or config.model)
+        strategy, provider, key_env = resolve_batch_strategy(args, config)
+        if strategy is None:
+            print(f'Error: {key_env} is not set — export it before '
+                  f'`spools theme --batch` on the {provider} provider.')
+            return 1
+
+    def on_stage(stage, completed, total):
+        print(f'  [{stage}] {completed}/{total}', flush=True)
+
+    summary = theme_spool(args.spool, batch_strategy=strategy,
+                          on_stage=on_stage if strategy is not None else None)
+    if summary is None:
+        print('  no dirty spool themes — nothing to summarize')
+        return 0
+    print(f"  themes: {summary.get('summarized', 0)} summarized, "
+          f"{summary.get('incoherent', 0)} incoherent, "
+          f"{summary.get('failed', 0)} failed")
+    return 1 if summary.get('failed') else 0
 
 
 def cmd_spools(args: argparse.Namespace) -> int:
@@ -135,6 +174,7 @@ def cmd_spools(args: argparse.Namespace) -> int:
         'enable': _enable,
         'disable': _disable,
         'reconcile': _reconcile,
+        'theme': _theme,
     }
     return actions.get(getattr(args, 'spools_action', None), _status)(args)
 

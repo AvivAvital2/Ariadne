@@ -16,6 +16,8 @@ import pytest
 import yaml
 import spool_acquire
 
+from types import SimpleNamespace
+
 from spool_acquire import (
     _default_phases,
     acquire,
@@ -23,6 +25,7 @@ from spool_acquire import (
     create_spool,
     load_packfile,
     setup_recipe,
+    theme_spool,
 )
 from spools import SpoolError, is_scip_eligible, unsupported_corpus_language
 
@@ -1151,3 +1154,51 @@ def test_setup_recipe_placeholder_pin_falls_back_to_real_tags(tmp_path):
     corpus = yaml.safe_load(out.read_text())['corpus']
     assert corpus['databricks-sdk-py']['tag'] == '0.121.0'   # newest real tag
     assert corpus['databricks-sdk-py']['tag'] != 'main'      # NEVER the branch
+
+
+class TestThemeSpool:
+    def test_clusters_union_scope_and_dispatches_by_mode(self, tmp_path, monkeypatch):
+        # Post-hoc theme build for an EXISTING spool (`spools theme`): the
+        # corpus may live under the builder name (create-time store) or under
+        # the installed 'spool:<name>' (consumer/rebuild store) — the pass
+        # clusters over the UNION, resolves the spool model, and hands the
+        # dirty themes to the batched twin when a strategy is given (live
+        # twin otherwise). Zero dirty -> no summarize call, no cost.
+        calls = {}
+        cfg = SimpleNamespace(db_path=str(tmp_path / 'theme.db'),
+                              spools_model='claude-sonnet-5',
+                              model='claude-opus-4-8')
+        monkeypatch.setattr('config.get_config', lambda: cfg)
+
+        def fake_cluster(library, name, sources):
+            calls['cluster'] = (name, set(sources))
+            return calls.get('dirty', 3)
+
+        async def fake_batched(library, writer, strategy, *, model=None, **kw):
+            calls['batched'] = (strategy, model)
+            return {'summarized': 3, 'incoherent': 0, 'failed': 0}
+
+        async def fake_live(library, writer, *, model=None, **kw):
+            calls['live'] = model
+            return {'summarized': 2, 'incoherent': 0, 'failed': 0}
+
+        monkeypatch.setattr('spools.build_spool_internal_themes', fake_cluster)
+        monkeypatch.setattr('docgen.themes.generate_themes_batched', fake_batched)
+        monkeypatch.setattr('docgen.themes.generate_themes', fake_live)
+
+        sentinel = object()
+        got = theme_spool('envx', batch_strategy=sentinel)
+        assert calls['cluster'] == ('envx', {'envx', 'spool:envx'})
+        assert calls['batched'] == (sentinel, 'claude-sonnet-5')
+        assert 'live' not in calls
+        assert got['summarized'] == 3
+
+        calls.clear()
+        got = theme_spool('envx')                      # live twin, spool model
+        assert calls['live'] == 'claude-sonnet-5'
+        assert 'batched' not in calls and got['summarized'] == 2
+
+        calls.clear()
+        calls['dirty'] = 0
+        assert theme_spool('envx') is None             # nothing dirty -> free
+        assert 'batched' not in calls and 'live' not in calls

@@ -705,34 +705,53 @@ def _default_phases(batch_mode=None, onboard_approve=False,
             )
 
     def theme(name):
-        # The spool's OWN theme pass: cluster the corpus into
-        # spool:<name>-associated themes (build_spool_internal_themes) and
-        # summarize the dirty ones. Distinct from onboard's base '' pass above
-        # — corpus themes are tagged to the spool so they never occupy (or
-        # leak from) the base partition. Uses the generate_themes summarizer
-        # directly, so the general refresh_themes / `themes build` flow is
-        # untouched.
-        import asyncio
-
-        from config import get_config
-        from docgen.themes import generate_themes
-        from library import Library
-        from spools import build_spool_internal_themes
-        from writer import LibraryWriter
-
-        model = spools_model or get_config().model
-        with Library(get_config().db_path) as library:
-            if not build_spool_internal_themes(library, name, {name}):
-                return
-
-            async def _summarize():
-                async with LibraryWriter(library) as writer:
-                    await generate_themes(library, writer, model=model)
-
-            asyncio.run(_summarize())
+        # The spool's OWN theme pass — see :func:`theme_spool` (also exposed
+        # as `spools theme` for post-hoc builds).
+        theme_spool(name, model=spools_model)
 
     return {'source_add': source_add, 'index': index, 'onboard': onboard,
             'theme': theme, 'build': build}
+
+
+def theme_spool(name, *, batch_strategy=None, model=None, on_stage=None):
+    """Cluster a spool's OWN corpus into ``spool:<name>``-associated themes
+    and summarize the dirty ones — the create flow's theme phase, standalone
+    (`spools theme`), so a builder can add or refresh a spool's themes
+    post-hoc without re-running create.
+
+    Corpus themes are tagged to the spool so they never occupy (or leak
+    from) the base '' partition; the general ``refresh_themes`` /
+    ``themes build`` flow is untouched. Works on a builder store (docs under
+    NAME) and on an installed/rebuild store (docs under ``spool:<name>``) by
+    clustering over the union. Clustering is free; summaries are the paid
+    step — ``batch_strategy`` routes them through the provider's half-price
+    Batch API. Returns the summarize summary dict, or None when nothing is
+    dirty (no LLM call made).
+    """
+    import asyncio
+
+    from config import get_config
+    from docgen.themes import generate_themes, generate_themes_batched
+    from library import Library
+    from spools import build_spool_internal_themes, spool_source_id
+    from writer import LibraryWriter
+
+    cfg = get_config()
+    model = model or cfg.spools_model or cfg.model
+    with Library(cfg.db_path) as library:
+        if not build_spool_internal_themes(
+                library, name, {name, spool_source_id(name)}):
+            return None
+
+        async def _summarize():
+            async with LibraryWriter(library) as writer:
+                if batch_strategy is not None:
+                    return await generate_themes_batched(
+                        library, writer, batch_strategy, model=model,
+                        on_stage=on_stage)
+                return await generate_themes(library, writer, model=model)
+
+        return asyncio.run(_summarize())
 
 
 def consent_text(packfile: Packfile) -> str:
