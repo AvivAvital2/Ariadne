@@ -94,10 +94,11 @@ class TestLensWiredSearch:
         finally:
             lib.close()
 
-    async def test_expert_only_drops_the_repo_take(self, tmp_path, monkeypatch):
+    async def test_expert_only_spool_primary_repo_as_lens(self, tmp_path, monkeypatch):
         # Pure-target question (no repo subject, spool product entity) ->
-        # spool docs ARE the results; repo docs dropped (the old anchor
-        # floor guaranteed repo docs here).
+        # the SPOOL is the primary ranked channel and the repo is DEMOTED to
+        # the capped, LABELED lens (bidirectional-lens design: labeled
+        # inclusion beats the old silent drop).
         lib = Library(tmp_path / 'lens-wiring.db')
         try:
             _seed_store(lib)
@@ -106,9 +107,14 @@ class TestLensWiredSearch:
                 query='How does Quantum Mesh handle two jobs writing to the same ledger?',
                 limit=4)
             titles = [d.title for d in resp.documents]
-            assert 'Quantum Mesh Overview' in titles, titles
-            assert not any(t.startswith(('Combinatorial', 'General'))
-                           for t in titles), titles
+            assert titles[0] == 'Quantum Mesh Overview', titles
+            repo_docs = [d for d in resp.documents
+                         if d.title.startswith(('Combinatorial', 'General'))]
+            assert len(repo_docs) <= 2, titles
+            assert resp.lens_primary == 'spool'
+            for doc in repo_docs:               # every lens doc is labeled
+                assert resp.spool_connections[doc.id].startswith('repo('), \
+                    resp.spool_connections
         finally:
             lib.close()
 
@@ -132,6 +138,57 @@ class TestLensWiredSearch:
                 d for d in resp.documents if d.title == 'Quantum Mesh Overview')
             assert resp.spool_connections is not None
             assert resp.spool_connections[spool_doc.id] == 'entity(Quantum Mesh)'
+            # Seam question with NO strong repo entity -> the spool is
+            # primary and the named repo rides as the capped labeled lens.
+            assert resp.lens_primary == 'spool'
+            repo_docs = [d for d in resp.documents
+                         if d.title.startswith(('Combinatorial', 'General'))]
+            assert 1 <= len(repo_docs) <= 2, titles
+            for doc in repo_docs:
+                assert resp.spool_connections[doc.id].startswith('repo('), \
+                    resp.spool_connections
+        finally:
+            lib.close()
+
+    async def test_repo_primary_keeps_spool_theme_out_of_repo_channel(
+            self, tmp_path, monkeypatch):
+        # BOTH sides strong -> the artifact anchors (repo primary). The
+        # spool's giant theme summaries must NOT flood the repo channel
+        # (measured live: 3 of 5 slots, zero repo docs) — a spool-association
+        # theme doc is spool-side content: absent, or labeled via the capped
+        # spool channel. Base themes are unaffected repo-side content.
+        lib = Library(tmp_path / 'lens-wiring.db')
+        try:
+            repo_doc = lib.add_document(
+                'explanation', 'Frobnicate Engine Guide', 'repo engine body',
+                embedding=_vec(0.9, np.sqrt(1 - 0.81), 0), source_name='src1',
+            )
+            lib.add_document(
+                'explanation', 'Quantum Mesh Overview', 'spool overview body',
+                embedding=_vec(0.8, 0.6, 0),
+                source_name='spool:fakebricks', _allow_reserved_source=True,
+            )
+            theme_doc = lib.add_document(
+                'theme', 'Mesh Interchange Mega Theme', 'giant theme summary',
+                embedding=_vec(1, 0, 0),          # tops the old repo channel
+                source_name=None,
+            )
+            with lib._conn_provider.acquire() as conn:
+                conn.execute(
+                    'INSERT INTO themes (cluster_id, doc_id, member_count, '
+                    'resolution, last_built_at, last_summarized_at, '
+                    "summary_hash, association) VALUES ('c1', ?, 3, 1.0, "
+                    "'t', 't', 'h', 'spool:fakebricks')", (theme_doc.id,))
+            svc = _service(lib, monkeypatch)
+            resp = await svc._search_uncached(
+                query='How does the src1 Frobnicate Engine handle mesh '
+                      'writes on Quantum Mesh?', limit=4)
+            assert resp.lens_primary == 'repo'
+            titles = [d.title for d in resp.documents]
+            assert titles[0] == 'Frobnicate Engine Guide', titles
+            for doc in resp.documents:            # theme never unlabeled
+                if doc.id == theme_doc.id:
+                    assert doc.id in (resp.spool_connections or {}), titles
         finally:
             lib.close()
 

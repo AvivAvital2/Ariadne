@@ -57,9 +57,29 @@ class TestDocGradeCandidates:
                    metadata={'kind': 'element', 'subtype': 'function',
                              'source_name': 'env1',
                              'qualified_name': 'pkg.mod.helper_fn'})
+        # Bidirectional lens: the spool's OWN theme docs (null-source,
+        # association = the spool source id) are spool-side content — they
+        # join the semantic candidate pool; base ('') themes never do.
+        spool_theme = lib.add_document(
+            'theme', 'Mesh Serialization Overview', 'theme summary body',
+            doc_id='d-spool-theme', source_name=None,
+        )
+        base_theme = lib.add_document(
+            'theme', 'Repo Base Overview', 'base theme body',
+            doc_id='d-base-theme', source_name=None,
+        )
+        with lib._conn_provider.acquire() as conn:
+            conn.executemany(
+                'INSERT INTO themes (cluster_id, doc_id, member_count, '
+                'resolution, last_built_at, last_summarized_at, '
+                "summary_hash, association) VALUES (?, ?, 3, 1.0, 't', 't', "
+                "'h', ?)",
+                [('c-spool', spool_theme.id, 'spool:env1'),
+                 ('c-base', base_theme.id, '')],
+            )
         ids = lens_retrieval.doc_grade_spool_candidates(
             lib, ['spool:env1'])
-        assert set(ids) == {'d-prose', 'd-section'}
+        assert set(ids) == {'d-prose', 'd-section', 'd-spool-theme'}
 
 
 class TestDocsForEntityHits:

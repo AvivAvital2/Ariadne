@@ -41,6 +41,9 @@ class RouteResult:
     crisp_spool: tuple
     subject_named: bool
     fallback_enabled: bool
+    # Bidirectional lens (ratified): which side gets the FULL embedding
+    # ranking; the other side rides as the capped, labeled lens.
+    primary: str = 'repo'
 
 
 def is_distinctive(term: str) -> bool:
@@ -216,6 +219,15 @@ def derive_regime(*, subject_named: bool, repo_hits, spool_hits) -> RouteResult:
         return RouteResult(regime, (), (), subject_named, True)
     if not spool:
         return RouteResult(REPO_ONLY, repo, (), subject_named, False)
-    if not subject_named and _strong(spool) and not _strong(repo):
-        return RouteResult(EXPERT_ONLY, repo, spool, subject_named, False)
+    if _strong(spool) and not _strong(repo):
+        # DOMINANCE (ratified): the environment owns the question's strong
+        # (api/product) entities and the repo has none — the spool becomes
+        # the PRIMARY ranked channel (its docs AND its themes rank on the
+        # ordinary embedding route) and the repo rides as the capped,
+        # labeled lens. The subject anchor only names the regime; phrase
+        # hits never decide dominance, and both-strong anchors on the
+        # artifact (repo primary).
+        regime = FUSE if subject_named else EXPERT_ONLY
+        return RouteResult(regime, repo, spool, subject_named, False,
+                           primary='spool')
     return RouteResult(FUSE, repo, spool, subject_named, False)

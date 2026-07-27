@@ -106,6 +106,27 @@ class TestLabeledAssembly:
         assert 'fake-17.3' in out
         assert out.index('GIVEN') < out.index('CONSIDERING')
 
+    def test_spool_primary_flips_the_streams(self):
+        # Bidirectional lens: on spool-primary questions the ENVIRONMENT is
+        # the given (authoritative, guard intact) and the project's context
+        # is the considering — the repo lens docs carry their labels.
+        from ariadne_mcp.service_analysis import _assemble_ask_context
+        out = _assemble_ask_context(
+            [_cdoc('s0', 'spool:env1'), _cdoc('r0', 'src1')],
+            frozenset({'spool:env1'}),
+            connections={'s0': 'entity(Quantum Mesh)', 'r0': 'repo(0.61)'},
+            environment_label='env1 (runtime fake-17.3)',
+            primary='spool',
+        )
+        assert 'GIVEN' in out and 'CONSIDERING' in out
+        given_block = out[:out.index('CONSIDERING')]
+        assert 'environment reference' in given_block
+        assert 'fake-17.3' in given_block
+        assert 'authoritative' in given_block.lower()
+        assert 'instructions' in given_block.lower()   # guard rides the env
+        assert 'repo(0.61)' in out                     # lens label survives
+        assert out.index('## s0') < out.index('## r0')
+
     def test_no_spool_docs_means_plain_context(self):
         from ariadne_mcp.service_analysis import _assemble_ask_context
         out = _assemble_ask_context(

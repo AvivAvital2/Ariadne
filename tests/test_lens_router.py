@@ -98,6 +98,7 @@ class TestRegimeDerivation:
         )
         assert r.regime == 'repo-only'
         assert not r.fallback_enabled     # crisp repo signal: no probing
+        assert r.primary == 'repo'
 
     def test_seam_named_subject_fuses(self):
         r = lens_router.derive_regime(
@@ -106,6 +107,11 @@ class TestRegimeDerivation:
             spool_hits=[_hit('Quantum Mesh', 'title', 'product')],
         )
         assert r.regime == 'fuse'
+        # RATIFIED dominance rule (bidirectional lens): the environment owns
+        # the question's strong entities and the repo has none — the spool
+        # becomes the PRIMARY ranked channel; the named repo rides as the
+        # capped, labeled lens.
+        assert r.primary == 'spool'
 
     def test_pure_target_expert_only_over_repo_phrase(self):
         # Entity-class weighting: spool product entity vs repo
@@ -117,6 +123,7 @@ class TestRegimeDerivation:
                         _hit('shared ledger', 'heading', 'phrase')],
         )
         assert r.regime == 'expert-only'
+        assert r.primary == 'spool'
 
     def test_repo_api_hit_blocks_expert_only(self):
         # A repo api/product-class hit keeps the repo take (fuse), even
@@ -127,6 +134,7 @@ class TestRegimeDerivation:
             spool_hits=[_hit('Quantum Mesh', 'title', 'product')],
         )
         assert r.regime == 'fuse'
+        assert r.primary == 'repo'        # both strong: the artifact anchors
 
     def test_named_subject_blocks_expert_only(self):
         r = lens_router.derive_regime(
@@ -141,6 +149,7 @@ class TestRegimeDerivation:
             subject_named=True, repo_hits=[], spool_hits=[])
         assert r.regime == 'repo-only'
         assert r.fallback_enabled         # gated semantic probing allowed
+        assert r.primary == 'repo'
 
     def test_no_signal_unnamed_honest_gap(self):
         r = lens_router.derive_regime(
@@ -156,6 +165,7 @@ class TestRegimeDerivation:
             spool_hits=[_hit('shared ledger', 'heading', 'phrase')],
         )
         assert r.regime == 'fuse'
+        assert r.primary == 'repo'        # phrase never decides dominance
 
     def test_result_carries_the_evidence(self):
         repo = [_hit('combinatorial pruning', 'title', 'phrase')]

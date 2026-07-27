@@ -38,15 +38,23 @@ class SpoolContribution:
 
 
 def doc_grade_spool_candidates(library, sources) -> list:
-    """Doc ids of the spool side's DOC-GRADE semantic candidates."""
+    """Doc ids of the spool side's DOC-GRADE semantic candidates.
+
+    Includes the spool's OWN theme summaries: theme docs are null-source,
+    but their ``themes.association`` equals the spool source id, so they are
+    spool-side content (bidirectional lens) — base ('') themes never match.
+    """
     placeholders = ','.join('?' * len(sources))
     with library._conn_provider.acquire() as conn:
         return [
             row[0] for row in conn.execute(
                 f'SELECT id FROM documents '
                 f'WHERE source_name IN ({placeholders}) '
-                f'AND {_DOC_GRADE_SQL}',
-                tuple(sources),
+                f'AND {_DOC_GRADE_SQL} '
+                f'UNION '
+                f'SELECT doc_id FROM themes '
+                f'WHERE association IN ({placeholders})',
+                (*sources, *sources),
             )
         ]
 

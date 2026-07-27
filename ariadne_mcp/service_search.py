@@ -77,7 +77,9 @@ def _trim_related_documents(content: str, max_links: int = 5) -> str:
 # surface-scoped fallback (no-crisp result sets change where tags exist).
 # v6 = matrix-recovery accessor: semantic fill/ordering return where a stale
 # matrix left them dark — matrix-less cached rows must not replay.
-_RETRIEVAL_CACHE_VERSION = 6
+# v7 = bidirectional lens: spool-primary composition + repo-as-lens + the
+# spool-theme repo-channel partition (routed result sets change).
+_RETRIEVAL_CACHE_VERSION = 7
 
 class SearchMixin:
     """Search implementation with multi-phase ranking.
@@ -280,6 +282,7 @@ class SearchMixin:
                 repo_ids, query, limit, weights)
 
         contributions = []
+        flipped = route.primary == 'spool'
         if route.regime in ('fuse', 'expert-only'):
             query_embedding = None
             try:
@@ -288,19 +291,35 @@ class SearchMixin:
                 _logger.debug(
                     'lens: query embed failed — entity admissions only',
                     exc_info=True)
-            spool_limit = (
-                limit if route.regime == 'expert-only' else max(2, limit // 2)
-            )
+            # Spool-primary questions give the spool the FULL window (its
+            # docs and themes on the ordinary embedding route); repo-primary
+            # fuse keeps the spool as the capped lens.
+            spool_limit = limit if flipped else max(2, limit // 2)
             contributions = select_spool_docs(
                 self.library, matrix, retrieval_sources, route.crisp_spool,
                 query_embedding=query_embedding, limit=spool_limit,
             )
 
-        if route.regime == 'expert-only':
-            if contributions:
-                ordered = [c.doc_id for c in contributions][:limit]
+        lens_pairs: list = []
+        if flipped:
+            # Bidirectional lens (ratified): the spool is the PRIMARY ranked
+            # channel and the repo rides as the capped, LABELED lens —
+            # labeled inclusion beats expert-only's old silent drop.
+            # Degrades to the repo ranking when the environment resolves no
+            # docs (never empty for structural reasons).
+            _LENS_CAP = 2
+            repo_pairs = (await _repo_ranked()) if repo_ids else []
+            spool_ordered = [c.doc_id for c in contributions]
+            if spool_ordered:
+                lens_pairs = repo_pairs[:_LENS_CAP]
+                keep = max(1, limit - len(lens_pairs)) if lens_pairs else limit
+                head = spool_ordered[:keep]
+                seen = set(head)
+                ordered = (
+                    head + [d for d, _ in lens_pairs if d not in seen]
+                )[:limit]
             else:
-                ordered = [d for d, _ in await _repo_ranked()][:limit]
+                ordered = [d for d, _ in repo_pairs][:limit]
         else:
             repo_ranked = [d for d, _ in await _repo_ranked()]
             if route.regime == 'fuse':
@@ -324,6 +343,10 @@ class SearchMixin:
             c.doc_id: f'{c.connection}({c.detail})'
             for c in contributions if c.doc_id in kept
         }
+        connections.update({
+            doc_id: f'repo({score:.2f})'
+            for doc_id, score in lens_pairs if doc_id in kept
+        })
         n = len(ordered)
         scored = [(did, (n - i) / n if n else 0.0)
                   for i, did in enumerate(ordered)]
@@ -428,6 +451,7 @@ class SearchMixin:
         effective_query = query.strip() if query else ''
         spool_gap_hint_text = None
         lens_connections: dict | None = None
+        lens_primary: str | None = None
         if effective_query:
             if spool_sources:
                 # Lens routing (designs/spool-lens-router.md §6). On routed
@@ -443,8 +467,14 @@ class SearchMixin:
                 from spools import is_spool_source, spool_gap_hint
                 route = self._lens_route(
                     effective_query, lite_docs, spool_sources, spool_fp)
+                # Bidirectional lens partition: the spool's OWN theme docs
+                # are null-source but spool-SIDE content — they must never
+                # compete in the repo channel (measured live: three giant
+                # summaries displaced every repo doc). Base themes stay.
+                spool_theme_ids = self._spool_theme_doc_ids(spool_sources)
                 repo_ids = [d.id for d in lite_docs
-                            if not is_spool_source(d.source_name)]
+                            if not is_spool_source(d.source_name)
+                            and d.id not in spool_theme_ids]
                 corpus_names = {
                     s.split(':', 1)[1] for s in spool_sources if ':' in s}
                 retrieval_sources = sorted(set(spool_sources) | corpus_names)
@@ -473,6 +503,7 @@ class SearchMixin:
                 ranked_ids, lens_connections = await self._lens_ranked_ids(
                     route, repo_ids, retrieval_sources, effective_query,
                     limit, weights, surface_restrict=surface_restrict)
+                lens_primary = route.primary
                 if route.regime == 'honest-gap':
                     spool_doc_ids = {d.id for d in lite_docs
                                      if is_spool_source(d.source_name)}
@@ -583,7 +614,8 @@ class SearchMixin:
             suggested_queries=self._suggest_queries(effective_query, scored_docs) if effective_query else None,
             improvement_hint=spool_gap_hint_text or self._improvement_hint(scored_docs, effective_query),
             truncated=truncated,
-            spool_connections=lens_connections or None,                                                                                                                                        
+            spool_connections=lens_connections or None,
+            lens_primary=lens_primary,                                                                                                                                        
         )
 
     @staticmethod
@@ -840,6 +872,18 @@ class SearchMixin:
 
         return result
     
+    def _spool_theme_doc_ids(self, spool_sources) -> frozenset:
+        """Doc ids of the enabled spools' OWN theme summaries (association
+        = the spool source id) — spool-side content for the lens partition."""
+        names = sorted(s for s in spool_sources if ':' in s)
+        if not names:
+            return frozenset()
+        marks = ','.join('?' * len(names))
+        with self.library._conn_provider.acquire() as conn:
+            return frozenset(row[0] for row in conn.execute(
+                f'SELECT doc_id FROM themes WHERE association IN ({marks})',
+                tuple(names)))
+
     def _get_embedding_matrix(self):
         """Load + freshness-check the shared embedding matrix; None falls back to SQLite."""
         from pathlib import Path
