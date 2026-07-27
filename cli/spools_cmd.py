@@ -327,6 +327,12 @@ def _install(args: argparse.Namespace) -> int:
         manifest = install_pack(
             library, args.pack, cache_dir=_cache_dir(args, config),
         )
+        # The install just mutated docs + embeddings; refresh the shared
+        # embedding matrix NOW so the serve path never silently degrades to
+        # entity-only ranking (reuses the existing build when fresh).
+        from library.embedding_matrix import ensure_matrix
+        print('  refreshing embedding matrix…')
+        ensure_matrix(library)
     print(f'  installed  {manifest.environment}  '
           f'(runtime {manifest.target_runtime}, version {manifest.version})')
     return 0

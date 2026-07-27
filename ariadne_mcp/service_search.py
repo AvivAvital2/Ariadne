@@ -844,16 +844,23 @@ class SearchMixin:
 
         from library.embedding_matrix import EmbeddingMatrix
 
+        matrix_dir = Path(self.library._conn_provider.path).parent / '.ariadne'
         if not hasattr(self, '_embedding_matrix_cache'):
-            matrix_dir = Path(self.library._conn_provider.path).parent / '.ariadne'
             self._embedding_matrix_cache = EmbeddingMatrix.load(matrix_dir)
         matrix = self._embedding_matrix_cache
-        if matrix is None:
-            return None
         with self.library._conn_provider.acquire() as conn:
-            if not matrix.is_fresh(conn):
-                return None
-        return matrix
+            if matrix is not None and matrix.is_fresh(conn):
+                return matrix
+            # Stale (or absent) in-process copy: the store changed after we
+            # loaded — e.g. a `spools install`/`theme` run rebuilt the matrix
+            # on disk. Re-load ONCE and swap it in, so semantic ranking
+            # recovers without a server restart; still-stale -> None (SQLite
+            # fallback), never a wrong-dimension rank.
+            reloaded = EmbeddingMatrix.load(matrix_dir)
+            if reloaded is not None and reloaded.is_fresh(conn):
+                self._embedding_matrix_cache = reloaded
+                return reloaded
+        return None
 
     async def environment_considerations(
         self, anchor_doc_ids, *, limit=3, gate=0.55, diversity=0.5,

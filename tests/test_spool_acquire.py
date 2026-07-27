@@ -1395,3 +1395,38 @@ class TestCreateModePrompt:
         )
         assert captured['batch_mode'] == 'live'        # live everywhere
         assert captured['theme_batch_strategy'] is None
+
+
+class TestThemeSpoolMatrixRefresh:
+    def test_summaries_refresh_the_matrix_declines_do_not(self, tmp_path, monkeypatch):
+        # Theme summaries write embedded theme docs — the matrix must be
+        # ensured afterwards (the live install left it stale and the serve
+        # path silently lost semantic ranking). No summaries -> no refresh.
+        calls = {}
+        cfg = SimpleNamespace(db_path=str(tmp_path / 'mr.db'),
+                              spools_model='claude-sonnet-5',
+                              model='claude-opus-4-8')
+        monkeypatch.setattr('config.get_config', lambda: cfg)
+        monkeypatch.setattr('spools.build_spool_internal_themes',
+                            lambda library, name, sources: calls.get('dirty', 2))
+
+        async def fake_live(*a, **k):
+            calls['live'] = True
+            return {'summarized': 2, 'incoherent': 0, 'failed': 0}
+
+        monkeypatch.setattr('docgen.themes.generate_themes', fake_live)
+        ensured = []
+        monkeypatch.setattr('library.embedding_matrix.ensure_matrix',
+                            lambda library, out_dir=None: ensured.append(library))
+
+        theme_spool('envx')
+        assert calls.get('live') and len(ensured) == 1
+
+        calls.clear()
+        theme_spool('envx', proceed=lambda est: False)     # declined
+        assert 'live' not in calls and len(ensured) == 1   # unchanged
+
+        calls.clear()
+        calls['dirty'] = 0
+        theme_spool('envx')                                # nothing dirty
+        assert len(ensured) == 1                           # unchanged

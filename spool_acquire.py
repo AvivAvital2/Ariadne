@@ -820,7 +820,13 @@ def theme_spool(name, *, batch_strategy=None, model=None, on_stage=None,
                         on_stage=on_stage)
                 return await generate_themes(library, writer, model=model)
 
-        return asyncio.run(_summarize())
+        summary = asyncio.run(_summarize())
+        # The summaries wrote embedded theme docs; refresh the shared matrix
+        # so semantic ranking sees them (and never silently goes stale).
+        from library.embedding_matrix import ensure_matrix
+        print('  refreshing embedding matrix…', flush=True)
+        ensure_matrix(library)
+        return summary
 
 
 def consent_text(packfile: Packfile) -> str:
