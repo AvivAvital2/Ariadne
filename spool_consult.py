@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from attrs import frozen
 
-from spool_router import Aisle, route
+from spool_router import ROUTE_THRESHOLD, ROUTE_TOP_K, Aisle, route
 
 
 @frozen
@@ -61,8 +61,8 @@ def consult_relevant(
     aisles: 'list[Aisle]',
     *,
     consult,
-    threshold: float = 0.25,
-    top_k: int = 3,
+    threshold: float = ROUTE_THRESHOLD,
+    top_k: int = ROUTE_TOP_K,
 ) -> 'list[AisleAnswer]':
     """Route ``question`` to the relevant aisle(s) and consult each.
 

@@ -446,7 +446,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
         # to the staleness subset. `files` stays the full set for the secondary
         # "full regeneration" figure.
         from cli.generate import (
-            DEFAULT_GENERATE_DOC_TYPES)
+            DEFAULT_GENERATE_DOC_TYPES, parse_doc_types_off)
         from cli.generate_cost import (
             _commit_scope, _stale_subset_for_estimate)
         requested_doc_types = (
@@ -456,10 +456,7 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
         # --doc-types-off: types shown in the explorer but UNchecked by
         # default (opt-in). Spool builds pass architecture,qa,diagram so a
         # reference pack defaults lean; empty → all checked, as before.
-        _off_raw = getattr(args, 'doc_types_off', None)
-        _off_types = frozenset(
-            t.strip() for t in _off_raw.split(',') if t.strip()
-        ) if _off_raw else frozenset()
+        _off_types = parse_doc_types_off(args)
         default_checked_doc_types = tuple(
             t for t in requested_doc_types if t not in _off_types
         )

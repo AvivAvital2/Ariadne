@@ -759,15 +759,14 @@ def acquire(packfile: Packfile, *, dest_dir, approve: bool,
     dest_dir.mkdir(parents=True, exist_ok=True)
     cloned = []
     for name, entry in sorted(packfile.corpus.items()):
+        cloned.append(name)                             # every branch below keeps it
         clone = dest_dir / name
         marker = clone / _CORPUS_SHA_MARKER
         if clone.exists():
             if marker.exists():
                 if marker.read_text().strip() == entry.sha:
-                    cloned.append(name)                 # reuse (idempotent)
-                    continue
+                    continue                            # reuse (idempotent)
                 _fetch_one(dest_dir, name, entry)       # ours, pin changed
-                cloned.append(name)
                 continue
             if (clone / '.git').exists():
                 try:
@@ -779,17 +778,13 @@ def acquire(packfile: Packfile, *, dest_dir, approve: bool,
                     shutil.rmtree(clone / '.git', ignore_errors=True)
                     (clone / _CORPUS_SHA_MARKER).write_text(
                         entry.sha + '\n', encoding='utf-8')
-                    cloned.append(name)
                     continue
                 _fetch_one(dest_dir, name, entry)       # ours, stale
-                cloned.append(name)
                 continue
             print(
                 f'  {clone} is not a recognised ariadne corpus (no pin marker) '
                 f'— replacing it (inside the {dest_dir} build workspace).')
             _fetch_one(dest_dir, name, entry)           # unrecognised → replace
-            cloned.append(name)
             continue
         _fetch_one(dest_dir, name, entry)               # fresh
-        cloned.append(name)
     return AcquireResult(accepted=True, cloned=tuple(cloned))

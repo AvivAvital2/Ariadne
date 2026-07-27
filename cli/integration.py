@@ -704,8 +704,17 @@ def cmd_source(args: argparse.Namespace) -> int:
     if action == 'purge':
         return _cmd_source_purge(args)
     console.print(
-        '[yellow]Usage: ariadne source <add|list|remove> ...[/yellow]')
+        '[yellow]Usage: ariadne source <add|list|remove|purge> ...[/yellow]')
     return 1
+
+
+def _confirm(question: str, *, assume_yes: bool = False) -> bool:
+    """Interactive y/N confirmation (default No). ``assume_yes`` (from --yes)
+    skips the prompt and proceeds; a non-TTY without --yes is not confirmed."""
+    if assume_yes:
+        return True
+    answer = _prompt_if_missing('', f'{question} [y/N]')
+    return (answer or '').strip().lower() in ('y', 'yes')
 
 
 def _cmd_source_remove(args: argparse.Namespace) -> int:
@@ -721,11 +730,10 @@ def _cmd_source_remove(args: argparse.Namespace) -> int:
         console.print(f'[yellow]No source named {name!r} in config.[/yellow]')
         return 1
 
-    if not getattr(args, 'yes', False):
-        confirm = _prompt_if_missing('', f"Remove source '{name}'? [y/N]")
-        if (confirm or '').strip().lower() not in ('y', 'yes'):
-            console.print('[dim]Aborted.[/dim]')
-            return 1
+    if not _confirm(f"Remove source '{name}'?",
+                    assume_yes=getattr(args, 'yes', False)):
+        console.print('[dim]Aborted.[/dim]')
+        return 1
 
     if not cfg.remove_source(name):
         console.print(f'[red]Failed to remove source {name!r}.[/red]')
@@ -734,9 +742,7 @@ def _cmd_source_remove(args: argparse.Namespace) -> int:
     console.print(f'[green]Removed source [bold]{name}[/bold].[/green]')
     if getattr(args, 'purge', False):
         from library import Library
-        from library.embedding_matrix import (
-            ARTIFACT_NAME, META_NAME, ensure_matrix, matrix_dir_for,
-        )
+        from library.embedding_matrix import recreate_matrix
         from library.purge import purge_source
         with Library(cfg.db_path) as library:
             summary = purge_source(library, name)
@@ -748,13 +754,11 @@ def _cmd_source_remove(args: argparse.Namespace) -> int:
                     f'[bold]{name}[/bold][/green] '
                     f'({summary.counts.get("documents", 0)} documents).'
                 )
-                matrix_dir = matrix_dir_for(library)
-                if (matrix_dir / ARTIFACT_NAME).exists():
-                    (matrix_dir / ARTIFACT_NAME).unlink()
-                    (matrix_dir / META_NAME).unlink(missing_ok=True)
-                    ensure_matrix(library)
+                if recreate_matrix(library):
                     console.print('[dim]Rebuilt the embedding matrix.[/dim]')
     return 0
+
+
 def _cmd_source_purge(args: argparse.Namespace) -> int:
     """Delete a source's indexed data from the library DB, whether or not
     it is still in ariadne.yaml. `source remove` is config-only, so a
@@ -763,9 +767,7 @@ def _cmd_source_purge(args: argparse.Namespace) -> int:
     """
     from config import get_config
     from library import Library
-    from library.embedding_matrix import (
-        ARTIFACT_NAME, META_NAME, ensure_matrix, matrix_dir_for,
-    )
+    from library.embedding_matrix import recreate_matrix
     from library.purge import purge_source
 
     name = _prompt_if_missing(getattr(args, 'name', None), 'Source name')
@@ -778,19 +780,13 @@ def _cmd_source_purge(args: argparse.Namespace) -> int:
     if preview.total == 0:
         console.print(f'[yellow]No indexed DB data for {name!r}.[/yellow]')
         return 0
-    if not getattr(args, 'yes', False):
-        confirm = _prompt_if_missing(
-            '', f"Purge {preview.total} DB row(s) for '{name}'? [y/N]")
-        if (confirm or '').strip().lower() not in ('y', 'yes'):
-            console.print('[dim]Aborted.[/dim]')
-            return 1
+    if not _confirm(f"Purge {preview.total} DB row(s) for '{name}'?",
+                    assume_yes=getattr(args, 'yes', False)):
+        console.print('[dim]Aborted.[/dim]')
+        return 1
     with Library(cfg.db_path) as library:
         summary = purge_source(library, name)
-        matrix_dir = matrix_dir_for(library)
-        if (matrix_dir / ARTIFACT_NAME).exists():
-            (matrix_dir / ARTIFACT_NAME).unlink()
-            (matrix_dir / META_NAME).unlink(missing_ok=True)
-            ensure_matrix(library)
+        recreate_matrix(library)
     console.print(
         f'[green]Purged {summary.total} DB row(s) for [bold]{name}[/bold]'
         f'[/green] ({summary.counts.get("documents", 0)} documents).'

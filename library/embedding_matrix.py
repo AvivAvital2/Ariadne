@@ -161,3 +161,21 @@ def ensure_matrix(library: 'Library', out_dir=None) -> 'EmbeddingMatrix | None':
                 return existing
     build_doc_embedding_matrix(library, out_dir)
     return EmbeddingMatrix.load(out_dir)
+
+
+def recreate_matrix(library: 'Library') -> bool:
+    """Delete the persisted matrix artifact (+ its meta) and rebuild it from the
+    current DB. Returns True if an artifact existed and was rebuilt, False when
+    there was nothing to rebuild.
+
+    Callers use this after mutating the document set (e.g. purging a source) so
+    the matrix reflects the new state — the artifact-file names stay owned here
+    rather than being spelled out at each call site.
+    """
+    mdir = matrix_dir_for(library)
+    if not (mdir / ARTIFACT_NAME).exists():
+        return False
+    (mdir / ARTIFACT_NAME).unlink()
+    (mdir / META_NAME).unlink(missing_ok=True)
+    ensure_matrix(library)
+    return True

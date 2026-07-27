@@ -10,7 +10,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from attrs import define, field
+from attrs import define, evolve, field
 
 from docgen._legacy_analyzer import SourceAnalyzer
 from docgen._legacy_metadata import ModuleGroup, ModuleMetadata
@@ -910,11 +910,9 @@ class DocGenerator:
                 return bundle, bundle.path.read_text(encoding='utf-8')
             except (OSError, UnicodeDecodeError):
                 return bundle, ''
-        import attrs
-
         from docgen.filler_swap import structural_source
 
-        scrubbed = attrs.evolve(bundle, module_docstring=None)
+        scrubbed = evolve(bundle, module_docstring=None)
         return scrubbed, structural_source(
             bundle, intent_filler=self.intent_filler,
         )

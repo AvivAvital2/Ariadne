@@ -174,19 +174,15 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
     # whose per-type cost the preview just showed. --doc-types-off pre-
     # unchecks types in the picker (opt-in) and drops them on a non-TTY;
     # spool builds pass architecture,qa,diagram to default a leaner pack.
-    from cli.generate import DEFAULT_GENERATE_DOC_TYPES
+    from cli.generate import DEFAULT_GENERATE_DOC_TYPES, parse_doc_types_off
     explicit_types = getattr(args, 'types', None)
     if explicit_types:
         selected_doc_types = tuple(
             t.strip() for t in explicit_types.split(',') if t.strip()
         )
     else:
-        off_raw = getattr(args, 'doc_types_off', None)
-        off_types = frozenset(
-            t.strip() for t in off_raw.split(',') if t.strip()
-        ) if off_raw else frozenset()
         selected_doc_types = _select_generate_doc_types(
-            DEFAULT_GENERATE_DOC_TYPES, off_types,
+            DEFAULT_GENERATE_DOC_TYPES, parse_doc_types_off(args),
         )
 
     # Resolve batch mode. Explicit flag wins; otherwise prompt.
@@ -257,13 +253,13 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
             lambda: cmd_generate(generate_args),
             True,
         ),
+        (
+            'Building themes',
+            '  [green]✓[/green] Themes build — cluster summaries written',
+            lambda: cmd_themes_build(themes_args),
+            False,
+        ),
     ]
-    phases.append((
-        'Building themes',
-        '  [green]✓[/green] Themes build — cluster summaries written',
-        lambda: cmd_themes_build(themes_args),
-        False,
-    ))
 
     import inspect
 

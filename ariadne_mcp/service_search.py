@@ -165,7 +165,8 @@ class SearchMixin:
         # key → a stale cached result can't outlive the spool that shaped
         # it (in particular, disabling a bad spool evicts its content).
         from spools import resolve_spools
-        spool_fp = resolve_spools(self.config).fingerprint()
+        spool_resolution = resolve_spools(self.config)
+        spool_fp = spool_resolution.fingerprint()
         key = self._cache_key('search', query, feature, branch, status, limit, context_file, sections_only, role, source, spool_fp)
         if key in self._query_cache:
             return self._query_cache[key]
@@ -181,7 +182,7 @@ class SearchMixin:
             except Exception:
                 pass  # Corrupt cache entry — recompute
 
-        result = await self._search_uncached(query, feature, branch, status, limit, context_file, sections_only, role=role, source=source)
+        result = await self._search_uncached(query, feature, branch, status, limit, context_file, sections_only, role=role, source=source, spool_resolution=spool_resolution)
         self._query_cache[key] = result
 
         # Store in persistent cache
@@ -203,17 +204,21 @@ class SearchMixin:
         sections_only: bool = False,
         role: str = 'developer',
         source: str | None = None,
+        spool_resolution=None,
     ) -> SearchResponse:
         """Uncached search implementation."""
         # Build the closure-scoped library view first so every read path
         # below cannot leak rows from outside the closure.
         scoped = self._resolve_scope(source)
 
-        # Resolve the enabled-spool set ONCE for this request; the fingerprint
-        # (PM audience gate) and the source ids (tier-2 partition) both come
-        # off this single resolution instead of re-reading manifests per use.
-        from spools import resolve_spools
-        spool_resolution = resolve_spools(self.config)
+        # Resolve the enabled-spool set ONCE per request: search() passes down
+        # the resolution it already built for the cache key, so the fingerprint
+        # (PM audience gate) and the source ids (tier-2 partition) come off one
+        # resolution instead of re-reading manifests. A direct caller (or test)
+        # that omits it falls back to resolving here.
+        if spool_resolution is None:
+            from spools import resolve_spools
+            spool_resolution = resolve_spools(self.config)
         spool_sources = spool_resolution.scope_sources()
         spool_fp = spool_resolution.fingerprint()
 

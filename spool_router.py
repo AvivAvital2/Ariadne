@@ -12,9 +12,15 @@ caller's concern (embed the question once, pass the vector in).
 """
 from __future__ import annotations
 
-import math
-
 from attrs import frozen
+
+from search import cosine_similarity
+
+# Routing calibration (designs/spool-expert-aisles.md §3): an aisle qualifies
+# when its best-matching theme clears ROUTE_THRESHOLD, and at most ROUTE_TOP_K
+# aisles are woken per question. Named so retuning routing is a one-line change.
+ROUTE_THRESHOLD = 0.25
+ROUTE_TOP_K = 3
 
 
 @frozen
@@ -30,21 +36,12 @@ class Aisle:
     taxonomy: tuple[str, ...] = ()
 
 
-def _cosine(a: 'tuple[float, ...]', b: 'tuple[float, ...]') -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    if na == 0.0 or nb == 0.0:
-        return 0.0
-    return dot / (na * nb)
-
-
 def route(
     query_embedding: 'tuple[float, ...]',
     aisles: 'list[Aisle]',
     *,
-    threshold: float = 0.25,
-    top_k: int = 3,
+    threshold: float = ROUTE_THRESHOLD,
+    top_k: int = ROUTE_TOP_K,
 ) -> 'list[Aisle]':
     """Aisles whose themes are relevant to ``query_embedding``, best-first,
     capped at ``top_k``. An aisle qualifies on its BEST-matching theme (max
@@ -54,7 +51,7 @@ def route(
     scored: list[tuple[float, Aisle]] = []
     for aisle in aisles:
         best = max(
-            (_cosine(query_embedding, theme)
+            (cosine_similarity(query_embedding, theme)
              for theme in aisle.theme_embeddings),
             default=0.0,
         )

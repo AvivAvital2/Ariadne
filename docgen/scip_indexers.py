@@ -732,7 +732,7 @@ class GoIndexerAdapter:
 _JAVA_INDEXER_VERSION = 'scip-java/unknown'
 
 # Maven's reactor position, e.g. ``Building Apache Spark Core 4.0.0  [12/34]``.
-_MAVEN_REACTOR_RE = __import__('re').compile(r'Building\b.*?\[(\d+)/(\d+)\]')
+_MAVEN_REACTOR_RE = re.compile(r'Building\b.*?\[(\d+)/(\d+)\]')
 
 
 def _parse_scip_java_line(line: str) -> 'IndexerProgress | None':
@@ -759,7 +759,7 @@ def _parse_scip_java_line(line: str) -> 'IndexerProgress | None':
 # A module's build output dir, e.g. ``…/core/target/scala-2.13/classes``. The
 # directory right before ``/target/`` is the module — the one determinate signal
 # both Maven and sbt print (sbt has no Maven-style reactor ``[N/M]``).
-_MODULE_TARGET_RE = __import__('re').compile(r'/([A-Za-z0-9._-]+)/target/')
+_MODULE_TARGET_RE = re.compile(r'/([A-Za-z0-9._-]+)/target/')
 
 
 def _build_module_names(cwd) -> frozenset:
@@ -854,7 +854,6 @@ def _build_tool_from_error(text: str) -> str | None:
     (spark ships both a Maven ``pom.xml`` and an sbt build), return the
     preferred build tool among the ones it named — so a retry can force
     ``--build-tool``. Returns None when the text is any other error."""
-    import re
     m = re.search(r'Multiple build tools detected:\s*([^.\n]+)', text or '')
     if not m:
         return None
@@ -877,7 +876,6 @@ def _required_java_version(cwd) -> 'int | None':
     newer JDK the SemanticDB often isn't emitted → "produced no index"). Reads,
     in priority order: ``.java-version`` / ``.tool-versions`` (jenv/asdf), then
     Maven ``pom.xml`` compiler properties. None when nothing declares one."""
-    import re
     cwd = Path(cwd)
     jvf = cwd / '.java-version'
     if jvf.is_file():
@@ -915,7 +913,6 @@ _JDK_HOME_GLOBS = (
 
 def _jdk_major(home) -> 'int | None':
     """Major version of the JDK at ``home`` from its ``release`` file, or None."""
-    import re
     rel = Path(home) / 'release'
     if not rel.is_file():
         return None

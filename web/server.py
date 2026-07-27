@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 import asyncio
 import uuid
+from collections import deque
 from contextlib import AsyncExitStack
 from pathlib import Path
 
@@ -23,6 +24,11 @@ from web.mcp_client import (
 
 STATIC_DIR = Path(__file__).resolve().parent / 'static'
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Onboard build jobs keep a bounded tail of their subprocess output: the drain
+# buffer caps at _JOB_OUTPUT_LINES, and status reports the last _JOB_TAIL_LINES.
+_JOB_OUTPUT_LINES = 400
+_JOB_TAIL_LINES = 12
 
 # Browser endpoint → MCP tool. Onboarding "Generate" (ariadne_onboard) is
 # added once that tool + its progress stream land.
@@ -47,12 +53,17 @@ async def dispatch_tool(bridge, tool: str, args: dict | None) -> tuple[int, dict
     return 200, data
 
 
+async def _read_json(request: web.Request) -> dict:
+    """Best-effort parse of a JSON request body → dict ({} when absent/invalid)."""
+    try:
+        return await request.json() if request.can_read_body else {}
+    except Exception:
+        return {}
+
+
 def _make_tool_handler(tool: str):
     async def handler(request: web.Request) -> web.Response:
-        try:
-            args = await request.json() if request.can_read_body else {}
-        except Exception:
-            args = {}
+        args = await _read_json(request)
         status, body = await dispatch_tool(request.app['bridge'], tool, args)
         return web.json_response(body, status=status)
 
@@ -75,8 +86,6 @@ def list_dirs(path: str | None) -> dict:
     Defaults to (and falls back to) the home directory; dot-prefixed dirs are
     omitted. Returns ``{path, parent, dirs:[name, ...]}``.
     """
-    from pathlib import Path
-
     base = Path(path).expanduser() if path else Path.home()
     if not base.is_dir():
         base = Path.home()
@@ -136,8 +145,6 @@ async def pick_folder(start: str | None) -> dict:
     is available (headless / unknown platform / tool not installed) — the
     frontend then falls back to the in-browser directory browser.
     """
-    import asyncio
-
     safe_start = start if (start and Path(start).expanduser().is_dir()) else None
     cmd = native_picker_command(safe_start)
     if cmd is None:
@@ -159,6 +166,8 @@ async def pick_folder(start: str | None) -> dict:
 
 async def _pick_folder(request: web.Request) -> web.Response:
     return web.json_response(await pick_folder(request.query.get('start')))
+
+
 def _onboard_command(body):
     """The ``ariadne onboard`` argv for a build request, or ``None`` when no
     source is given. ``--approve`` runs it non-interactively; scope + the
@@ -187,8 +196,6 @@ async def _drain_job(job):
             line = raw.decode('utf-8', 'replace').rstrip()
             if line:
                 job['output'].append(line)
-                if len(job['output']) > 400:
-                    del job['output'][:-400]
     job['returncode'] = await proc.wait()
     job['status'] = 'done' if job['returncode'] == 0 else 'error'
 
@@ -196,10 +203,7 @@ async def _drain_job(job):
 async def _onboard_start(request):
     """Spawn ``ariadne onboard`` as a detached background job and return its id;
     the browser stores it and polls ``/api/onboard/status``."""
-    try:
-        body = await request.json() if request.can_read_body else {}
-    except Exception:
-        body = {}
+    body = await _read_json(request)
     args = _onboard_command(body)
     if args is None:
         return web.json_response({'error': 'source is required'}, status=400)
@@ -211,7 +215,7 @@ async def _onboard_start(request):
     )
     job_id = uuid.uuid4().hex[:12]
     job = {'id': job_id, 'proc': proc, 'status': 'running',
-           'output': [], 'returncode': None}
+           'output': deque(maxlen=_JOB_OUTPUT_LINES), 'returncode': None}
     request.app['jobs'][job_id] = job
     job['task'] = asyncio.create_task(_drain_job(job))   # job holds the ref alive
     return web.json_response({'job_id': job_id, 'status': 'running'})
@@ -226,7 +230,7 @@ async def _onboard_status(request):
     return web.json_response({
         'status': job['status'],
         'returncode': job['returncode'],
-        'tail': job['output'][-12:],
+        'tail': list(job['output'])[-_JOB_TAIL_LINES:],
     })
 
 
