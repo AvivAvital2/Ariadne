@@ -178,29 +178,29 @@ def _wire_service(result: dict) -> None:
 class TestToolSurface:
     """Slice ③ — ariadne_impact_radius reflects scip_indexed + dependents_by_source."""
 
-    def test_not_indexed_source_flagged_in_output(self) -> None:
+    async def test_not_indexed_source_flagged_in_output(self) -> None:
         _wire_service({
             'file': 'f.py', 'scip_indexed': False, 'direct_dependents': 0,
             'transitive_dependents': 0, 'total_affected_files': 0,
             'dependents_by_source': {}, 'affected_docs': 2, 'affected_tests': 1,
             'radius_score': 1, 'top_dependents': [],
         })
-        out = ariadne_impact_radius('f.py').output
+        out = (await ariadne_impact_radius('f.py')).output
         assert 'not SCIP-indexed' in out          # honest signal, not a silent 0
         assert 'Affected docs: 2' in out
 
-    def test_indexed_output_shows_per_source_breakdown(self) -> None:
+    async def test_indexed_output_shows_per_source_breakdown(self) -> None:
         _wire_service({
             'file': 'f.py', 'scip_indexed': True, 'direct_dependents': 3,
             'transitive_dependents': 1, 'total_affected_files': 4,
             'dependents_by_source': {'src1': 3, 'src2': 1}, 'affected_docs': 2,
             'affected_tests': 1, 'radius_score': 8, 'top_dependents': ['a.py', 'b.py'],
         })
-        out = ariadne_impact_radius('f.py').output
+        out = (await ariadne_impact_radius('f.py')).output
         assert 'Direct dependents: 3' in out
         assert 'src1 (3)' in out and 'src2 (1)' in out
 
-    def test_indexed_leaf_omits_breakdown(self) -> None:
+    async def test_indexed_leaf_omits_breakdown(self) -> None:
         """Indexed file with no dependents: real 0 (not the not-indexed message),
         and no empty per-source line.
         """
@@ -210,7 +210,7 @@ class TestToolSurface:
             'dependents_by_source': {}, 'affected_docs': 0, 'affected_tests': 0,
             'radius_score': 0, 'top_dependents': [],
         })
-        out = ariadne_impact_radius('f.py').output
+        out = (await ariadne_impact_radius('f.py')).output
         assert 'Direct dependents: 0' in out
         assert 'not SCIP-indexed' not in out
         assert 'Dependents by source' not in out

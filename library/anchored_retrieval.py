@@ -38,12 +38,63 @@ def _cos(a: 'NDArray', b: 'NDArray') -> float:
     import numpy as np
 
     return float(np.dot(a, b))
+def select_ground(
+    query_emb: "NDArray | None",
+    anchor_embs: "list[NDArray]",
+    ground: "list[tuple[str, NDArray]]",
+    *,
+    limit: int,
+    w_q: float = DEFAULT_W_QUERY,
+    w_a: float = DEFAULT_W_ANCHOR,
+    gate: float = DEFAULT_GATE,
+    diversity: float = DEFAULT_DIVERSITY,
+    weights: "dict[str, float] | None" = None,
+) -> list[str]:
+    """Gated + MMR-diversified ground selection, scored by combined query and
+    anchor similarity. Returns up to ``limit`` ground doc ids.
 
+    ``query_emb`` may be ``None`` for the environment-bridge use: rank ground
+    purely by relevance to the anchor docs — "what environment context bears
+    on this file/symbol" — with no natural-language query. With a query it is
+    the exact ground scoring ``anchored_rank`` delegates here.
+    """
+    weights = weights or {}
+    if limit <= 0 or not ground:
+        return []
 
+    # -- combined score (query AND/OR anchor), quality weight, relevance gate
+    scored: "list[tuple[str, NDArray, float]]" = []
+    for doc_id, emb in ground:
+        anchor_sim = max((_cos(emb, ae) for ae in anchor_embs), default=0.0)
+        if query_emb is None:
+            combined = anchor_sim * weights.get(doc_id, 1.0)
+        else:
+            query_sim = _cos(query_emb, emb)
+            combined = (w_q * query_sim + w_a * anchor_sim) * weights.get(doc_id, 1.0)
+        if combined >= gate:
+            scored.append((doc_id, emb, combined))
+
+    # -- MMR select, capped at ``limit`` ------------------------------------
+    ground_emb = {doc_id: emb for doc_id, emb, _ in scored}
+    selected: "list[str]" = []
+    pool = scored[:]
+    while pool and len(selected) < limit:
+        if not selected:
+            best = max(pool, key=lambda item: item[2])
+        else:
+            best = max(
+                pool,
+                key=lambda item: item[2] - diversity * max(
+                    _cos(item[1], ground_emb[s]) for s in selected
+                ),
+            )
+        selected.append(best[0])
+        pool.remove(best)
+    return selected
 def anchored_rank(
-    query_emb: 'NDArray',
-    anchor: 'list[tuple[str, NDArray]]',
-    ground: 'list[tuple[str, NDArray]]',
+    query_emb: "NDArray",
+    anchor: "list[tuple[str, NDArray]]",
+    ground: "list[tuple[str, NDArray]]",
     *,
     limit: int,
     anchor_floor: int,
@@ -51,7 +102,7 @@ def anchored_rank(
     w_a: float = DEFAULT_W_ANCHOR,
     gate: float = DEFAULT_GATE,
     diversity: float = DEFAULT_DIVERSITY,
-    weights: 'dict[str, float] | None' = None,
+    weights: "dict[str, float] | None" = None,
 ) -> list[str]:
     """Return up to ``limit`` doc ids: anchor (protected) + gated/diverse ground.
 
@@ -87,38 +138,16 @@ def anchored_rank(
     if remaining <= 0:
         return reserved
 
-    # -- ground: combined score (query AND anchor), quality, relevance gate --
-    anchor_embs = [emb for _, emb in anchor]
-    scored: list[tuple[str, 'NDArray', float]] = []
-    for doc_id, emb in ground:
-        query_sim = _cos(query_emb, emb)
-        anchor_sim = max((_cos(emb, ae) for ae in anchor_embs), default=0.0)
-        combined = (w_q * query_sim + w_a * anchor_sim) * weights.get(doc_id, 1.0)
-        if combined >= gate:
-            scored.append((doc_id, emb, combined))
-
-    # -- MMR select the ground, capped at the remaining slots ---------------
-    ground_emb = {doc_id: emb for doc_id, emb, _ in scored}
-    selected: list[str] = []
-    pool = scored[:]
-    while pool and len(selected) < remaining:
-        if not selected:
-            best = max(pool, key=lambda item: item[2])
-        else:
-            best = max(
-                pool,
-                key=lambda item: item[2] - diversity * max(
-                    _cos(item[1], ground_emb[s]) for s in selected
-                ),
-            )
-        selected.append(best[0])
-        pool.remove(best)
+    # -- ground: same gated/diverse selection the environment bridge uses ---
+    selected = select_ground(
+        query_emb, [emb for _, emb in anchor], ground,
+        limit=remaining, w_q=w_q, w_a=w_a, gate=gate,
+        diversity=diversity, weights=weights,
+    )
 
     # -- fill any leftover slots with the anchor remainder ------------------
     leftover = remaining - len(selected)
     anchor_tail = [doc_id for doc_id, _ in anchor_rest[:max(leftover, 0)]]
 
     return reserved + selected + anchor_tail
-
-
-__all__ = ['anchored_rank']
+__all__ = ['anchored_rank', 'select_ground']

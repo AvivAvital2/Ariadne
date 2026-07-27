@@ -705,3 +705,90 @@ class SearchMixin:
             if not matrix.is_fresh(conn):
                 return None
         return matrix
+
+    async def environment_considerations(
+        self, anchor_doc_ids, *, limit=3, gate=0.55, diversity=0.5,
+    ):
+        """Spool docs most relevant to the anchor docs (a target file/symbol's
+        OWN documentation) — the "environment considerations" a mechanistic
+        tool (impact_radius / trace_flow) surfaces beside its result.
+
+        Anchor-only ranking (relevance to the anchor, no natural-language
+        query), relevance-gated so an unrelated target admits none. Returns
+        ``[]`` when no spool is enabled or nothing clears the gate, so the
+        tool's output is then exactly as before (no-harm).
+        """
+        import numpy as np
+
+        from library.anchored_retrieval import select_ground
+        from spools import is_spool_source, resolve_spools
+
+        anchor_doc_ids = [d for d in (anchor_doc_ids or []) if d]
+        if not anchor_doc_ids:
+            return []
+        spool_sources = resolve_spools(self.config).scope_sources()
+        if not spool_sources:
+            return []
+        ground_ids = [
+            d.id for d in self.library.list_documents_lite()
+            if is_spool_source(d.source_name) and d.source_name in spool_sources
+        ]
+        if not ground_ids:
+            return []
+
+        def _norm(vec):
+            arr = np.asarray(vec, dtype=np.float32)
+            mag = float(np.linalg.norm(arr))
+            return arr / mag if mag else arr
+
+        anchor_emb_map = self.library.get_embeddings_for_ids(anchor_doc_ids)
+        anchor_embs = [
+            _norm(v) for v in (anchor_emb_map.get(i) for i in anchor_doc_ids)
+            if v is not None
+        ]
+        if not anchor_embs:
+            return []
+        centroid = _norm(np.mean(np.stack(anchor_embs), axis=0))
+
+        # Pre-window the ground by centroid similarity (fast matrix path), then
+        # rank the window by relevance to the anchor docs — O(window), never a
+        # full spool-corpus scan.
+        window = max(limit * 8, 40)
+        matrix = None
+        try:
+            matrix = self._get_embedding_matrix()
+        except Exception:
+            _logger.debug('env considerations: matrix load failed', exc_info=True)
+
+        ground_pairs = []
+        if matrix is not None:
+            for did, _ in matrix.rank(centroid, ground_ids, window):
+                row = matrix.id_to_row.get(did)
+                if row is not None:
+                    ground_pairs.append((did, _norm(matrix.M[row])))
+        elif len(ground_ids) > 2000:
+            return []  # no matrix over a large corpus — skip rather than scan
+        else:
+            emb_map = self.library.get_embeddings_for_ids(ground_ids)
+            for did in ground_ids:
+                vec = emb_map.get(did)
+                if vec is not None:
+                    ground_pairs.append((did, _norm(vec)))
+
+        selected = select_ground(
+            None, anchor_embs, ground_pairs,
+            limit=limit, gate=gate, diversity=diversity,
+        )
+        notes = []
+        for did in selected:
+            doc = self.library.get_document(did)
+            if doc is None:
+                continue
+            content = getattr(doc, 'content', '') or ''
+            notes.append({
+                'doc_id': did,
+                'title': getattr(doc, 'title', did),
+                'source': getattr(doc, 'source_name', None),
+                'snippet': content[:200].strip(),
+            })
+        return notes

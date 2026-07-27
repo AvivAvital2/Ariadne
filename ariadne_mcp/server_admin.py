@@ -358,6 +358,31 @@ async def ariadne_trace_flow(
             llm_bridge=bridge,
         )
         response = trace_result_to_dict(result)
+        # Environment considerations: spool docs relevant to the traced symbol's
+        # file (empty unless a spool is enabled and something clears the gate).
+        try:
+            from ariadne_mcp.service import AriadneService
+
+            _svc = AriadneService.get()
+            _row = conn.execute(
+                'SELECT file FROM scip_symbols WHERE canonical_id = ? LIMIT 1',
+                (start_symbol,),
+            ).fetchone()
+            _anchor_ids = (
+                [d.id for d in _svc.find_documents_by_source_files([_row[0]])]
+                if _row and _row[0] else []
+            )
+            _notes = await _svc.environment_considerations(_anchor_ids)
+            if _notes:
+                response['environment_considerations'] = [
+                    {'title': n['title'], 'source': n['source'],
+                     'doc_id': n['doc_id']}
+                    for n in _notes
+                ]
+        except Exception:
+            import logging
+            logging.getLogger(__name__).debug(
+                'trace_flow env considerations failed', exc_info=True)
         if include_diagram:
             # Resolve hop symbol-ids → sources against the open graph, then
             # emit a fenced DOT sequence diagram the bridge renders in-thread.

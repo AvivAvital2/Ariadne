@@ -68,9 +68,7 @@ async def ariadne_task_context(
     from ariadne_mcp.service import AriadneService
 
     return await AriadneService.get().task_context(task_description, file_paths)
-
-
-def ariadne_impact_radius(
+async def ariadne_impact_radius(
     file_path: str,
 ) -> AdminActionResponse:
     """Calculate how many files/tests/docs would be affected by changing a file.
@@ -80,7 +78,29 @@ def ariadne_impact_radius(
     """
     from ariadne_mcp.service import AriadneService
 
-    result = AriadneService.get().impact_radius(file_path)
+    svc = AriadneService.get()
+    result = svc.impact_radius(file_path)
+
+    # Environment considerations: the spool docs most relevant to this file's
+    # OWN docs (the anchor). Empty unless a spool is enabled and something
+    # clears the relevance gate — so the output is unchanged otherwise.
+    env_lines: list[str] = []
+    try:
+        anchor_docs = svc.find_documents_by_source_files([file_path])
+        notes = await svc.environment_considerations(
+            [d.id for d in anchor_docs])
+        if notes:
+            env_lines.append(
+                '  Environment considerations '
+                '(relevant docs from enabled spools):')
+            for n in notes:
+                env_lines.append(f'    - {n["title"]} [{n["source"]}]')
+    except Exception:
+        import logging
+        logging.getLogger(__name__).debug(
+            'impact_radius env considerations failed', exc_info=True)
+        env_lines = []
+
     # Honesty: when the file's source has no SCIP index, the dependency counts are
     # not "0 dependents" (a leaf) — they're unknown. Say so instead of a silent 0.
     if not result.get('scip_indexed', False):
@@ -90,7 +110,7 @@ def ariadne_impact_radius(
             '(run `ariadne index` for this source).',
             f'  Affected docs: {result["affected_docs"]}',
             f'  Affected tests: {result["affected_tests"]}',
-        ]))
+        ] + env_lines))
     lines = [
         f'Impact Radius: {file_path}',
         f'  Direct dependents: {result["direct_dependents"]}',
@@ -107,6 +127,7 @@ def ariadne_impact_radius(
         )
     if result['top_dependents']:
         lines.append(f'  Top dependents: {", ".join(result["top_dependents"])}')
+    lines += env_lines
     return AdminActionResponse(output='\n'.join(lines))
 
 

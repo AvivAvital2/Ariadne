@@ -14,6 +14,7 @@ import numpy as np
 from ariadne_mcp.service import AriadneService
 from config import CODE_PROVENANCE, OFFICIAL_DOC_PROVENANCE
 from library import Library
+from library.embedding_matrix import build_doc_embedding_matrix, matrix_dir_for
 from spools import (
     partition_tier2,
     rank_with_scarcity_gate,
@@ -314,5 +315,79 @@ class TestAnchoredGroundSearchIntegration:
             titles = [d.title for d in resp.documents]
             assert any(t.startswith('RepoTopic') for t in titles), titles
             assert 'GroundRelevant' in titles, titles
+        finally:
+            lib.close()
+
+
+def _e3(*xs):
+    a = np.zeros(3, dtype=np.float32)
+    for i, x in enumerate(xs):
+        a[i] = x
+    return a
+
+
+class TestEnvironmentConsiderations:
+    """The environment bridge (Part 1): a mechanistic tool (impact_radius /
+    trace_flow) attaches the spool docs most relevant to the target's OWN docs
+    (the anchor) as 'environment considerations'. Anchor-only, relevance-gated,
+    so an unrelated target and a no-spool scope both admit none (no-harm).
+    See ``designs/spool-anchored-retrieval.md``.
+    """
+
+    def _service(self, lib, monkeypatch, spool_sources):
+        class _FakeResolution:
+            def scope_sources(self):
+                return frozenset(spool_sources)
+
+            def fingerprint(self):
+                return 'fp'
+
+        svc = AriadneService()
+        svc._library = lib
+        monkeypatch.setattr(svc, '_resolve_scope', lambda *a, **k: lib)
+        monkeypatch.setattr(
+            'spools.resolve_spools', lambda *a, **k: _FakeResolution())
+        return svc
+
+    async def test_relevant_spool_doc_attached_and_noise_gated(
+        self, tmp_path, monkeypatch,
+    ):
+        lib = Library(tmp_path / 'env.db')
+        try:
+            anchor_id = lib.add_document(
+                'explanation', 'RepoFile', 'the changed file',
+                embedding=_e3(0, 1, 0),
+                metadata={'provenance': CODE_PROVENANCE}).id
+            lib.add_document(
+                'explanation', 'EnvRelevant', 'environment note',
+                embedding=_e3(0, 1, 0),
+                metadata={'provenance': OFFICIAL_DOC_PROVENANCE},
+                source_name='spool:databricks', _allow_reserved_source=True)
+            for i in range(10):
+                lib.add_document(
+                    'catalog', f'EnvNoise {i}', 'n', embedding=_e3(1, 0, 0),
+                    metadata={'provenance': OFFICIAL_DOC_PROVENANCE},
+                    source_name='spool:databricks', _allow_reserved_source=True)
+            build_doc_embedding_matrix(lib, matrix_dir_for(lib))
+            svc = self._service(lib, monkeypatch, {'spool:databricks'})
+
+            notes = await svc.environment_considerations(
+                [anchor_id], limit=3, gate=0.5)
+            titles = [n['title'] for n in notes]
+            assert 'EnvRelevant' in titles, titles
+            assert not any(t.startswith('EnvNoise') for t in titles), titles
+        finally:
+            lib.close()
+
+    async def test_no_spool_enabled_returns_empty(self, tmp_path, monkeypatch):
+        lib = Library(tmp_path / 'env2.db')
+        try:
+            anchor_id = lib.add_document(
+                'explanation', 'RepoFile', 'x', embedding=_e3(0, 1, 0),
+                metadata={'provenance': CODE_PROVENANCE}).id
+            build_doc_embedding_matrix(lib, matrix_dir_for(lib))
+            svc = self._service(lib, monkeypatch, set())  # no spool enabled
+            notes = await svc.environment_considerations([anchor_id], limit=3)
+            assert notes == []
         finally:
             lib.close()
