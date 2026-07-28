@@ -1,0 +1,100 @@
+# Retrieval battery: consumer-archetype matrix vs the httpx mini-environment.
+#
+# Row classes follow the archetype model (see RESULTS.md): each archetype
+# contributes seam/target/version rows where the environment MUST speak
+# (with auditable ground-truth title criteria) and control rows where it
+# MUST stay silent — including the saturated controls, where the question
+# is about the consumer's own code but phrased in vocabulary the
+# environment also owns. `consumer` names the fixture source the query is
+# scored against.
+battery:
+  # --- peripheral: tidereport uses httpx at one edge; its prose is
+  # deliberately saturated with the environment's name ---
+  - label: P-seam-concurrency
+    archetype: peripheral
+    consumer: tidereport
+    want: speak
+    question: >-
+      What should I watch out for when fetching many stations concurrently
+      over HTTP in our nightly job?
+    ground_truth:
+      title_contains: ['_client', 'async', 'connection']
+  - label: P-target-timeouts
+    archetype: peripheral
+    consumer: tidereport
+    want: speak
+    question: How does httpx decide connection timeouts by default?
+    ground_truth:
+      title_contains: ['_config', 'timeout']
+  - label: P-version-proxies
+    archetype: peripheral
+    consumer: tidereport
+    want: speak
+    question: Is the proxies argument still supported on the httpx client?
+    ground_truth:
+      title_contains: ['CHANGELOG', '_client']
+  - label: P-control-saturated
+    archetype: peripheral
+    consumer: tidereport
+    want: silent
+    question: >-
+      How does our nightly job decide which stations go into the report?
+  - label: P-control-domain
+    archetype: peripheral
+    consumer: tidereport
+    want: silent
+    question: How do we render the daily summary text?
+  - label: P-nonsense
+    archetype: peripheral
+    consumer: tidereport
+    want: silent
+    question: How do I configure the office coffee machine?
+
+  # --- adopter: relay has ZERO httpx calls (stdlib urllib); questions
+  # probe the migration seam ---
+  - label: A-equivalence
+    archetype: adopter
+    consumer: relay
+    want: speak
+    question: >-
+      What is the httpx equivalent of urllib.request.urlopen with a timeout?
+    ground_truth:
+      title_contains: ['_api', '_client']
+  - label: A-migration-async
+    archetype: adopter
+    consumer: relay
+    want: speak
+    question: >-
+      How do I move our sequential station fetches to async HTTP requests?
+    ground_truth:
+      title_contains: ['_client', 'async']
+  - label: A-control-saturated
+    archetype: adopter
+    consumer: relay
+    want: silent
+    question: >-
+      How does our archive keep only the latest reading per station?
+
+  # --- integrated: meshsync builds on httpx surfaces (Auth, transport
+  # retries, streaming) ---
+  - label: I-seam-streaming
+    archetype: integrated
+    consumer: meshsync
+    want: speak
+    question: >-
+      Should our snapshot pull use iter_bytes or iter_raw for large
+      downloads?
+    ground_truth:
+      title_contains: ['_models', '_decoders']
+  - label: I-target-retries
+    archetype: integrated
+    consumer: meshsync
+    want: speak
+    question: How do httpx transport retries interact with timeouts?
+    ground_truth:
+      title_contains: ['_transports', '_config']
+  - label: I-control-domain
+    archetype: integrated
+    consumer: meshsync
+    want: silent
+    question: How do we classify a node's sync outcome?
