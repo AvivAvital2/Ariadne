@@ -20,6 +20,12 @@ REPO_ROOT="$(dirname "$EVALS_DIR")"
 STORE="$EVALS_DIR/store"
 HTTPX_TAG="${HTTPX_TAG:-0.28.1}"
 
+command -v scip-python >/dev/null || {
+  echo 'scip-python not found on PATH — the httpx corpus is Python, so the' >&2
+  echo 'grounding tier needs it: npm install -g @sourcegraph/scip-python' >&2
+  exit 1
+}
+
 mkdir -p "$STORE"
 
 # Every ariadne command runs with cwd=STORE, so config/recipe/DB discovery
