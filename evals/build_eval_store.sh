@@ -39,9 +39,16 @@ mkdir -p "$STORE"
 export ARIADNE_CONFIG="$STORE/ariadne.yaml"
 run() { (cd "$STORE" && uv run --project "$REPO_ROOT" ariadne "$@"); }
 
-if ! run spools 2>/dev/null | grep -q 'registered *databricks'; then
-  # Path 1: a prebuilt pack.
-  pack="${PACK:-$(ls "$REPO_ROOT"/databricks-${RUNTIME}*.zip 2>/dev/null | sort | tail -1)}"
+# Store-scoped check: `ariadne spools` status consults the machine-wide
+# pack cache, so on a builder machine it reports the LIVE store's spool as
+# registered and this branch would silently skip. The enable mapping below
+# is written into THIS store's config — its presence is the store's truth.
+if ! grep -q '^spools:' "$STORE/ariadne.yaml" 2>/dev/null; then
+  # Path 1: a prebuilt pack. Prefer the newest -vX.Y.Z zip; the plain
+  # unversioned name (an old artifact) sorts AFTER '-v' names, so a bare
+  # `sort | tail -1` would pick it — take the versioned max explicitly.
+  pack="${PACK:-$(ls "$REPO_ROOT"/databricks-${RUNTIME}-v*.zip 2>/dev/null | sort -V | tail -1)}"
+  [ -n "${pack:-}" ] || pack="$(ls "$REPO_ROOT"/databricks-${RUNTIME}.zip 2>/dev/null || true)"
   if [ -n "${pack:-}" ] && [ -f "$pack" ]; then
     echo "installing prebuilt pack: $pack"
     run spools install "$pack"
