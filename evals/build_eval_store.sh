@@ -31,8 +31,12 @@ command -v scip-python >/dev/null || {
 
 mkdir -p "$STORE"
 
-# Every ariadne command runs with cwd=STORE, so config/recipe/DB discovery
-# stays inside evals/store/ and never touches the repo's own store.
+# Pin the config EXPLICITLY: discovery is ARIADNE_CONFIG → cwd →
+# package/repo root — and with no config in a fresh store dir yet, the
+# fallthrough lands on the repo's own live ariadne.yaml and quietly builds
+# into the wrong store (it did, once). cwd=STORE keeps the relative
+# db_path there too.
+export ARIADNE_CONFIG="$STORE/ariadne.yaml"
 run() { (cd "$STORE" && uv run --project "$REPO_ROOT" ariadne "$@"); }
 
 if ! run spools 2>/dev/null | grep -q 'registered *databricks'; then
