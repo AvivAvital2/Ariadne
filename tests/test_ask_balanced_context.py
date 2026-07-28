@@ -21,7 +21,7 @@ class TestBalancedAskDocs:
     def test_takes_top_of_both_halves(self):
         # Ranked results: 5 repo (anchor) first (the floor), then 3 spool.
         docs = (
-            [_doc(f'repo{i}', 'ao-core') for i in range(5)]
+            [_doc(f'repo{i}', 'src1') for i in range(5)]
             + [_doc(f'spool{i}', 'spool:databricks') for i in range(3)]
         )
         out = _balanced_ask_docs(
@@ -34,7 +34,7 @@ class TestBalancedAskDocs:
     def test_no_spool_returns_repo_only(self):
         # No ground admitted (e.g. a CONTROL question or no spool) => repo only,
         # so WITH-spool never injects irrelevant ground → no-harm preserved.
-        docs = [_doc(f'repo{i}', 'ao-core') for i in range(6)]
+        docs = [_doc(f'repo{i}', 'src1') for i in range(6)]
         out = _balanced_ask_docs(
             docs, frozenset({'spool:databricks'}), anchor_n=4, ground_n=4,
         )
@@ -43,8 +43,8 @@ class TestBalancedAskDocs:
     def test_ground_ranking_preserved_within_half(self):
         # Whatever order the ranker produced within each half is kept.
         docs = [
-            _doc('r0', 'ao-core'), _doc('s0', 'spool:databricks'),
-            _doc('r1', 'ao-core'), _doc('s1', 'spool:databricks'),
+            _doc('r0', 'src1'), _doc('s0', 'spool:databricks'),
+            _doc('r1', 'src1'), _doc('s1', 'spool:databricks'),
         ]
         out = _balanced_ask_docs(
             docs, frozenset({'spool:databricks'}), anchor_n=1, ground_n=1,

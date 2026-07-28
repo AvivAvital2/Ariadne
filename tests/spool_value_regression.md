@@ -6,7 +6,7 @@ proven value. Re-run WITH and WITHOUT the spool (toggle the `spools:` mapping in
 ranking. A regression = a WIN question stops being answered WITH the spool, or
 starts being answered WITHOUT it (i.e. the delta collapses).
 
-Ask via `ariadne_ask(source='ao-core', question=...)`. Baseline captured
+Ask via `ariadne_ask(source='src1', question=...)`. Baseline captured
 2026-07-24 on the clean, anchored, matrix-rebuilt store.
 
 | # | Question | WITHOUT spool | WITH spool (must hold) | Spool evidence expected |
@@ -25,7 +25,7 @@ confidence ≥ medium, and at least one cited source is a `spool:databricks` doc
 the number to defend.
 
 ## Excluded (not wins — do NOT use as spool-health signals)
-- MLflow `sklearn.autolog` slowdown — an **ao-core dependency**, not Databricks;
+- MLflow `sklearn.autolog` slowdown — a **project-side dependency**, not Databricks;
   correctly absent from the spool corpus.
 - DuckDB-file placement / concurrent readers on Databricks — genuine corpus gap
   (the specific fact isn't in spark/delta/sdk).
