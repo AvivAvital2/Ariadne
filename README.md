@@ -21,7 +21,7 @@ Ariadne *is* a graph-RAG — a structural graph, [Leiden](https://en.wikipedia.o
 **What your agents get**
 
 - **Five complementary doc types per file.** An `explanation` (what the code does), an `architecture` note (how it's built and who depends on it), `qa` pairs, `gotcha`s (the traps that bite you), and a `diagram` — curated per language, so a JSON file never gets an architecture essay it can't support.
-- **Automatic theme discovery.** Leiden community detection over a hybrid structural-plus-semantic graph finds clusters of code that share a concern — authentication, caching, retries — even when they're scattered across dozens of files, and writes each up as its own theme doc. This is what raw `grep` can never give an agent.
+- **Automatic theme discovery — with a coherence gate.** Leiden community detection over a hybrid structural-plus-semantic graph finds clusters of code that share a concern — authentication, caching, retries — even when they're scattered across dozens of files, and writes each up as its own theme doc. At scale the failure mode is junk clusters (a vendored JS bundle, a wall of generated stubs), so every cluster is LLM-judged for coherence and the incoherent ones are flagged and hidden by default. `ariadne themes stats` reports the coherent/incoherent split on your own corpus — the number is measured, not asserted. This is what raw `grep` can never give an agent.
 - **Compiler-precise cross-source intelligence.** For Python, JS/TS, Scala/Java, and Go, Ariadne builds a real [SCIP](docs/scip-cross-source.md) call graph — not regex heuristics — and joins it *across repos and languages*. Ask for a symbol's `callers`/`callees`, compute the `impact_radius` of a change *before* you make it, `trace-flow` a request from an HTTP route through several services, or surface dead code with zero references anywhere.
 - **Served over MCP.** The whole library lives in one queryable SQLite store exposed to any MCP agent (Claude Code, custom agents), automatically scoped to the source it's working in plus that source's dependencies — so results never bleed across unrelated codebases.
 - **Portable — author once, consume anywhere.** `export` packs the whole library into a single git-committable zip (or a markdown tree with `--no-archive`); `import` rebuilds a fully searchable database from it on any machine, re-embedding locally — so the model that *authors* the docs and the one that *serves* them can differ (a local model works fine; embeddings speak the OpenAI wire protocol, so `OPENAI_BASE_URL` can point at any compatible endpoint — Ollama, vLLM, LM Studio — not just OpenAI). Re-import is a **delta**: documents whose content hasn't changed are skipped, so syncing a team's knowledge base only costs the docs that actually moved. See [docs/import-export.md](docs/import-export.md).
@@ -48,7 +48,7 @@ Ariadne runs a one-time pipeline over your source tree, then keeps the result cu
 
 2. **Document each file.** For every file, an LLM (Claude or OpenAI) writes the doc types you ask for — an `explanation` of what the code does, an `architecture` note on how it's put together, `qa` pairs, `gotcha`s, and a `diagram`. Every document is validated (closed code blocks, required sections) and retried on failure, so the library stays well-formed.
 
-3. **Connect the dots.** Ariadne builds a hybrid graph from imports, call sites, and embedding similarity, then runs Leiden community detection to find clusters of code that share a concern — authentication, retries, error handling — even when they're scattered across many files, and summarizes each cluster as its own *theme* document. It also walks that graph to inject a "Related Documents" section into every doc.
+3. **Connect the dots.** Ariadne builds a hybrid graph from imports, call sites, and embedding similarity, then runs Leiden community detection to find clusters of code that share a concern — authentication, retries, error handling — even when they're scattered across many files, and summarizes each cluster as its own *theme* document. Each cluster is LLM-judged for coherence first, so scale yields themes an agent can trust rather than noise (`ariadne themes stats` shows the split). It also walks that graph to inject a "Related Documents" section into every doc.
 
 4. **Store and serve.** Everything — the catalog, the per-file docs, the themes, and any findings you save — lives in a single SQLite library with embeddings for semantic search, exposed to agents over an MCP server. Deterministic IDs make every step idempotent, so re-runs never duplicate work.
 
@@ -168,6 +168,7 @@ Common ones (full reference: [docs/commands.md](docs/commands.md)):
 | `ariadne generate` / `export` / `import` | Generate docs · export to a zip (or markdown tree) · rebuild the DB elsewhere (delta) |
 | `ariadne search "query"` | Semantic search across the docs |
 | `ariadne sync` / `check` | Re-document only the changed files (delta) · find stale docs |
+| `ariadne themes list/stats` | List discovered themes · coherence-rate readout (how many clusters passed the gate) |
 | `ariadne mcp` | Start the MCP server (stdio) |
 
 ## Configuration
