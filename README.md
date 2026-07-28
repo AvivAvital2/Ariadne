@@ -82,6 +82,12 @@ it never quietly falls back to training-data guesswork about your versions.
   model at your pinned version), and **internal platforms** — the strongest case of all,
   since your in-house SDK is the one thing an LLM's training data has never seen.
 
+Routing quality is measured, not asserted: a public retrieval battery ([evals/](evals/README.md))
+runs the production pipeline against the Databricks environment across three consumer
+archetypes — currently **11/12 participation** (speaking at the seam, silent on controls),
+**7/7 ground-truth-in-context**, **0 junk admissions** — offline-reproducible from committed
+query vectors, with the misses read honestly in [evals/RESULTS.md](evals/RESULTS.md).
+
 Build and install walkthrough: [docs/building-a-databricks-spool.md](docs/building-a-databricks-spool.md).
 
 ## Installation
