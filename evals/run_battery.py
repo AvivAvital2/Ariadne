@@ -213,6 +213,9 @@ def _vector_loader(rows: list, cache_path: Path):
     if missing:
         import asyncio
 
+        from cli.main import _load_env
+
+        _load_env()   # keys live in .env for CLI runs — load it like the CLI
         from embedding import EmbeddingService
 
         async def _embed_all():
