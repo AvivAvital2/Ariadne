@@ -10,13 +10,15 @@
 # runs offline forever (query vectors cache on first run).
 #
 #   evals/build_eval_store.sh                    # build (idempotent)
-#   HTTPX_TAG=v0.28.1 evals/build_eval_store.sh  # override the pinned tag
+#   HTTPX_TAG=0.27.2 evals/build_eval_store.sh   # override the pinned tag
+#
+# (httpx tags carry no 'v' prefix: 0.28.1, not v0.28.1.)
 set -euo pipefail
 
 EVALS_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$EVALS_DIR")"
 STORE="$EVALS_DIR/store"
-HTTPX_TAG="${HTTPX_TAG:-v0.28.1}"
+HTTPX_TAG="${HTTPX_TAG:-0.28.1}"
 
 mkdir -p "$STORE"
 
