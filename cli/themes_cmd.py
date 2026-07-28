@@ -68,6 +68,14 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     themes_show.add_argument('cluster_id',
         help='Stable cluster_id (printed by `themes list`)')
 
+    themes_stats = themes_sub.add_parser(
+        'stats',
+        help='Coherence-rate readout: how many clusters passed the '
+             'coherence gate',
+    )
+    themes_stats.add_argument('--source', '-s', default=None,
+        help='Filter by source name (themes with a member in that source)')
+
     # diff-docs (Catalog transition Phase 3.2) — side-by-side legacy vs
     # new prompts for spot-checking during the dual-run window.
     diff_parser = subparsers.add_parser(
@@ -283,6 +291,36 @@ def _cmd_themes_show(args: argparse.Namespace) -> int:
         library.close()
 
 
+def _cmd_themes_stats(args: argparse.Namespace) -> int:
+    """`ariadne themes stats` — print the corpus coherence rate.
+
+    The self-serve answer to "do the Leiden themes hold up?": how many
+    clusters passed the coherence gate, on *your own* corpus.
+    """
+    from ariadne_mcp.service_themes import themes_action
+
+    library = get_library(getattr(args, 'db', None))
+    try:
+        result = themes_action(
+            library, action='stats', source=getattr(args, 'source', None),
+        )
+        total = result['total']
+        if not total:
+            console.print('[yellow]No themes found.[/yellow] '
+                          'Run [bold]ariadne themes build[/bold] to discover them.')
+            return 0
+        pct = 100.0 * result['coherent_rate']
+        console.print(
+            f'Themes: [bold]{total}[/bold] total · '
+            f'[green]{result["coherent"]} coherent[/green] · '
+            f'{result["incoherent"]} incoherent '
+            f'([bold]{pct:.1f}% coherent[/bold])',
+        )
+        return 0
+    finally:
+        library.close()
+
+
 def cmd_diff_docs(args: argparse.Namespace) -> int:
     """Side-by-side comparison of legacy and catalog-driven prompts.
 
@@ -444,7 +482,10 @@ def cmd_themes(args: argparse.Namespace) -> int:
         return _cmd_themes_list(args)
     if action == 'show':
         return _cmd_themes_show(args)
-    console.print('[yellow]Usage: ariadne themes (build|list|show <cluster_id>)[/yellow]')
+    if action == 'stats':
+        return _cmd_themes_stats(args)
+    console.print('[yellow]Usage: ariadne themes '
+                  '(build|list|show <cluster_id>|stats)[/yellow]')
     return 1
 
 

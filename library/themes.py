@@ -195,7 +195,9 @@ class ThemesMixin:
         """List themes ordered by cluster_id.
 
         coherent_only filters out themes the LLM marked INCOHERENT.
-        source filters by documents.source_name (single-value variant).
+        source restricts to themes that have a MEMBER in that source
+        (members are documents carrying a source_name; the summary doc
+        is cross-source / NULL, so it can't be matched by source_name).
         source_names is the multi-value variant used by the closure
         wrapper — restrict themes whose summary doc has a source_name
         in the given tuple. source and source_names are mutually
@@ -205,12 +207,20 @@ class ThemesMixin:
         the themes.association column directly, so it needs no join and
         composes with the other filters.
         """
-        needs_join = source is not None or source_names is not None
-        sql = '''SELECT t.cluster_id, t.doc_id, t.member_count, t.resolution,
-                        t.last_built_at, t.last_summarized_at, t.summary_hash,
-                        t.coherent, t.dirty
+        sql = '''SELECT DISTINCT t.cluster_id, t.doc_id, t.member_count,
+                        t.resolution, t.last_built_at, t.last_summarized_at,
+                        t.summary_hash, t.coherent, t.dirty
                  FROM themes t'''
-        if needs_join:
+        # ``source`` matches by MEMBER source: join through theme_members to
+        # the member documents (which carry source_name). The summary doc is
+        # cross-source (NULL), so matching it by source_name never hits.
+        # ``source_names`` (closure) instead filters the summary doc. DISTINCT
+        # dedupes the member-join fanout when a theme has several members in
+        # the same source.
+        if source is not None:
+            sql += (' JOIN theme_members tm ON tm.cluster_id = t.cluster_id'
+                    ' JOIN documents md ON md.id = tm.element_id')
+        if source_names is not None:
             sql += ' JOIN documents d ON d.id = t.doc_id'
 
         conditions: list[str] = []
@@ -218,7 +228,7 @@ class ThemesMixin:
         if coherent_only:
             conditions.append('t.coherent = 1')
         if source is not None:
-            conditions.append('d.source_name = ?')
+            conditions.append('md.source_name = ?')
             params.append(source)
         if source_names is not None:
             if not source_names:
@@ -243,6 +253,31 @@ class ThemesMixin:
         with self._conn_provider.acquire() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [self._row_to_theme(r) for r in rows]
+
+    def theme_coherence_counts(
+        self,
+        *,
+        source: str | None = None,
+        association: str | None = None,
+    ) -> dict[str, int]:
+        """Coherent / incoherent / total theme counts, optionally scoped.
+
+        The self-serve coherence-rate readout behind ``ariadne themes
+        stats``. Built on ``list_themes`` (same ``source`` member-match and
+        ``association`` semantics) so the counts can never diverge from what
+        the same filter lists; ``incoherent`` is ``total − coherent``.
+        """
+        total = self.list_themes(
+            coherent_only=False, source=source, association=association,
+        )
+        coherent = self.list_themes(
+            coherent_only=True, source=source, association=association,
+        )
+        return {
+            'coherent': len(coherent),
+            'incoherent': len(total) - len(coherent),
+            'total': len(total),
+        }
 
     def _theme_owning_doc_id(self, cluster_id: str) -> str | None:
         """Return the summary doc_id for a theme, or None if missing."""

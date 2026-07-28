@@ -672,10 +672,12 @@ async def ariadne_themes(
 
     Args:
         action: 'list' (default — list themes), 'get' (full theme doc by cluster_id),
-                or 'members' (member elements with weights).
+                'members' (member elements with weights), or 'stats'
+                (coherence-rate readout: coherent / incoherent / total + rate).
         cluster_id: Required for 'get' and 'members'.
         coherent_only: For 'list' — exclude themes the LLM judged INCOHERENT.
-        source: Optional source name filter.
+        source: Optional source filter — matches themes with a member in
+                that source (for 'list' and 'stats').
         limit: For 'list' — max number of themes to return.
     """
     from config import get_config
@@ -687,8 +689,8 @@ async def ariadne_themes(
     try:
         # Themes are library-internal cross-source — themes_action takes
         # the raw library, not a ScopedLibrary. The ``source`` argument
-        # is forwarded to the SQL JOIN filter (single-source match,
-        # legacy behavior) without closure expansion.
+        # is forwarded to the SQL filter, which matches themes with a
+        # member in that source (member-source, not the NULL summary doc).
         return themes_action(
             library,
             action=action,  # type: ignore[arg-type]

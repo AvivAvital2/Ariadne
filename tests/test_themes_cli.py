@@ -482,6 +482,41 @@ class TestThemesShow:
 
 
 # ---------------------------------------------------------------------------
+# cmd_themes_stats
+# ---------------------------------------------------------------------------
+
+
+class TestThemesStats:
+    def test_stats_subcommand_parses(self) -> None:
+        parser = create_parser()
+        args = parser.parse_args(['themes', 'stats'])
+        assert args.command == 'themes'
+        assert args.themes_action == 'stats'
+
+    def test_stats_prints_counts_and_rate(
+        self, patched_get_library: Library, capsys,
+    ) -> None:
+        _bootstrap_theme(patched_get_library, 'c1', members=['el1'], coherent=True)
+        _bootstrap_theme(patched_get_library, 'c2', members=['el2'], coherent=False)
+
+        args = argparse.Namespace(themes_action='stats', db=None, source=None)
+        rc = cmd_themes(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        # 2 total, 1 coherent, 1 incoherent → 50% coherent.
+        assert '2' in out
+        assert '50' in out
+        assert 'coherent' in out.lower()
+
+    def test_stats_zero_themes_is_clean(
+        self, patched_get_library: Library, capsys,
+    ) -> None:
+        args = argparse.Namespace(themes_action='stats', db=None, source=None)
+        rc = cmd_themes(args)
+        assert rc == 0
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher robustness
 # ---------------------------------------------------------------------------
 

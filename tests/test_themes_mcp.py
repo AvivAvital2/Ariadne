@@ -54,10 +54,15 @@ def _bootstrap_theme(
     coherent: bool = True,
     source_name: str | None = None,
 ) -> None:
-    """Insert a placeholder theme + members for tests."""
+    """Insert a placeholder theme + members for tests.
+
+    Realistic shape: the theme summary doc is cross-source (source_name
+    NULL, as cluster.py writes it); a theme belongs to ``source_name``
+    through its MEMBERS, so that's where the source is stamped.
+    """
     doc_id = f'theme-doc-{cluster_id}'
     _add_doc(library, doc_id, content_type='theme', title=title,
-             content=f'# {title}\n\nbody', source_name=source_name)
+             content=f'# {title}\n\nbody')
     library.add_theme(
         cluster_id=cluster_id,
         doc_id=doc_id,
@@ -68,7 +73,8 @@ def _bootstrap_theme(
         dirty=False,
     )
     for mid in members:
-        _add_doc(library, mid, content_type='catalog', title=mid)
+        _add_doc(library, mid, content_type='catalog', title=mid,
+                 source_name=source_name)
     library.set_theme_members(
         cluster_id, [(mid, 1.0) for mid in members],
     )
@@ -189,6 +195,46 @@ class TestThemesActionMembers:
         from ariadne_mcp.service_themes import themes_action
         result = themes_action(library, action='members')
         assert 'error' in result
+
+
+# ---------------------------------------------------------------------------
+# action='stats'
+# ---------------------------------------------------------------------------
+
+
+class TestThemesActionStats:
+    def test_stats_reports_counts_and_rate(self, library: Library) -> None:
+        from ariadne_mcp.service_themes import themes_action
+        _bootstrap_theme(library, 'c1', members=['el1'], coherent=True)
+        _bootstrap_theme(library, 'c2', members=['el2'], coherent=True)
+        _bootstrap_theme(library, 'c3', members=['el3'], coherent=False)
+
+        result = themes_action(library, action='stats')
+
+        assert result['coherent'] == 2
+        assert result['incoherent'] == 1
+        assert result['total'] == 3
+        assert result['coherent_rate'] == pytest.approx(2 / 3)
+
+    def test_stats_scoped_by_member_source(self, library: Library) -> None:
+        from ariadne_mcp.service_themes import themes_action
+        _bootstrap_theme(library, 'c1', members=['el1'], coherent=True,
+                         source_name='src1')
+        _bootstrap_theme(library, 'c2', members=['el2'], coherent=False,
+                         source_name='src2')
+
+        result = themes_action(library, action='stats', source='src1')
+
+        assert result['coherent'] == 1
+        assert result['incoherent'] == 0
+        assert result['total'] == 1
+        assert result['coherent_rate'] == pytest.approx(1.0)
+
+    def test_stats_empty_library_rate_zero_not_crash(self, library: Library) -> None:
+        from ariadne_mcp.service_themes import themes_action
+        result = themes_action(library, action='stats')
+        assert result['total'] == 0
+        assert result['coherent_rate'] == 0.0
 
 
 # ---------------------------------------------------------------------------

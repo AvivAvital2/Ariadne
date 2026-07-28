@@ -147,18 +147,37 @@ class TestThemeCRUD:
         assert [t.cluster_id for t in themes] == ['c1']
 
     def test_list_themes_source_filter(self, library: Library) -> None:
-        _add_doc(library, 'doc-c1', content_type='theme', source_name='src1')
-        _add_doc(library, 'doc-c2', content_type='theme', source_name='src2')
-        library.add_theme(
-            cluster_id='c1', doc_id='doc-c1',
-            member_count=5, resolution=1.0, summary_hash='h1',
-        )
-        library.add_theme(
-            cluster_id='c2', doc_id='doc-c2',
-            member_count=3, resolution=1.0, summary_hash='h2',
-        )
-        themes_src1 = library.list_themes(source='src1')
-        assert [t.cluster_id for t in themes_src1] == ['c1']
+        """``source=`` filters by MEMBER source, not the summary doc.
+
+        Production reality: a theme's summary doc is cross-source — its
+        ``source_name`` is NULL, because ``docgen/cluster.py`` never tags
+        it. A theme belongs to a source through its *members* (each a
+        document that does carry a ``source_name``). So a cross-cutting
+        theme with members in several sources matches every one of them,
+        and a theme with several members in the same source appears once
+        (DISTINCT).
+        """
+        # Summary docs: cross-source (NULL), as cluster.py writes them.
+        _add_doc(library, 'doc-c1', content_type='theme')
+        _add_doc(library, 'doc-c2', content_type='theme')
+        _add_doc(library, 'doc-c3', content_type='theme')
+        # Members carry the real source.
+        _add_doc(library, 'el-a', content_type='catalog', source_name='src1')
+        _add_doc(library, 'el-b', content_type='catalog', source_name='src1')
+        _add_doc(library, 'el-c', content_type='catalog', source_name='src2')
+        for cid, doc in (('c1', 'doc-c1'), ('c2', 'doc-c2'), ('c3', 'doc-c3')):
+            library.add_theme(
+                cluster_id=cid, doc_id=doc,
+                member_count=1, resolution=1.0, summary_hash=f'h-{cid}',
+            )
+        library.set_theme_members('c1', [('el-a', 1.0), ('el-b', 0.5)])  # two src1 members
+        library.set_theme_members('c2', [('el-c', 1.0)])                 # src2 only
+        library.set_theme_members('c3', [('el-a', 1.0), ('el-c', 0.5)])  # cross-cutting
+
+        # src1: c1 (once, despite two members) + the cross-cutting c3.
+        assert [t.cluster_id for t in library.list_themes(source='src1')] == ['c1', 'c3']
+        # src2: c2 + the cross-cutting c3.
+        assert [t.cluster_id for t in library.list_themes(source='src2')] == ['c2', 'c3']
 
     def test_delete_theme_cascades_members(self, library: Library) -> None:
         _add_doc(library, 'doc-c1', content_type='theme')
@@ -174,6 +193,48 @@ class TestThemeCRUD:
 
         assert library.get_theme('c1') is None
         assert library.get_theme_members('c1') == []
+
+
+class TestThemeCoherenceCounts:
+    """``theme_coherence_counts`` — the self-serve coherence-rate readout.
+
+    Reuses ``list_themes`` so the numbers can never diverge from what the
+    same ``source=`` filter would list.
+    """
+
+    def test_counts_split_coherent_and_incoherent(self, library: Library) -> None:
+        for cid, ok in (('c1', True), ('c2', True), ('c3', False)):
+            _add_doc(library, f'd-{cid}', content_type='theme')
+            library.add_theme(
+                cluster_id=cid, doc_id=f'd-{cid}',
+                member_count=1, resolution=1.0, summary_hash='h', coherent=ok,
+            )
+        assert library.theme_coherence_counts() == {
+            'coherent': 2, 'incoherent': 1, 'total': 3,
+        }
+
+    def test_counts_scoped_by_member_source(self, library: Library) -> None:
+        _add_doc(library, 'd1', content_type='theme')
+        _add_doc(library, 'd2', content_type='theme')
+        _add_doc(library, 'el-a', content_type='catalog', source_name='src1')
+        _add_doc(library, 'el-b', content_type='catalog', source_name='src2')
+        library.add_theme(cluster_id='c1', doc_id='d1', member_count=1,
+                          resolution=1.0, summary_hash='h', coherent=True)
+        library.add_theme(cluster_id='c2', doc_id='d2', member_count=1,
+                          resolution=1.0, summary_hash='h', coherent=False)
+        library.set_theme_members('c1', [('el-a', 1.0)])
+        library.set_theme_members('c2', [('el-b', 1.0)])
+        assert library.theme_coherence_counts(source='src1') == {
+            'coherent': 1, 'incoherent': 0, 'total': 1,
+        }
+        assert library.theme_coherence_counts(source='src2') == {
+            'coherent': 0, 'incoherent': 1, 'total': 1,
+        }
+
+    def test_counts_empty_library(self, library: Library) -> None:
+        assert library.theme_coherence_counts() == {
+            'coherent': 0, 'incoherent': 0, 'total': 0,
+        }
 
 
 # ---------------------------------------------------------------------------

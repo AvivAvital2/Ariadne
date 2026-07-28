@@ -8,7 +8,8 @@ dict matching the response shape contracted in the plan §5.6.
 library internals (a cluster can span members from any source; theme
 summary docs are created by ``docgen/cluster.py`` without a
 ``source_name`` so they can't be filtered by per-source closure). Raw
-``library.X(...)`` access here is intentional — "Library-internal modules
+``library.X(...)`` access here is intentional — see
+``designs/directional-closure-scoping.md`` § "Library-internal modules
 — legitimately unscoped".
 """
 from __future__ import annotations
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
     from library import Library
 
 
-_ACTIONS = ('list', 'get', 'members')
+_ACTIONS = ('list', 'get', 'members', 'stats')
 
 
 def _theme_to_summary(library: "Library", theme) -> dict:
@@ -84,9 +85,27 @@ def _action_members(library: "Library", cluster_id: str | None) -> dict:
     return {'members': out}
 
 
+def _action_stats(library: "Library", *, source: str | None) -> dict:
+    """Coherence-rate readout — coherent / incoherent / total + rate.
+
+    The number behind "does theme discovery hold up at scale?": how many
+    clusters passed the LLM coherence gate. ``coherent_rate`` is 0.0 for
+    an empty corpus (no division by zero).
+    """
+    counts = library.theme_coherence_counts(source=source)
+    total = counts['total']
+    rate = counts['coherent'] / total if total else 0.0
+    return {
+        'coherent': counts['coherent'],
+        'incoherent': counts['incoherent'],
+        'total': total,
+        'coherent_rate': rate,
+    }
+
+
 def themes_action(
     library: "Library",
-    action: Literal['list', 'get', 'members'] = 'list',
+    action: Literal['list', 'get', 'members', 'stats'] = 'list',
     cluster_id: str | None = None,
     coherent_only: bool = True,
     source: str | None = None,
@@ -106,6 +125,8 @@ def themes_action(
         return _action_get(library, cluster_id)
     if action == 'members':
         return _action_members(library, cluster_id)
+    if action == 'stats':
+        return _action_stats(library, source=source)
     return {'error': f'unknown action: {action!r}; valid actions: {_ACTIONS}'}
 
 
