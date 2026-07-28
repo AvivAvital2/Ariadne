@@ -226,7 +226,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--battery', default=EVALS_DIR / 'battery.yaml')
     parser.add_argument('--store', default=EVALS_DIR / 'store')
-    parser.add_argument('--env-source', default='httpx')
+    parser.add_argument('--env-source', default='databricks')
     parser.add_argument('--vectors', default=EVALS_DIR / 'query_vectors.npz')
     args = parser.parse_args()
 

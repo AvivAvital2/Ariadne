@@ -1,16 +1,16 @@
-# tidereport
+# harvest
 
-Builds nightly tide summaries per station. Readings are fetched with
-**httpx** (see `tidereport/edge_fetch.py`); everything downstream of the
-httpx fetch is plain Python.
+Builds regional yield reports. Raw field readings are ingested nightly by
+a **Spark** job on **Databricks** (see `harvest/edge_job.py`); everything
+downstream of the Spark ingest is plain Python.
 
-- httpx does the HTTP: connection pooling, timeouts, and raising on bad
-  statuses all come from the httpx client.
-- The nightly job calls the httpx edge once per station, then the summary
-  and rendering steps run without httpx.
-- If a station is missing, the httpx call raises and the station is
-  skipped in that night's report.
+- Spark does the heavy lifting at ingest: schema casting, null filtering,
+  and partitioned parquet output all run on the Databricks cluster.
+- The report step reads the Spark job's parquet output; Spark is not
+  involved in summarizing or rendering.
+- If the Spark ingest fails, that night's Databricks run is retried once
+  before the region is skipped.
 
 (This repo is a synthetic eval fixture: its prose deliberately saturates
-on the environment's name — the peripheral-archetype trap where the
-consumer's own catalog resolves environment vocabulary.)
+on the environment's names — Spark, Databricks — the peripheral-archetype
+trap where the consumer's own catalog resolves environment vocabulary.)

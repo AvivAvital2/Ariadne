@@ -1,4 +1,6 @@
-# Retrieval battery: consumer-archetype matrix vs the httpx mini-environment.
+# Retrieval battery: consumer-archetype matrix vs the Databricks
+# environment (built from the shipped dbr17.3-lts recipe — Spark 4.0.0,
+# Delta 4.0.0, databricks-sdk-py 0.121.0 at pinned SHAs).
 #
 # Row classes follow the archetype model (see RESULTS.md): each archetype
 # contributes seam/target/version rows where the environment MUST speak
@@ -8,93 +10,97 @@
 # environment also owns. `consumer` names the fixture source the query is
 # scored against.
 battery:
-  # --- peripheral: tidereport uses httpx at one edge; its prose is
-  # deliberately saturated with the environment's name ---
-  - label: P-seam-concurrency
+  # --- peripheral: harvest runs one Spark ingest job at the edge; its
+  # prose is deliberately saturated with the environment's names ---
+  - label: P-seam-serialization
     archetype: peripheral
-    consumer: tidereport
+    consumer: harvest
     want: speak
     question: >-
-      What should I watch out for when fetching many stations concurrently
-      over HTTP in our nightly job?
+      What should I watch out for when shipping data and Python objects to
+      Spark workers in our ingest job?
     ground_truth:
-      title_contains: ['_client', 'async', 'connection']
-  - label: P-target-timeouts
+      title_contains: [serializ, pickle, tuning]
+  - label: P-target-concurrency
     archetype: peripheral
-    consumer: tidereport
+    consumer: harvest
     want: speak
-    question: How does httpx decide connection timeouts by default?
+    question: >-
+      How does Delta Lake handle two jobs writing to the same table at the
+      same time?
     ground_truth:
-      title_contains: ['_config', 'timeout']
-  - label: P-version-proxies
+      title_contains: [concurren, conflict, isolation]
+  - label: P-version-liquid
     archetype: peripheral
-    consumer: tidereport
+    consumer: harvest
     want: speak
-    question: Is the proxies argument still supported on the httpx client?
+    question: Can I use liquid clustering on my Databricks runtime?
     ground_truth:
-      title_contains: ['CHANGELOG', '_client']
+      title_contains: [liquid, cluster]
   - label: P-control-saturated
     archetype: peripheral
-    consumer: tidereport
+    consumer: harvest
     want: silent
     question: >-
-      How does our nightly job decide which stations go into the report?
+      How does our nightly Spark run decide which regions go into the
+      yield report?
   - label: P-control-domain
     archetype: peripheral
-    consumer: tidereport
+    consumer: harvest
     want: silent
-    question: How do we render the daily summary text?
+    question: How do we render the regional yield summary text?
   - label: P-nonsense
     archetype: peripheral
-    consumer: tidereport
+    consumer: harvest
     want: silent
     question: How do I configure the office coffee machine?
 
-  # --- adopter: relay has ZERO httpx calls (stdlib urllib); questions
-  # probe the migration seam ---
+  # --- adopter: featureflow is a local csv/duckdb pipeline with ZERO
+  # environment calls; questions probe the migration seam ---
   - label: A-equivalence
     archetype: adopter
-    consumer: relay
+    consumer: featureflow
     want: speak
     question: >-
-      What is the httpx equivalent of urllib.request.urlopen with a timeout?
+      What is the Databricks equivalent of running local columnar SQL over
+      parquet files?
     ground_truth:
-      title_contains: ['_api', '_client']
-  - label: A-migration-async
+      title_contains: [sql, dataframe, parquet]
+  - label: A-migration
     archetype: adopter
-    consumer: relay
+    consumer: featureflow
     want: speak
     question: >-
-      How do I move our sequential station fetches to async HTTP requests?
+      How do I run an existing Python feature pipeline as a Databricks job?
     ground_truth:
-      title_contains: ['_client', 'async']
+      title_contains: [job, submit, workflow]
   - label: A-control-saturated
     archetype: adopter
-    consumer: relay
+    consumer: featureflow
     want: silent
     question: >-
-      How does our archive keep only the latest reading per station?
+      How does our pipeline partition feature computation across rows?
 
-  # --- integrated: meshsync builds on httpx surfaces (Auth, transport
-  # retries, streaming) ---
-  - label: I-seam-streaming
+  # --- integrated: lakerun builds on Spark/Delta surfaces (broadcast
+  # joins, Delta writes, OPTIMIZE/VACUUM maintenance) ---
+  - label: I-seam-broadcast
     archetype: integrated
-    consumer: meshsync
+    consumer: lakerun
     want: speak
     question: >-
-      Should our snapshot pull use iter_bytes or iter_raw for large
-      downloads?
+      When should our dimension join use a broadcast instead of a shuffle?
     ground_truth:
-      title_contains: ['_models', '_decoders']
-  - label: I-target-retries
+      title_contains: [broadcast, join, tuning]
+  - label: I-target-vacuum
     archetype: integrated
-    consumer: meshsync
+    consumer: lakerun
     want: speak
-    question: How do httpx transport retries interact with timeouts?
+    question: >-
+      What does VACUUM actually delete, and when does it break time travel?
     ground_truth:
-      title_contains: ['_transports', '_config']
+      title_contains: [vacuum, retention, time travel]
   - label: I-control-domain
     archetype: integrated
-    consumer: meshsync
+    consumer: lakerun
     want: silent
-    question: How do we classify a node's sync outcome?
+    question: How do we decide which tables get compacted after a batch?

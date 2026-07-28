@@ -1,14 +1,17 @@
 # Findings
 
-Two batteries exist: the **development battery**, run against a Databricks
-spool (Spark + Delta + databricks-sdk-py pinned to DBR 17.3 LTS) and two
+Two batteries exist, both against the **same environment** — a Databricks
+spool (Spark + Delta + databricks-sdk-py pinned to DBR 17.3 LTS, built
+from the shipped recipe): the **development battery**, run against two
 internal consumer repos while the routing layer was built — its consumer
 repos are private, so it ships as reported numbers with methodology — and
-the **public battery** in this directory (httpx mini-environment +
-synthetic consumers), which anyone can rebuild and rerun. The public
-battery's numbers belong in this file the first time
-`build_eval_store.sh` + `run_battery.py` are run on a release; until then
-this section reports the development results only.
+the **public battery** in this directory, whose synthetic archetype
+consumers anyone can onboard and rerun (and whose environment anyone can
+rebuild from the recipe's pinned SHAs). Sharing the environment makes the
+two batteries' numbers directly comparable. The public battery's numbers
+belong in this file the first time `build_eval_store.sh` +
+`run_battery.py` are run on a release; until then this section reports
+the development results only.
 
 ## The archetype model
 

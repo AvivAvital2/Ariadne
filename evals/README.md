@@ -27,14 +27,20 @@ change that moves these numbers shows up as a diff.
 ## Layout
 
 - `battery.yaml` — the question battery: a consumer-archetype matrix
-  (adopter / peripheral / integrated — see `RESULTS.md`) against an
-  **httpx mini-environment**, with per-row ground-truth criteria.
+  (adopter / peripheral / integrated — see `RESULTS.md`) against the
+  **Databricks environment** (Spark 4.0.0 + Delta 4.0.0 + the SDK, built
+  from the shipped `spool_content/recipes/databricks.yaml` at pinned
+  SHAs), with per-row ground-truth criteria. A large, versioned,
+  gotcha-rich environment is the point — serialization traps, concurrent
+  writers, deprecations — a toy corpus has nothing for a spool to shine on.
 - `fixtures/` — three small synthetic consumer repos, one per archetype
-  (adopter: zero httpx calls; peripheral: one httpx edge + name-saturated
-  prose; integrated: httpx surfaces woven through).
-- `build_eval_store.sh` — one-time store build (httpx spool at a pinned
-  tag + the three consumers). Costs a small amount of API spend, shows
-  every cost before spending it.
+  (adopter: zero Spark calls; peripheral: one Spark ingest edge +
+  name-saturated prose; integrated: Spark/Delta surfaces woven through).
+- `build_eval_store.sh` — one-time store build. With a prebuilt pack zip
+  (`PACK=…`, or one in the repo root): minutes, free. Without: builds the
+  pack from the shipped recipe — reproducible from pinned sources, but
+  scip-java compiles Spark (hours) and generation costs real money, every
+  cost shown first.
 - `run_battery.py` — the runner. First run embeds the questions and caches
   vectors in `query_vectors.npz`; every later run is offline and free.
   Exit code 0 iff every participation verdict is correct.
@@ -42,6 +48,7 @@ change that moves these numbers shows up as a diff.
 ## Run
 
 ```bash
-evals/build_eval_store.sh          # once (needs OPENAI_API_KEY + scip-python)
+evals/build_eval_store.sh          # once (needs OPENAI_API_KEY + scip-python;
+                                   #  PACK=…zip skips the from-source build)
 uv run python evals/run_battery.py # repeatable, offline after first run
 ```
