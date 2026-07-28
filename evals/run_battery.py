@@ -181,17 +181,23 @@ def print_report(report: Report) -> None:
 
 def _load_real_store(store_dir: Path, env_source: str) -> Store:
     from library import Library
-    from library.embedding_matrix import EmbeddingMatrix
+    from library.embedding_matrix import ensure_matrix
     from library.lens_retrieval import doc_grade_spool_candidates
 
     db = store_dir / 'ariadne.db'
     if not db.exists():
         sys.exit(f'no eval store at {db} — run evals/build_eval_store.sh '
                  f'first (builds it once; see evals/README.md)')
-    matrix = EmbeddingMatrix.load(store_dir / '.ariadne')
     with Library(db) as lib:
+        # Build-or-reuse: absent OR stale (e.g. sources onboarded after the
+        # last build) rebuilds from the DB's stored embeddings — offline,
+        # no API calls.
+        matrix = ensure_matrix(lib, store_dir / '.ariadne')
         pool = doc_grade_spool_candidates(
             lib, [f'spool:{env_source}', env_source])
+    if matrix is None:
+        sys.exit(f'could not build an embedding matrix from {db} — the '
+                 f'store has no document embeddings (did onboarding run?)')
     conn = sqlite3.connect(f'file:{db}?mode=ro', uri=True)
     return Store(
         conn=conn,
