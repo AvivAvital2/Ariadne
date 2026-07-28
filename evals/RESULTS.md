@@ -30,6 +30,50 @@ battery samples:
   reach-tier rows require a dependency-indexed consumer artifact and are
   not yet exercised — an honest gap, not an oversight.)
 
+## Public battery results (2026-07-28)
+
+Store: pack v1.5.0 (Spark 4.0.0 + Delta 4.0.0 + databricks-sdk-py 0.121.0
+at the recipe's pinned SHAs; 199,260 environment docs) + the three fixture
+consumers (70 docs). Query vectors are committed (`query_vectors.npz`), so
+this table reproduces offline with `uv run python evals/run_battery.py`.
+
+```
+label                      archetype   want    topS   topR   breadth  GT    verdict
+P-seam-serialization       peripheral  speak   0.556  0.482   16/50   #3    speak OK
+P-target-concurrency       peripheral  speak   0.574  0.327   50/50   #1    speak OK
+P-version-liquid           peripheral  speak   0.616  0.228   50/50   #1    speak OK
+P-control-saturated        peripheral  silent  0.398  0.466    0/50   -     silent OK
+P-control-domain           peripheral  silent  0.363  0.567    0/50   -     silent OK
+P-nonsense                 peripheral  silent  0.296  0.159   50/50   -     silent OK
+A-equivalence              adopter     speak   0.579  0.443   50/50   #1    speak OK
+A-migration                adopter     speak   0.523  0.557    0/50   #4    silent MISS
+A-control-saturated        adopter     silent  0.497  0.444    6/50   -     silent OK
+I-seam-broadcast           integrated  speak   0.535  0.308   50/50   #1    speak OK
+I-target-vacuum            integrated  speak   0.473  0.319   50/50   #1    speak OK
+I-control-domain           integrated  silent  0.512  0.405   11/50   -     silent OK
+
+participation: 11/12 correct   ground-truth-in-context: 7/7   junk admissions: 0
+```
+
+Reading the edges honestly:
+
+- **The miss (A-migration)** is the adopter-seam hard case: the
+  ground-truth doc ranks #4 on the environment side, but the consumer's
+  own pipeline docs outscore the environment's window (topR 0.557 >
+  topS 0.523), so the breadth criterion stays silent. The answer doc was
+  *found*; participation suppressed it. This is the same residual class
+  the development battery carries (its discovery-question cell) — a
+  known open cell, not a surprise.
+- **P-nonsense shows the junk floor working**: breadth alone would speak
+  (50/50 docs beat the repo's 0.159 on an off-domain question), but the
+  environment's best cosine (0.296) sits under the 0.35 floor, so it
+  stays silent. Breadth measures *relative* strength; the floor catches
+  the case where both sides are weak.
+- **I-control-domain sits 11/50** — one doc short of speaking. Saturated
+  vocabulary ("compacted" is environment language) keeps this class the
+  thinnest margin in the battery, matching the development battery's
+  accepted-noise finding.
+
 ## Development battery results (Databricks spool, 2026-07)
 
 - **Participation:** 18/20 correct on the strict archetype matrix
