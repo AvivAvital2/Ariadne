@@ -74,6 +74,27 @@ Reading the edges honestly:
   thinnest margin in the battery, matching the development battery's
   accepted-noise finding.
 
+### Theme coherence (same store)
+
+A second question the same store answers: does Leiden theme discovery hold
+up at scale, or degrade into junk clusters? `run_battery.py` reads the
+coherence gate's verdict straight off the store:
+
+```
+theme coherence gate: 1900/2092 clusters coherent (90.8%)   192 incoherent (hidden by default)
+```
+
+Every Leiden community is handed to the LLM summarizer, which returns
+`INCOHERENT` for a cluster with no shared concern (a vendored JS bundle, a
+wall of generated stubs); those are flagged `coherent=0` and hidden from
+`ariadne themes` and search by default. Over this store — the Databricks
+environment (Spark + Delta + SDK) plus the three fixture consumers, 2,092
+clusters — **90.8% pass the gate**, and the 192 rejected are exactly the
+noise the gate exists to catch. It reproduces offline from the built store
+(no LLM, no embeddings — it reads the stored flag) with
+`uv run python evals/run_battery.py`; measure the same split on your own
+corpus with `ariadne themes stats`.
+
 ## Development battery results (Databricks spool, 2026-07)
 
 - **Participation:** 18/20 correct on the strict archetype matrix

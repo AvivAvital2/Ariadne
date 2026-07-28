@@ -145,3 +145,37 @@ class TestReport:
             rows, store, {'leak': _unit(1.0, 0.1, 0.0)}.__getitem__)
         assert report.correct == 0
         assert report.exit_code == 1
+
+
+class TestThemeCoherence:
+    """The coherence-gate readout over the built store: how many Leiden
+    clusters passed the LLM coherence judge. Reads the themes table's
+    stored flag directly, so it reproduces offline from the committed
+    store — the reproducible answer to "do the themes hold up at scale?".
+    """
+
+    def _conn_with_themes(self, tmp_path, flags):
+        conn = sqlite3.connect(tmp_path / 'themes.db')
+        conn.execute(
+            'CREATE TABLE themes (cluster_id TEXT PRIMARY KEY, coherent INTEGER)')
+        conn.executemany(
+            'INSERT INTO themes (cluster_id, coherent) VALUES (?, ?)',
+            [(f'c{i}', int(flag)) for i, flag in enumerate(flags)],
+        )
+        conn.commit()
+        return conn
+
+    def test_reports_coherent_incoherent_total_and_rate(self, tmp_path):
+        conn = self._conn_with_themes(tmp_path, [True, True, True, False])
+        stats = run_battery.theme_coherence(conn)
+        assert stats['coherent'] == 3
+        assert stats['incoherent'] == 1
+        assert stats['total'] == 4
+        assert stats['coherent_rate'] == pytest.approx(0.75)
+
+    def test_empty_store_rate_zero_not_crash(self, tmp_path):
+        conn = self._conn_with_themes(tmp_path, [])
+        stats = run_battery.theme_coherence(conn)
+        assert stats == {
+            'coherent': 0, 'incoherent': 0, 'total': 0, 'coherent_rate': 0.0,
+        }

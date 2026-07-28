@@ -177,6 +177,36 @@ def print_report(report: Report) -> None:
           f'junk admissions: {report.junk_total}')
 
 
+def theme_coherence(conn) -> dict:
+    """Coherence-gate outcome over the built store: how many Leiden
+    clusters the LLM judged coherent vs incoherent.
+
+    Reads the themes table's stored ``coherent`` flag directly — offline,
+    no embeddings, no LLM — so it reproduces from the committed store like
+    the retrieval numbers do. ``coherent_rate`` is 0.0 for an empty corpus
+    (no divide-by-zero). This is the reproducible answer to "does theme
+    discovery hold up at scale, or degrade into junk clusters?".
+    """
+    total = conn.execute('SELECT COUNT(*) FROM themes').fetchone()[0]
+    coherent = conn.execute(
+        'SELECT COUNT(*) FROM themes WHERE coherent = 1').fetchone()[0]
+    return {
+        'coherent': coherent,
+        'incoherent': total - coherent,
+        'total': total,
+        'coherent_rate': (coherent / total) if total else 0.0,
+    }
+
+
+def print_coherence(stats: dict) -> None:
+    if not stats['total']:
+        print('\ntheme coherence: no themes in store')
+        return
+    print(f'\ntheme coherence gate: {stats["coherent"]}/{stats["total"]} '
+          f'clusters coherent ({100 * stats["coherent_rate"]:.1f}%)   '
+          f'{stats["incoherent"]} incoherent (hidden by default)')
+
+
 # --- wiring for the real eval store (everything above is dependency-free) --
 
 def _load_real_store(store_dir: Path, env_source: str) -> Store:
@@ -243,6 +273,7 @@ def main() -> int:
     store = _load_real_store(Path(args.store), args.env_source)
     report = run(rows, store, _vector_loader(rows, Path(args.vectors)))
     print_report(report)
+    print_coherence(theme_coherence(store.conn))
     return report.exit_code
 
 
