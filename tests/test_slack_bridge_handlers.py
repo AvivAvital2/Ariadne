@@ -1043,6 +1043,46 @@ async def test_explicit_markdown_request_attaches_verbatim_answer():
     assert len(slack.updated[-1][2]) < 500
 
 
+async def test_explicit_markdown_request_separates_fenced_document_from_reply():
+    answer = (
+        'I found the relevant implementation details.\n\n'
+        '````markdown\n'
+        '# Implementation plan\n\n'
+        '```python\n'
+        'print("preserve inner fences")\n'
+        '```\n'
+        '````'
+        'The document is ready.'
+    )
+    reply = types.SimpleNamespace(text=answer, is_error=False, session_id='S')
+    pool = _FakePool(_FakeSession(reply), contains=True)
+    slack = _FakeSlack()
+    cfg = bridge_config(users=frozenset({'UALICE'}))
+    event = {
+        'user': 'UALICE',
+        'channel': 'C1',
+        'ts': 'T1',
+        'text': '<@UBOT> attach your complete answer as a Markdown file',
+    }
+
+    await handle_event(
+        cfg=cfg, pool=pool, slack=slack, bot_user_id='UBOT',
+        ack=_noop_ack, event=event,
+    )
+
+    assert slack.uploaded[0]['content'] == (
+        '# Implementation plan\n\n'
+        '```python\n'
+        'print("preserve inner fences")\n'
+        '```'
+    )
+    posted_reply = slack.updated[-1][2]
+    assert 'I found the relevant implementation details.' in posted_reply
+    assert 'The document is ready.' in posted_reply
+    assert 'ariadne-answer.md' in posted_reply
+    assert '# Implementation plan' not in posted_reply
+
+
 class _FailingMarkdownUploadSlack(_FakeSlack):
     def __init__(self):
         super().__init__()

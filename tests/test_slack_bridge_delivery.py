@@ -5,6 +5,7 @@ import pytest
 from slack_bridge.delivery import (
     FALLBACK_CHUNK_MAX_CHARS,
     markdown_attachment_requested,
+    partition_markdown_attachment,
     split_slack_message,
 )
 
@@ -75,3 +76,66 @@ def test_split_slack_message_keeps_boundary_separator_within_limit():
 
     assert ''.join(chunks) == text
     assert all(len(chunk) <= FALLBACK_CHUNK_MAX_CHARS for chunk in chunks)
+
+
+def test_partition_markdown_attachment_separates_message_from_document():
+    answer = (
+        'I found the relevant implementation details.\n\n'
+        '````markdown\n'
+        '# Migration plan\n\n'
+        'Run this command:\n\n'
+        '```bash\n'
+        'python migrate.py\n'
+        '```\n'
+        '````\n\n'
+        'The attached file contains the complete plan.'
+    )
+
+    attachment = partition_markdown_attachment(answer)
+
+    assert attachment.content == (
+        '# Migration plan\n\n'
+        'Run this command:\n\n'
+        '```bash\n'
+        'python migrate.py\n'
+        '```'
+    )
+    assert attachment.message == (
+        'I found the relevant implementation details.\n\n'
+        'The attached file contains the complete plan.'
+    )
+
+
+def test_partition_markdown_attachment_keeps_clean_answer_verbatim():
+    answer = '# Migration plan\n\n- First step\n'
+
+    attachment = partition_markdown_attachment(answer)
+
+    assert attachment.content == answer.strip()
+    assert attachment.message == ''
+
+
+def test_partition_markdown_attachment_accepts_prose_joined_to_closing_fence():
+    answer = (
+        'Here is the complete implementation and validation guide, attached as a markdown file.\n\n'
+        '````markdown\n'
+        '# Validation guide\n\n'
+        '```bash\n'
+        'python verify.py\n'
+        '```\n'
+        '````The full guide has been attached above.'
+    )
+
+    attachment = partition_markdown_attachment(answer)
+
+    assert attachment.content == (
+        '# Validation guide\n\n'
+        '```bash\n'
+        'python verify.py\n'
+        '```'
+    )
+    assert not attachment.content.startswith('Here is the complete')
+    assert attachment.message == (
+        'Here is the complete implementation and validation guide, attached as a markdown file.\n\n'
+        'The full guide has been attached above.'
+    )

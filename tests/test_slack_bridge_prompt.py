@@ -49,3 +49,12 @@ def test_scoring_directive_is_added_only_when_feedback_is_enabled():
     # to echo it into the user-facing reply (the deterministic strip is the
     # backstop, but the directive keeps the model from emitting it at all).
     assert 'not include the score in your reply' in low
+
+
+def test_system_prompt_explains_markdown_attachment_envelope():
+    prompt = render_system_prompt([SourceEntry('projecta', None, ())]).lower()
+
+    assert 'bridge' in prompt
+    assert 'four backticks' in prompt
+    assert 'outside the fence' in prompt
+    assert 'do not' in prompt and 'save' in prompt

@@ -54,6 +54,16 @@ Formatting (Slack mrkdwn, NOT Markdown):
 - Inline code uses `backticks`; code blocks use triple backticks.
 - Do not use # / ## headings or Markdown tables; use *bold* labels and \
 `- ` bullet lists instead.
+
+Markdown attachment exception:
+- If the user explicitly asks for the answer, plan, prompt, or instructions as a \
+Markdown file, the Slack bridge writes and attaches the file for you. This is \
+allowed by your read-only posture: do not use a write tool, say that you cannot \
+save it, or give copy/save instructions.
+- Keep any short Slack-facing response outside the document fence. Put the exact \
+file content inside one fence labelled `markdown`, opened and closed with four \
+backticks. Four backticks allow the document to contain normal triple-backtick \
+code blocks. Do not put any file content outside the fence.
 '''
 
 

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from slack_bridge.diagram import PreparedReply, prepare_diagrams
@@ -60,6 +61,19 @@ _EXPLICIT_ATTACHMENT_PATTERNS = (
     ),
 )
 
+_MARKDOWN_FENCE_OPEN = re.compile(
+    r'(?m)^[ \t]*(?P<fence>`{3,}|~{3,})[ \t]*(?:markdown|md)[ \t]*\r?\n',
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class MarkdownAttachment:
+    """The file body and Slack-facing prose split from one agent reply."""
+
+    content: str
+    message: str
+
 
 def markdown_attachment_requested(request_text: str) -> bool:
     """Return whether the user explicitly requested this answer as Markdown.
@@ -73,6 +87,49 @@ def markdown_attachment_requested(request_text: str) -> bool:
     if _NEGATED_ATTACHMENT.search(text):
         return False
     return any(pattern.search(text) for pattern in _EXPLICIT_ATTACHMENT_PATTERNS)
+
+
+def partition_markdown_attachment(answer: str) -> MarkdownAttachment:
+    """Separate one explicit Markdown document envelope from reply prose.
+
+    Agents commonly put a requested document inside a four-backtick
+    ``markdown`` fence so that the document can itself contain ordinary triple-
+    backtick code blocks. That outer fence is a transport envelope, not part of
+    the requested file. When exactly one well-formed envelope exists, upload its
+    body and retain the surrounding text as the Slack-facing message. A clean
+    answer with no envelope remains byte-for-byte intact apart from the delivery
+    path's existing outer-whitespace trim.
+
+    Multiple envelopes are deliberately left untouched: choosing one would lose
+    content, while uploading the original answer is safe and reversible.
+    """
+    text = (answer or '').strip()
+    candidates: list[tuple[int, int, str]] = []
+    cursor = 0
+    while opening := _MARKDOWN_FENCE_OPEN.search(text, cursor):
+        fence = opening.group('fence')
+        marker = re.escape(fence[0])
+        # Some agents join their Slack-facing follow-up directly to the closing
+        # fence (````The file is attached``). The fence still unambiguously ends
+        # the outer envelope: consume only its marker so the joined prose remains
+        # outside and is delivered in Slack, never inside the uploaded document.
+        closing = re.compile(
+            rf'(?m)^[ \t]*{marker}{{{len(fence)},}}'
+        ).search(text, opening.end())
+        if closing is None:
+            break
+        candidates.append((opening.start(), closing.end(), text[opening.end():closing.start()]))
+        cursor = closing.end()
+
+    if len(candidates) != 1:
+        return MarkdownAttachment(content=text, message='')
+
+    start, end, body = candidates[0]
+    outside = [part.strip() for part in (text[:start], text[end:]) if part.strip()]
+    content = body.strip()
+    if not content:
+        return MarkdownAttachment(content=text, message='')
+    return MarkdownAttachment(content=content, message='\n\n'.join(outside))
 
 
 def split_slack_message(
@@ -132,11 +189,12 @@ async def deliver_reply(
             text=rendered,
         )
     else:
+        attachment = partition_markdown_attachment(answer)
         try:
             await slack.files_upload_v2(
                 channel=channel,
                 thread_ts=thread_ts,
-                content=answer,
+                content=attachment.content,
                 filename=_ATTACHMENT_FILENAME,
                 title='Ariadne full answer',
             )
@@ -161,11 +219,16 @@ async def deliver_reply(
                     text=chunk,
                 )
         else:
+            message = to_mrkdwn(attachment.message) if attachment.message else ''
+            if message:
+                message = f'{message}\n\n{_ATTACHMENT_NOTICE}'
+            else:
+                message = _ATTACHMENT_NOTICE
             await update_message(
                 slack,
                 channel=channel,
                 ts=placeholder_ts,
-                text=_ATTACHMENT_NOTICE,
+                text=message,
             )
 
     if prepared.images:
