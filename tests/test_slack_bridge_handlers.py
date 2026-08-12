@@ -11,6 +11,7 @@ import slack_usage
 import testimonials
 from slack_bridge.budget import TurnBudget, _SLOW_AFTER, _SLOW_BEFORE, slow_notice
 from slack_bridge.diagram import dot_available
+from slack_bridge.format import to_mrkdwn
 from slack_bridge.handlers import (
     _channel_is_shared,
     _org_context,
@@ -51,10 +52,25 @@ class _FakeSlack:
 
     async def conversations_replies(self, *, channel, ts):  # noqa: ARG002 — Slack client signature
         return {'messages': self._replies}
-
-    async def files_upload_v2(self, *, channel, file, thread_ts=None, filename=None, title=None):  # noqa: N802
+    async def files_upload_v2(
+        self,
+        *,
+        channel,
+        file=None,
+        content=None,
+        thread_ts=None,
+        filename=None,
+        title=None,
+    ):
         self.uploaded.append(
-            {'channel': channel, 'thread_ts': thread_ts, 'file': file, 'filename': filename}
+            {
+                'channel': channel,
+                'thread_ts': thread_ts,
+                'file': file,
+                'content': content,
+                'filename': filename,
+                'title': title,
+            }
         )
     async def chat_getPermalink(self, *, channel, message_ts):  # noqa: N802
         self.permalinks.append((channel, message_ts))
@@ -571,6 +587,7 @@ async def test_empty_question_replies_usage_without_placeholder_or_agent():
     assert 'across' in low                                    # #4 cross-project asking
     assert 'product manager' in low or 'developer' in low     # #2 audience/scope
     assert 'diagram' in low                                   # #3 diagrams when docs allow
+    assert 'attach the answer as Markdown' in help_text
 
 
 async def test_handle_event_forwards_token_and_trigger_files(monkeypatch):
@@ -972,3 +989,92 @@ async def test_resolve_user_name_handles_empty_and_lookup_failure():
             raise RuntimeError('slack hiccup')
 
     assert await _resolve_user_name(_Boom(), 'U_x') == 'U_x'
+
+
+async def test_long_answer_without_explicit_file_request_stays_inline():
+    answer = '# Implementation plan\n\n' + ('- Preserve this exact Markdown.\n' * 700)
+    reply = types.SimpleNamespace(text=answer, is_error=False, session_id='S')
+    pool = _FakePool(_FakeSession(reply), contains=True)
+    slack = _FakeSlack()
+    cfg = bridge_config(users=frozenset({'UALICE'}))
+    event = {
+        'user': 'UALICE',
+        'channel': 'C1',
+        'ts': 'T1',
+        'text': '<@UBOT> produce the complete implementation plan',
+    }
+
+    await handle_event(
+        cfg=cfg, pool=pool, slack=slack, bot_user_id='UBOT',
+        ack=_noop_ack, event=event,
+    )
+
+    assert slack.uploaded == []
+    assert slack.updated[-1][2] == to_mrkdwn(answer.strip())
+
+
+async def test_explicit_markdown_request_attaches_verbatim_answer():
+    answer = '# Implementation plan\n\n- Preserve this exact Markdown.\n'
+    reply = types.SimpleNamespace(text=answer, is_error=False, session_id='S')
+    pool = _FakePool(_FakeSession(reply), contains=True)
+    slack = _FakeSlack()
+    cfg = bridge_config(users=frozenset({'UALICE'}))
+    event = {
+        'user': 'UALICE',
+        'channel': 'C1',
+        'ts': 'T1',
+        'text': '<@UBOT> attach your complete answer as a Markdown file',
+    }
+
+    await handle_event(
+        cfg=cfg, pool=pool, slack=slack, bot_user_id='UBOT',
+        ack=_noop_ack, event=event,
+    )
+
+    assert len(slack.uploaded) == 1
+    upload = slack.uploaded[0]
+    assert upload['content'] == answer.strip()
+    assert upload['file'] is None
+    assert upload['filename'] == 'ariadne-answer.md'
+    assert upload['title'] == 'Ariadne full answer'
+    assert upload['thread_ts'] == 'T1'
+    assert 'attached' in slack.updated[-1][2].lower()
+    assert 'ariadne-answer.md' in slack.updated[-1][2]
+    assert len(slack.updated[-1][2]) < 500
+
+
+class _FailingMarkdownUploadSlack(_FakeSlack):
+    def __init__(self):
+        super().__init__()
+        self.markdown_upload_attempts = 0
+
+    async def files_upload_v2(self, **kwargs):
+        self.markdown_upload_attempts += 1
+        raise RuntimeError('Slack file upload failed')
+
+
+async def test_requested_markdown_upload_failure_falls_back_to_complete_thread_chunks():
+    answer = 'Plan introduction.\n\n' + ('A bounded implementation step.\n' * 900)
+    reply = types.SimpleNamespace(text=answer, is_error=False, session_id='S')
+    pool = _FakePool(_FakeSession(reply), contains=True)
+    slack = _FailingMarkdownUploadSlack()
+    cfg = bridge_config(users=frozenset({'UALICE'}))
+    event = {
+        'user': 'UALICE',
+        'channel': 'C1',
+        'ts': 'T1',
+        'text': '<@UBOT> return the full plan as an attached .md file',
+    }
+
+    await handle_event(
+        cfg=cfg, pool=pool, slack=slack, bot_user_id='UBOT',
+        ack=_noop_ack, event=event,
+    )
+
+    assert slack.markdown_upload_attempts == 1
+    continuation_messages = [
+        text
+        for _, thread_ts, text in slack.posted[1:]
+        if thread_ts == 'T1'
+    ]
+    assert slack.updated[-1][2] + ''.join(continuation_messages) == answer.strip()

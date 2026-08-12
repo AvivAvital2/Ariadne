@@ -9,6 +9,11 @@ While the project is at `0.x`, breaking changes may occur in any release.
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-06-03
+### Added
+
+- The Slack bridge now attaches answers as Markdown files when users explicitly
+  request file output, with lossless bounded thread chunks as an upload fallback.
+
+## [0.1.0] - 2026-05-26
 
 - Initial public release under the Apache License 2.0.

@@ -11,9 +11,8 @@ import slack_usage
 import testimonials
 from schema import _now_iso
 from slack_bridge.budget import slow_notice
-from slack_bridge.diagram import prepare_diagrams
+from slack_bridge.delivery import deliver_reply, markdown_attachment_requested
 from slack_bridge.errors import TurnBudgetExceeded, to_user_message
-from slack_bridge.format import to_mrkdwn
 from slack_bridge.images import image_files_in
 from slack_bridge.orchestrator import answer_question
 from slack_bridge.replay import PLACEHOLDER_PREFIX, load_thread
@@ -60,6 +59,7 @@ def _help_text(cfg: Any) -> str:
         '• *Altitude is optional* — answers are in depth by default; add e.g. '
         '“for a product manager” or “from 10k feet” to change the level.',
         '• *Diagrams:* if the docs cover it, ask me to “diagram …” and I’ll render it inline.',
+        '• *File output:* say “attach the answer as Markdown” to receive an `.md` file.',
         '• You can also @mention me or DM me with a question.',
     ]
     sources = sorted(getattr(cfg, 'source_descriptions', {}) or {})
@@ -208,24 +208,15 @@ async def handle_event(
     except Exception as exc:  # noqa: BLE001 -- surface honestly (timeout included); never mask
         _logger.exception('Slack turn failed (channel=%s thread=%s)', channel, thread_ts)
         answer = to_user_message(exc)
-
-    # Render any DOT diagrams to PNGs off the event loop (dot is a subprocess).
-    # Missing/invalid dot degrades to a warning + the DOT source inside prepared.text.
-    prepared = await asyncio.to_thread(prepare_diagrams, answer)
-    await _slack_update(
-        slack, channel=channel, ts=placeholder['ts'], text=to_mrkdwn(prepared.text),
+    prepared = await deliver_reply(
+        slack=slack,
+        channel=channel,
+        thread_ts=thread_ts,
+        placeholder_ts=placeholder['ts'],
+        answer=answer,
+        attach_markdown=markdown_attachment_requested(text),
+        update_message=_slack_update,
     )
-    if prepared.images:
-        await asyncio.gather(*(
-            slack.files_upload_v2(
-                channel=channel,
-                thread_ts=thread_ts,
-                file=png,
-                filename=f'diagram-{i + 1}.png',
-                title='Diagram',
-            )
-            for i, png in enumerate(prepared.images)
-        ))
     if cfg.enable_feedback and turn_score is not None:
         # Best-effort: the answer is already posted, so capture must never surface to
         # the user. The permalink is a nice-to-have, fetched in its OWN suppress so a
