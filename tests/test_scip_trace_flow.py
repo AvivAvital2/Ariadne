@@ -57,8 +57,8 @@ def _insert_symbol(
     qualified_name: str | None = None,
 ) -> None:
     conn.execute(
-        'INSERT INTO scip_symbols VALUES '
-        '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO scip_symbols (canonical_id, source_name, language, file, line_start, line_end, kind, display_name, qualified_name, parent_qualified_name) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (
             canonical_id, source_name, 'python', file,
             line_start, line_end, 'function',

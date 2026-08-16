@@ -1,0 +1,13 @@
+digraph answer {
+  rankdir=TB; node [shape=box, fontname="Helvetica", fontsize=10];
+  q   [label="question", shape=ellipse];
+  ret [label="service.search(limit=8)\nembeddings", shape=box];
+  seed[label="structural_assembly.seeds_from_documents\nfiles -> symbols  (+ unique symbol mentions)"];
+  walk[label="structural_assembly.chain_from_seeds\nONE walk, shared state\ncall edges, source-guarded, locals excluded"];
+  bun [label="chain_bundle.curate_bundle\nper-hop document by deterministic id\nprose rationed by stop_reason\ntheme map"];
+  spn [label="chain_answer.render_spine\nexecution order, nested, bounded"];
+  llm [label="llm.chat_complete", shape=ellipse];
+  rsp [label="AskResponse\nanswer + citations[]"];
+  grd [label="chain_answer.unsupported_locations\nno invented file:line", shape=hexagon, color="#2f6f4f"];
+  q -> ret -> seed -> walk -> bun -> spn -> llm -> rsp; grd -> rsp [style=dashed, label="check"];
+}

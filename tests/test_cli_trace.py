@@ -31,8 +31,8 @@ def db_with_chain(tmp_path: Path) -> Path:
     init_scip_schema(conn)
     for sym in ('A', 'B', 'C'):
         conn.execute(
-            'INSERT INTO scip_symbols VALUES '
-            '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO scip_symbols (canonical_id, source_name, language, file, line_start, line_end, kind, display_name, qualified_name, parent_qualified_name) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (sym, 'myapp', 'python', 'app.py',
              1, 10, 'function', sym, sym, None),
         )

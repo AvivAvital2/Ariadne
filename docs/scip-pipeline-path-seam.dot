@@ -1,0 +1,9 @@
+digraph seam {
+  rankdir=LR; node [shape=box, fontname="Helvetica", fontsize=10];
+  doc  [label="documents.source_files\n'delta/spark/src/.../X.scala'\n(or an ABSOLUTE path)", shape=note];
+  scip [label="scip_symbols.file\n'spark/src/.../X.scala'", shape=note];
+  own  [label="scip_paths.py\nscip_candidates + verify\nleast strip wins", color="#2f6f4f"];
+  man  [label=".ariadne/manifest.json\nindexers[].cwd", shape=note];
+  doc -> own; man -> own [label="candidate prefixes"]; own -> scip [label="59 / 91 joined"];
+  bad  [label="as stored: 0 / 91\nlongest-cwd rule: 36 / 91", shape=plaintext, fontcolor="#8a2f2f"];
+}

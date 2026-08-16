@@ -140,7 +140,7 @@ def test_adapter_resolves_hops_to_source_level_messages() -> None:
 
 def _ins_sym(conn: sqlite3.Connection, cid: str, source: str, qn: str) -> None:
     conn.execute(
-        'INSERT INTO scip_symbols VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO scip_symbols (canonical_id, source_name, language, file, line_start, line_end, kind, display_name, qualified_name, parent_qualified_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (cid, source, 'python', 'app.py', 1, 10, 'function',
          cid.rsplit('.', 1)[-1], qn, None),
     )

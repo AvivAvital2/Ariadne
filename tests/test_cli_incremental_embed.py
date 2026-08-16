@@ -23,7 +23,7 @@ def recorder(monkeypatch):
     """Capture the only_missing value handed to the embedding rebuild."""
     seen: dict[str, object] = {}
 
-    async def fake_rebuild(library, only_missing=False, assume_yes=False, use_batch=False):
+    async def fake_rebuild(library, only_missing=False, assume_yes=False, use_batch=False, source=None):
         seen['only_missing'] = only_missing
 
     monkeypatch.setattr(core, '_rebuild_embeddings', fake_rebuild)
@@ -66,7 +66,7 @@ async def test_rebuild_embeddings_threads_only_missing_to_writer(monkeypatch, tm
     """The real _rebuild_embeddings must pass only_missing down to the writer."""
     seen: dict[str, object] = {}
 
-    async def fake_rebuild_all(self, only_missing=False, on_progress=None):
+    async def fake_rebuild_all(self, only_missing=False, on_progress=None, source=None):
         seen['only_missing'] = only_missing
         return 0
 

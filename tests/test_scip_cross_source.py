@@ -1178,8 +1178,8 @@ class TestSchema:
         lib = Library(db_path)
         with lib._conn_provider.acquire() as conn:
             conn.execute(
-                'INSERT INTO scip_symbols VALUES '
-                '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO scip_symbols (canonical_id, source_name, language, file, line_start, line_end, kind, display_name, qualified_name, parent_qualified_name) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (
                     'sym1', 'mysrc', 'python', 'a.py',
                     1, 2, 'Method', 'foo', 'a.foo', 'a',

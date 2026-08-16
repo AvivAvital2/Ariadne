@@ -35,8 +35,8 @@ def _seed_chain_db(db_path: Path) -> None:
     init_scip_schema(conn)
     for sym in ('A', 'B'):
         conn.execute(
-            'INSERT INTO scip_symbols VALUES '
-            '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO scip_symbols (canonical_id, source_name, language, file, line_start, line_end, kind, display_name, qualified_name, parent_qualified_name) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (sym, 'myapp', 'python', 'app.py',
              1, 10, 'function', sym, sym, None),
         )
@@ -194,8 +194,8 @@ class TestMcpWrapper:
         init_scip_schema(conn)
         for sym in ('A', 'B', 'C', 'D', 'E'):
             conn.execute(
-                'INSERT INTO scip_symbols VALUES '
-                '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO scip_symbols (canonical_id, source_name, language, file, line_start, line_end, kind, display_name, qualified_name, parent_qualified_name) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (sym, 'myapp', 'python', 'app.py',
                  1, 10, 'function', sym, sym, None),
             )
@@ -236,12 +236,12 @@ class TestSequenceDiagram:
         conn = sqlite3.connect(db_path)
         init_scip_schema(conn)
         conn.execute(
-            'INSERT INTO scip_symbols VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO scip_symbols (canonical_id, source_name, language, file, line_start, line_end, kind, display_name, qualified_name, parent_qualified_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             ('A', 'alpha', 'python', 'app.py', 1, 10, 'function', 'A',
              'alpha.login', None),
         )
         conn.execute(
-            'INSERT INTO scip_symbols VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO scip_symbols (canonical_id, source_name, language, file, line_start, line_end, kind, display_name, qualified_name, parent_qualified_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             ('B', 'beta', 'python', 'app.py', 1, 10, 'function', 'B',
              'beta.handle', None),
         )

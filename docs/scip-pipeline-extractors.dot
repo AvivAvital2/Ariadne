@@ -1,0 +1,17 @@
+digraph extractors {
+  rankdir=LR;
+  node [shape=box, fontname="Helvetica", fontsize=10];
+  db [label="scip_symbols\nscip_edges", shape=cylinder];
+
+  db -> cat  [label=""]; cat  [label="scip_extractor.py\ncatalog ElementInfo\n(restored verbatim)"];
+  db -> lit;  lit  [label="scip_string_literal_extractor.py\nscip_string_literal_index.py"];
+  db -> cfg;  cfg  [label="scip_config_scanners.py\nscip_config_value_extractor.py\nscip_config_usage_extractor.py\nscip_config_index.py"];
+  db -> http; http [label="http clients\npython · js · go · scala"];
+  db -> rt;   rt   [label="routes\npython_web · express · go_route · akka_http"];
+  db -> url;  url  [label="scip_literal_url_extractor.py\nscip_url_resolver.py"];
+  db -> proc; proc [label="scip_process_extractor.py"];
+  db -> tst;  tst  [label="scip_scala_test_extractor.py"];
+  db -> res;  res  [label="scip_resolution.py\nscip_sink_registry.py\nscip_definition_inspector.py\nscip_go_ast.py"];
+
+  tomb [label="scip_process_invocations.py\nscip_resolution_traversal.py\nTOMBSTONES — 'Moved'", shape=note, color="#8a2f2f", fontcolor="#8a2f2f"];
+}

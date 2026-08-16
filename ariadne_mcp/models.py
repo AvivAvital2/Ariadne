@@ -252,6 +252,10 @@ class AskResponse(BaseModel):
     sources: list[str] = Field(default_factory=list)  # Doc titles used
     confidence: str = 'medium'  # 'high', 'medium', 'low' based on doc match quality
     event_id: int = 0
+    #: Chain hops behind the answer: qualified_name, file, line, relation, hop,
+    #: call_site, stop_reason. Additive — `sources` keeps doc titles, so every
+    #: existing caller is unaffected.
+    citations: list[dict] = Field(default_factory=list)
 
 
 class ExplainDocument(BaseModel):

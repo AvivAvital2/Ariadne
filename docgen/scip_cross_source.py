@@ -33,6 +33,12 @@ from attrs import evolve, field, frozen
 
 from docgen.scip_descriptors import _qualified_name_from_symbol
 import logging
+import re
+from docgen.scip_graph import (  # noqa: F401  (re-exported for callers)
+    CrossSourceEdge,
+    CrossSourceSymbol,
+    classify_edge,
+)
 
 if TYPE_CHECKING:
     from sqlite3 import Connection
@@ -61,51 +67,7 @@ def _floor_rank(min_confidence: 'str | None') -> int:
 DEFAULT_MAX_DATA_EDGES = 1_000_000
 
 logger = logging.getLogger(__name__)
-
-
-# Schema lives at library level (``library_scip.py``) so the slim
-# consumer can apply it without pulling in docgen modules at import
-# time. CrossSourceGraph populates the tables; slim-side query code
-# can read them directly.
-
-
-# ---------------------------------------------------------------------------
-# Public types
-# ---------------------------------------------------------------------------
-
-
-@frozen
-class CrossSourceSymbol:
-    """A symbol definition in any indexed source.
-
-    ``canonical_id`` is the SCIP wire-format symbol string — globally
-    unique by SCIP convention. The other fields are denormalized for
-    convenience; they all derive from the SCIP index this symbol came
-    from.
-    """
-    canonical_id: str
-    source_name: str
-    language: str
-    file: str  # relative path within the source root
-    line_start: int  # 1-indexed
-    line_end: int  # 1-indexed, inclusive
-    kind: str  # SCIP SymbolKind name (Class, Method, Field, ...)
-    display_name: str
-    qualified_name: str
-    parent_qualified_name: str | None
-
-
-@frozen
-class CrossSourceEdge:
-    """A reference (call/use) from one symbol to another, resolved by
-    SCIP. ``confidence`` always reads ``'exact'`` in v1; the field is
-    kept as a future-proofing escape hatch."""
-    caller: CrossSourceSymbol
-    callee: CrossSourceSymbol
-    edge_type: str  # 'call' for v1
-    file: str  # where the reference appears (relative path)
-    line: int  # 1-indexed
-    confidence: str = 'exact'
+_BARE_LOCAL = re.compile(r'^local \d+$')
 
 
 @frozen
@@ -264,6 +226,9 @@ class CrossSourceGraph:
         # without re-registering sources.
         self._known_source_names: set[str] = set()
         self._rst_autodoc: dict[str, list[str]] = {}
+        # producer canonical_id -> [consumer CrossSourceSymbol] (HTTP tier),
+        # for cross-language blast radius.
+        self._http_consumers: dict[str, list] = {}
         self._edges_by_callee: dict = {}
         self._edges_by_caller: dict = {}
         # Dirty by default: a graph built by assigning _edges directly (e.g.
@@ -271,9 +236,9 @@ class CrossSourceGraph:
         self._edge_index_dirty: bool = True
         self._resolve_external_to: frozenset = frozenset()
         self._qn_index: dict = {}
-
+    
     # -- registration -----------------------------------------------------
-
+    
     def add_source(
         self,
         source_name: str,
@@ -290,7 +255,7 @@ class CrossSourceGraph:
         """
         self._sources.setdefault(source_name, []).append(
             _SourceEntry(
-                name=source_name, index=index, language=language,
+                name=source_name, index=index.scoped_to(source_name), language=language,
             ),
         )
         self._known_source_names.add(source_name)
@@ -300,150 +265,49 @@ class CrossSourceGraph:
         registered via ``add_source`` (with a live ScipIndex) or loaded
         from the DB via ``load_from``."""
         return source_name in self._known_source_names
-
     def materialize(self, resolve_external_to=None) -> None:
-        """Rebuild the symbol index and edge list from registered sources.
+        """Build symbols and edges from every registered source.
 
-        Two passes:
-        1. Collect every definition occurrence as a CrossSourceSymbol,
-           keyed by canonical_id.
-        2. For every non-definition occurrence whose target is a known
-           symbol, resolve the caller (tightest enclosing definition in
-           the same document) and emit one CrossSourceEdge.
+    Two phases, because external resolution needs the whole picture: symbols first across
+    every source, then edges resolved against that complete set. Both phases delegate to
+    ``docgen.scip_graph``, where identity, extents, edge typing and ``implements`` are
+    settled once and cannot drift per consumer.
 
-        References whose target is not in the registered set are dropped
-        (the target lives in an unindexed source — decision #4), UNLESS
-        ``resolve_external_to`` names sources to resolve into: such a
-        reference is then matched by qualified name to a unique definition
-        in one of those sources and emitted as a ``confidence='resolved'``
-        cross-source edge. This removes the cross-store "wall" for a repo
-        that calls a spool's API directly (its moniker and the spool's
-        definition differ only in package/version, so the canonical-id
-        lookup misses but the qualified name matches).
-        """
+    ``resolve_external_to`` names sources a dropped reference may resolve INTO, matched by
+    qualified name — the bridge for a repo whose moniker differs from a spool's definition
+    only by package or version, so the canonical id misses where the name matches.
+    """
+        from docgen.scip_graph import build_edges, build_symbols
+
         self._symbols = {}
         self._edges = []
+        self._unresolved_callees = 0
+        self._unattributed_sites = 0
         self._resolve_external_to = frozenset(resolve_external_to or ())
 
-        # Pass 1: collect definitions across every registered indexer
-        # (a polyglot source has multiple entries under one name).
         for entries in self._sources.values():
             for entry in entries:
-                for doc in entry.index.documents:
-                    self._collect_definitions(doc, entry)
+                self._symbols.update(build_symbols(
+                    entry.index, source_name=entry.name, language=entry.language))
 
-        # Build the qualified-name index over the resolvable (spool) sources so
-        # external references can be bridged to a unique definition there.
+        # The qualified-name index the external resolver matches against, built only over
+        # the sources resolution is allowed to reach into.
         self._qn_index = {}
         if self._resolve_external_to:
-            for sym in self._symbols.values():
-                if sym.source_name in self._resolve_external_to:
-                    self._qn_index.setdefault(
-                        sym.qualified_name, []).append(sym)
+            for symbol in self._symbols.values():
+                if symbol.source_name in self._resolve_external_to:
+                    self._qn_index.setdefault(symbol.qualified_name, []).append(symbol)
 
-        # Pass 2: emit reference edges
+        resolver = self._resolve_external if self._resolve_external_to else None
         for entries in self._sources.values():
             for entry in entries:
-                for doc in entry.index.documents:
-                    self._collect_edges(doc, entry)
+                edges, unresolved, unattributed = build_edges(
+                    entry.index, source_name=entry.name, language=entry.language,
+                    symbols=self._symbols, resolve_external=resolver)
+                self._edges.extend(edges)
+                self._unresolved_callees += unresolved
+                self._unattributed_sites += unattributed
         self._edge_index_dirty = True
-
-    def _collect_definitions(
-        self, doc: '_ScipDoc', entry: _SourceEntry,
-    ) -> None:
-        """For each definition occurrence in ``doc``, build and store a
-        CrossSourceSymbol.
-
-        Parameter-descriptor definitions (scip-python's
-        ``Foo#bar().(self)``) are skipped — they're not standalone
-        callable definitions and ingesting them as ``CrossSourceSymbol``
-        rows pollutes the resolver's substring tier and collides with
-        same-named nested-method QNs. The parser still recognizes them
-        (so chained descriptors don't truncate); they just aren't
-        promoted to graph nodes.
-        """
-        from docgen.scip_descriptors import _parse_descriptors
-
-        symbol_meta = {s.symbol: s for s in doc.symbols}
-
-        for occ in doc.occurrences:
-            if not occ.is_definition:
-                continue
-            # Skip parameter symbols. The cheap prefilter: a parameter
-            # descriptor ``(name)`` makes the symbol end with ``)``.
-            if occ.symbol.endswith(')'):
-                descriptors = occ.symbol.rsplit(' ', 1)[-1]
-                parsed = _parse_descriptors(descriptors)
-                if parsed and parsed[-1][1] == 'parameter':
-                    continue
-            meta = symbol_meta.get(occ.symbol)
-            line_start, line_end = _occ_line_range_1indexed(occ)
-            qn, parent_qn = _qualified_name_from_symbol(
-                occ.symbol, entry.language,
-            )
-            self._symbols[occ.symbol] = CrossSourceSymbol(
-                canonical_id=occ.symbol,
-                source_name=entry.name,
-                language=entry.language,
-                file=doc.relative_path,
-                line_start=line_start,
-                line_end=line_end,
-                kind=meta.kind if meta else '',
-                display_name=meta.display_name if meta else _last_descriptor(occ.symbol),
-                qualified_name=qn,
-                parent_qualified_name=parent_qn,
-            )
-
-    def _collect_edges(self, doc, entry) -> None:
-        """For each non-definition occurrence in ``doc``, find the
-        callee (lookup in self._symbols) and the caller (tightest
-        enclosing definition in this doc)."""
-        defs_in_doc = []
-        for occ in doc.occurrences:
-            if occ.is_definition:
-                ls, le = _occ_line_range_1indexed(occ)
-                defs_in_doc.append((ls, le, occ.symbol))
-
-        for occ in doc.occurrences:
-            if occ.is_definition:
-                continue
-            callee = self._symbols.get(occ.symbol)
-            resolved = False
-            if callee is None:
-                # Not defined in the corpus. Try to resolve it (by qualified
-                # name) to a definition in a resolvable source; else drop it
-                # (decision #4 — the target lives in an unindexed source).
-                callee = self._resolve_external(occ.symbol, entry.language)
-                if callee is None:
-                    continue
-                resolved = True
-
-            ref_line = _occ_line_start_1indexed(occ)
-            caller_id = _tightest_enclosing(defs_in_doc, ref_line)
-            if caller_id is None:
-                # Reference at file scope (e.g., import line) — no
-                # enclosing function/method/class. Skip; reverse-augment
-                # only cares about edges with a defined caller.
-                continue
-            caller = self._symbols.get(caller_id)
-            if caller is None:
-                continue
-
-            # Skip self-references — a defining occurrence can have
-            # additional non-definition occurrences at the same site for
-            # supplementary roles (read/write). We only want true
-            # call/use edges that change the caller-callee relationship.
-            if caller.canonical_id == callee.canonical_id:
-                continue
-
-            self._edges.append(CrossSourceEdge(
-                caller=caller,
-                callee=callee,
-                edge_type='call',
-                file=doc.relative_path,
-                line=ref_line,
-                confidence='resolved' if resolved else 'exact',
-            ))
 
     def _resolve_external(self, symbol, language):
         """Resolve an external-reference moniker to a UNIQUE definition in the
@@ -491,6 +355,12 @@ class CrossSourceGraph:
         return self._edges_by_caller.get(symbol_id, [])
     
     
+    def http_consumers_of(self, producer_id: str) -> list:
+        """Client symbols that consume an endpoint PRODUCED by ``producer_id``
+        — the reverse of trace_flow's forward HTTP hop. Empty when the symbol
+        produces no consumed endpoint. Powers cross-language blast radius."""
+        return self._http_consumers.get(producer_id, [])
+
     def _rebuild_edge_index(self) -> None:
         """(Re)build the endpoint indexes from ``_edges`` (design §6): O(1) per
     hop instead of an O(E) scan, important because data edges are plausibly
@@ -576,13 +446,18 @@ class CrossSourceGraph:
             registered,
         )
 
-        # Insert symbols owned by registered sources
+        # Insert symbols owned by registered sources. Columns are NAMED: this was a
+        # positional `VALUES (?, ?, ...)`, which is correct only while the tuple and the
+        # table agree on order and arity, and writes values into the wrong fields the
+        # moment a column is added anywhere but the end.
         for sym in self._symbols.values():
             if sym.source_name not in self._sources:
                 continue
             conn.execute(
-                'INSERT OR REPLACE INTO scip_symbols VALUES '
-                '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT OR REPLACE INTO scip_symbols '
+                '(canonical_id, source_name, language, file, line_start, line_end, '
+                ' kind, display_name, qualified_name, parent_qualified_name) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (
                     sym.canonical_id, sym.source_name, sym.language,
                     sym.file, sym.line_start, sym.line_end,
@@ -601,8 +476,10 @@ class CrossSourceGraph:
             ):
                 continue
             conn.execute(
-                'INSERT OR REPLACE INTO scip_edges VALUES '
-                '(?, ?, ?, ?, ?, ?)',
+                'INSERT OR REPLACE INTO scip_edges '
+                '(caller_canonical_id, callee_canonical_id, edge_type, file, line, '
+                ' confidence) '
+                'VALUES (?, ?, ?, ?, ?, ?)',
                 (
                     edge.caller.canonical_id, edge.callee.canonical_id,
                     edge.edge_type, edge.file, edge.line, edge.confidence,
@@ -664,6 +541,23 @@ class CrossSourceGraph:
             'FROM rst_autodoc_links',
         ):
             self._rst_autodoc.setdefault(row[0], []).append(row[1])
+
+        # HTTP tier: producer symbol -> consumer symbols. Changing a producer
+        # affects every client bound to its endpoint (reverse of trace_flow's
+        # forward hop). Best-effort — tables may be absent in older DBs.
+        self._http_consumers = {}
+        try:
+            for producer, consumer in conn.execute(
+                'SELECT ae.producer_symbol_id, ac.consumer_symbol_id '
+                'FROM api_endpoints ae '
+                'JOIN api_calls ac ON ac.endpoint_id = ae.endpoint_id '
+                'WHERE ae.producer_symbol_id IS NOT NULL',
+            ):
+                csym = self._symbols.get(consumer)
+                if csym is not None:
+                    self._http_consumers.setdefault(producer, []).append(csym)
+        except Exception:
+            pass
         self._edge_index_dirty = True
     
     
@@ -925,6 +819,13 @@ def compute_impact_radius(
             if caller_id not in visited:
                 affected.append(edge.caller)
             _walk(caller_id, d - 1)
+        # Reverse HTTP hop: a change to an endpoint PRODUCER affects every
+        # client bound to its endpoint — cross-language blast radius grep
+        # cannot reach.
+        for consumer in graph.http_consumers_of(sym_id):
+            if consumer.canonical_id not in visited:
+                affected.append(consumer)
+            _walk(consumer.canonical_id, d - 1)
 
     _walk(start_id, depth)
 
@@ -936,67 +837,7 @@ def compute_impact_radius(
     )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _occ_line_range_1indexed(occ: '_ScipOccurrence') -> tuple[int, int]:
-    """Convert SCIP wire range (0-indexed) → Ariadne 1-indexed
-    ``(line_start, line_end)``. Handles 3-tuple (same line) and 4-tuple
-    (multi-line) forms.
-    """
-    r = list(occ.range)
-    if len(r) == 3:
-        return (r[0] + 1, r[0] + 1)
-    return (r[0] + 1, r[2] + 1)
-
-
-def _occ_line_start_1indexed(occ: '_ScipOccurrence') -> int:
-    """1-indexed start line of an occurrence."""
-    return int(occ.range[0]) + 1
-
-
-def _tightest_enclosing(
-    defs: list[tuple[int, int, str]], ref_line: int,
-) -> str | None:
-    """Find the symbol of the tightest definition whose 1-indexed range
-    contains ``ref_line``. Returns None if no definition contains it.
-
-    ``defs`` is a list of ``(line_start, line_end, symbol)`` tuples; we
-    pick the entry with the largest ``line_start`` whose
-    ``[line_start, line_end]`` interval includes ``ref_line``. The
-    largest start = innermost scope.
-    """
-    best: tuple[int, str] | None = None
-    for ls, le, sym in defs:
-        if ls <= ref_line <= le:
-            if best is None or ls > best[0]:
-                best = (ls, sym)
-    return best[1] if best is not None else None
-
-
-def _last_descriptor(symbol: str) -> str:
-    """Best-effort display-name fallback when SymbolInformation is
-    missing. Strip the trailing kind suffix and return the last
-    descriptor's name; keeps the resolver's display matching usable
-    even with under-populated indexes.
-    """
-    # Take the descriptor segment (after the last whitespace token).
-    descriptors = symbol.rsplit(' ', 1)[-1]
-    # Strip trailing kind char if present
-    if descriptors and descriptors[-1] in '/.#:':
-        descriptors = descriptors[:-1]
-    # Strip method disambiguator like '()' from the tail
-    if descriptors.endswith('()'):
-        descriptors = descriptors[:-2]
-    # The last name is whatever follows the last delimiter.
-    for sep in '/#.:':
-        idx = descriptors.rfind(sep)
-        if idx >= 0:
-            descriptors = descriptors[idx + 1:]
-            break
-    return descriptors
+_NO_END = 1 << 30   # the last definition runs to end-of-file
 
 
 def _sorted_candidates(

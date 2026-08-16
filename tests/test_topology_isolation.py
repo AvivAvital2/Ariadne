@@ -95,8 +95,8 @@ sources:
     # SCIP symbols + edges for the cross-source graph.
     with library._conn_provider.acquire() as conn:
         conn.executemany(
-            'INSERT INTO scip_symbols VALUES '
-            '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO scip_symbols (canonical_id, source_name, language, file, line_start, line_end, kind, display_name, qualified_name, parent_qualified_name) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
                 ('shared:authenticate', 'shared', 'python',
                  'shared/auth.py', 10, 20, 'function',
@@ -241,9 +241,9 @@ class TestTopologyIsolation:
     # closure. That was retracted after the review caught that theme
     # docs created by ``docgen/cluster.py`` have ``source_name=None``,
     # so any scoped read would filter them all out. Themes operate
-    # below the chokepoint ("Library-internal modules — legitimately
-    # unscoped"). The test now pins the new behavior: themes_action
-    # takes raw library and
+    # below the chokepoint (see designs/directional-closure-scoping.md
+    # § "Library-internal modules — legitimately unscoped"). The test
+    # now pins the new behavior: themes_action takes raw library and
     # returns themes regardless of any caller scope.
     def test_themes_action_is_library_internal(self, topology) -> None:
         from ariadne_mcp.service_themes import themes_action

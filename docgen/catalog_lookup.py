@@ -190,6 +190,57 @@ def list_elements_in_file(
 __all__ = ['config_usage', 'fuzzy_suggestions', 'get_element_body', 'list_elements_in_file', 'lookup_symbol', 'rank_symbol_candidates']
 
 
+def _resolve_source_file(file_path: str, source_name: str) -> "Path":
+    """Turn a catalog's stored path into something readable.
+
+    Sources catalogued in place store ABSOLUTE paths; a spool stores paths
+    relative to its corpus root (``delta/spark/.../X.scala``). Reading the
+    stored value literally therefore worked for the former and failed for every
+    spool symbol with ``read_failed: No such file or directory`` -- a knowledge
+    tool unable to return the code it had indexed.
+
+    Absolute-and-present wins untouched; otherwise the path is joined to the
+    source's configured root. A still-missing file falls through to the caller's
+    ``read_failed``, so a genuine absence stays loud.
+    """
+    from pathlib import Path as _Path
+
+    p = _Path(file_path)
+    if p.is_absolute() and p.exists():
+        return p
+    try:
+        from config import get_config
+        root = get_config().get_source_path(source_name)
+    except Exception:      # noqa: BLE001 - config problems must not mask the read error
+        return p
+    if root is None:
+        return p
+    candidate = _Path(root) / file_path
+    return candidate if candidate.exists() else p
+def _scip_body_end(library, source_name: str, qualified_name: str):
+    """The body end SCIP recorded for this symbol, or ``None``.
+
+    ``MAX`` because overloads share a qualified name. Only an ``int`` is trusted: the
+    body path is also called with test doubles, and a line number that is not a number
+    is not a line number.
+    """
+    import sqlite3 as _sqlite3
+
+    try:
+        with library._conn_provider.acquire() as conn:
+            row = conn.execute(
+                'SELECT MAX(line_end) FROM scip_symbols '
+                'WHERE source_name = ? AND qualified_name = ?',
+                (source_name, qualified_name),
+            ).fetchone()
+    except (AttributeError, TypeError, _sqlite3.OperationalError):
+        # No SCIP tier in this store (or not a real Library). Not an error: the
+        # catalog location still answers, exactly as it did before.
+        return None
+    end = row[0] if row else None
+    return end if isinstance(end, int) else None
+
+
 def get_element_body(
     library: "Library",
     source_name: str,
@@ -208,8 +259,18 @@ def get_element_body(
     if not file_path or ls is None or le is None:
         info['body_error'] = 'missing_file_or_location'
         return info
+    # A catalog location is the IDENTIFIER span -- measured on the live store,
+    # ClassicMergeExecutor.writeAllChanges records line 285..285 with cols 16..31,
+    # the 15 characters of its own name -- so a body read returned a signature
+    # fragment. SCIP persists the definition's body extent, so prefer the wider of
+    # the two. Widening only: a catalog extent that was already right is never cut.
+    scip_end = _scip_body_end(library, source_name, qualified_name)
+    if scip_end is not None and scip_end > le:
+        le = scip_end
+        info['body_extent'] = 'scip'
+    resolved = _resolve_source_file(file_path, source_name)
     try:
-        text = _P(file_path).read_text(encoding='utf-8')
+        text = resolved.read_text(encoding='utf-8')
     except OSError as e:
         info['body_error'] = f'read_failed: {e}'
         return info

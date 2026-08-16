@@ -1,10 +1,16 @@
-"""Extraction-coverage version — a staleness *signal* for the SCIP extractors.
+"""Extraction-coverage version — a staleness *signal* for the SCIP ingest.
 
-Ariadne's staleness is CONTENT-based (a file changing marks it stale). A
-code-level change to what the SCIP extractors cover — a new language, a new
-extension (e.g. ``.cjs``), a new sink — is invisible to that, so a source
-already indexed under older coverage silently keeps incomplete ``library_scip``
-data until something unrelated retriggers indexing.
+Ariadne's staleness is CONTENT-based (a file changing marks it stale). It watches
+the *inputs*. This watches the *code*, because ``library_scip`` can go wrong
+while every input is byte-identical.
+
+The subject is anything that changes what ingest writes from an UNCHANGED
+``.scip`` artifact — not only extractor coverage. Reading it as coverage alone
+(a new language, extension, or sink) is what let the 2026-08-04 ingest rebuild
+ship without a bump: it renamed no language and added no sink, it changed how
+symbol identity, body extents, relationships and call-site attribution are
+derived. The store then failed all four ingest invariants for two days while
+``check`` correctly reported clean, comparing v1 to v1.
 
 To close that: **bump** :data:`EXTRACTION_COVERAGE_VERSION` whenever extractor
 coverage changes. ``ariadne index`` stamps the current version into each
@@ -22,11 +28,22 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-# Bump when the SCIP extractors' COVERAGE changes (new language / extension /
-# sink), so already-indexed sources are flagged to re-run ``ariadne index``.
+# Bump when the rows ingest writes from an unchanged ``.scip`` artifact would
+# differ — new language / extension / sink, but equally a change to identity,
+# extents, relationships, attribution, or a new column. Already-indexed sources
+# are then flagged to re-run ``ariadne index`` (or ``--persist-only``, which
+# rebuilds from the artifacts already on disk).
 #   v1 — baseline: JS grammar covers .cjs; doc-language detection covers
 #        .vue / .conf / .css (all previously drifted / missing).
-EXTRACTION_COVERAGE_VERSION = 1
+#   v2 — the ingest rebuild and what followed it: ``local N`` ids namespaced per
+#        document (one row had fused 4,446 files); body extents reconstructed so
+#        a hop can be quoted; ``is_implementation`` ingested as ``implements``
+#        edges; edges typed by what they point at; a call site attributed to the
+#        enclosing callable rather than a local on the same line (34.65% of call
+#        edges were owned by a variable); sources disk can no longer refresh
+#        reconciled
+#        away instead of surviving as unreachable rows.
+EXTRACTION_COVERAGE_VERSION = 2
 
 _MANIFEST_KEY = 'extraction_coverage_version'
 
@@ -68,18 +85,22 @@ def stamp_coverage(source_root) -> None:
         data = {}
     data[_MANIFEST_KEY] = EXTRACTION_COVERAGE_VERSION
     path.write_text(json.dumps(data, indent=2), encoding='utf-8')
-
-
 def coverage_notice(source_name, source_root) -> 'str | None':
-    """A one-line, actionable notice when ``source_name``'s extraction is
-    behind the current coverage, else ``None``."""
+    """A one-line, actionable notice when ``source_name``'s ingest is behind, else
+    ``None``.
+
+    Names ``--persist-only`` because this drift is by definition code-side: the artifact
+    is unchanged, only the rows written from it are behind. Re-indexing would rebuild a
+    ``.scip`` that is already correct — on the databricks spool that is scip-java over 50
+    packages to reproduce a byte-identical file.
+    """
     gap = coverage_gap(source_root)
     if gap is None:
         return None
     stamped, current = gap
     return (
-        f"SCIP extraction for '{source_name}' is behind (indexed at v{stamped}, "
-        f"current v{current}) — run `ariadne index --source {source_name}` to "
-        f"refresh string-literal / route / config intelligence "
-        f"(SCIP-layer only: no LLM, embedding, or doc-regen cost)."
+        f"SCIP ingest for '{source_name}' is behind (written at v{stamped}, "
+        f"current v{current}) — run `ariadne index --persist-only --source "
+        f"{source_name}` to rebuild library_scip from the .scip artifact already on "
+        f"disk (no indexer, no LLM, no embedding, no doc-regen cost)."
     )

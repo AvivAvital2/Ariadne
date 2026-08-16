@@ -23,8 +23,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sqlite3 import Connection
-
-
 _SCIP_SYMBOLS_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS scip_symbols (
     canonical_id          TEXT PRIMARY KEY,
@@ -65,6 +63,10 @@ CREATE TABLE IF NOT EXISTS scip_index_state (
 _SCIP_INDEXES = '''
 CREATE INDEX IF NOT EXISTS idx_scip_symbols_source ON scip_symbols(source_name);
 CREATE INDEX IF NOT EXISTS idx_scip_symbols_file   ON scip_symbols(file);
+-- `expand_to_members` looks a seed's members up by parent, and without this the
+-- planner falls back to idx_scip_symbols_source and walks every row the source
+-- owns: 0.320s against 0.060s for a runMerge chain, measured A/B/A on a warm cache.
+CREATE INDEX IF NOT EXISTS idx_scip_symbols_parent ON scip_symbols(parent_qualified_name);
 CREATE INDEX IF NOT EXISTS idx_scip_edges_callee   ON scip_edges(callee_canonical_id);
 CREATE INDEX IF NOT EXISTS idx_scip_edges_caller   ON scip_edges(caller_canonical_id);
 '''
@@ -340,8 +342,6 @@ CREATE TABLE IF NOT EXISTS data_model_gaps (
     detail      TEXT NOT NULL
 )
 '''
-
-
 def init_scip_schema(conn: 'Connection') -> None:
     """Create the SCIP tables (cross-source graph + API surface +
     config-value index + config-read index + string-literal index +

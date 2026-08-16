@@ -1,5 +1,6 @@
 """Analysis operations — issue analysis, Q&A, coverage, review, and task context."""
 from __future__ import annotations
+import re
 
 import logging
 
@@ -221,7 +222,7 @@ class AnalysisMixin:
         # in the synthesis context (CRIT-6), split the balanced anchor+ground
         # context, and its fingerprint keys the PM audience cache (CRIT-11).
         from spools import resolve_spools
-        _spool_resolution = resolve_spools(self.config)
+        _spool_resolution = resolve_spools(self.config).narrowed_to(source)
         _spool_fp = _spool_resolution.fingerprint()
         # Balanced context: the repo (anchor) is the subject, the spool is the
         # environment. Take the top of EACH so the synthesis receives both
@@ -240,6 +241,19 @@ class AnalysisMixin:
             provenance_line=_environment_provenance(_spool_resolution),
         )
         sources = [doc.title for doc in top_docs]
+        _evidence = None
+        _citations: list = []
+        try:
+            from library.chain_answer import evidence_for
+            _scip_source = source or getattr(self.config, 'default_source', None)
+            if _scip_source:
+                import asyncio
+                _evidence = await asyncio.to_thread(
+                    evidence_for, self.library, top_docs, source=_scip_source)
+                _citations = _evidence.citations()
+        except Exception as _chain_error:  # noqa: BLE001
+            _logger.warning('chain assembly failed, answering from documents only: %s',
+                            _chain_error)
 
         # 3. Determine confidence from scores
         scores = [d.score for d in search_result.documents if d.score is not None]
@@ -265,7 +279,7 @@ class AnalysisMixin:
                     sources=[cached.title],
                     confidence=confidence,
                     event_id=search_result.event_id,
-                )
+                citations=_citations)
 
             # Cache miss — call adapter with the dev baseline as
             # context. The dev docs are already in ``context`` above.
@@ -287,7 +301,7 @@ class AnalysisMixin:
                     sources=sources,
                     confidence=confidence,
                     event_id=search_result.event_id,
-                )
+                citations=_citations)
 
             # Persist the adapted response so next identical question
             # is a cache hit.
@@ -311,7 +325,7 @@ class AnalysisMixin:
                 sources=sources,
                 confidence=confidence,
                 event_id=search_result.event_id,
-            )
+            citations=_citations)
 
         if not self.config.ask_synthesis:
             return AskResponse(
@@ -319,24 +333,37 @@ class AnalysisMixin:
                 sources=sources,
                 confidence=confidence,
                 event_id=search_result.event_id,
-            )
-
-        # 4b. Synthesize answer with LLM (developer role — existing path)
-        api_key = os.environ.get('OPENAI_API_KEY')
-        if not api_key:
+            citations=_citations)
+        from llm import has_provider_key
+        if not has_provider_key():
             return AskResponse(
                 answer=badge + f'Based on {len(sources)} docs:\n\n{context}',
                 sources=sources,
                 confidence=confidence,
                 event_id=search_result.event_id,
+            citations=_citations)
+        if _evidence is not None and _evidence.spine:
+            # The chain is the spine and the prose is commentary -- the inversion the north
+            # star asks for. Before this, `ask` concatenated eight documents and no answer
+            # could name a line, so 2.5M compiler-precise edges never reached the model.
+            prompt = (
+                'Answer the question using the CALL CHAIN below as the spine of your '
+                'answer. The chain is real: each hop is a definition at the file and line '
+                'shown, followed by the call site that proves the edge. Walk it in order. '
+                'Cite file:line for every claim about control flow, and use the '
+                'documentation only to explain WHY a step exists. Never name a file:line '
+                'that does not appear in the chain.\n\n'
+                f'Question: {question}\n\n'
+                f'Call chain:\n{_evidence.spine}\n\n'
+                f'Documentation:\n{context}'
             )
-
-        prompt = (
-            f'Answer this question based ONLY on the documentation below. '
-            f'Cite which document(s) you used. Be concise and specific.\n\n'
-            f'Question: {question}\n\n'
-            f'Documentation:\n{context}'
-        )
+        else:
+            prompt = (
+                f'Answer this question based ONLY on the documentation below. '
+                f'Cite which document(s) you used. Be concise and specific.\n\n'
+                f'Question: {question}\n\n'
+                f'Documentation:\n{context}'
+            )
 
         try:
             from llm import chat_complete
@@ -351,7 +378,7 @@ class AnalysisMixin:
                 sources=sources,
                 confidence=confidence,
                 event_id=search_result.event_id,
-            )
+            citations=_citations)
         except Exception as e:
             _logger.warning('LLM synthesis failed: %s', e)
             return AskResponse(
@@ -359,7 +386,7 @@ class AnalysisMixin:
                 sources=sources,
                 confidence=confidence,
                 event_id=search_result.event_id,
-            )
+            citations=_citations)
 
     # ------------------------------------------------------------------
     # Coverage

@@ -10,7 +10,8 @@ not supply a fresh embedding:
 
 * content changed, no embedding given → invalidate (NULL + drop chunks).
 * content identical → leave embedding/chunks intact (re-import stays free).
-* title-only change → leave embedding intact.
+* title-only change → invalidate too: the title is part of
+  ``doc_embedding_text``, so a rename makes the vector stale.
 * content changed *with* an explicit embedding → keep the caller's vector.
 """
 from __future__ import annotations
@@ -50,29 +51,36 @@ def test_content_change_resets_embedding_to_null_and_drops_chunks(tmp_path):
     assert after.content == 'a completely different body of text'
     assert after.embedding is None, 'stale embedding must be invalidated on content change'
     assert lib.get_chunks(doc.id) == [], 'stale chunks must be dropped on content change'
-
-
 def test_unchanged_content_preserves_embedding_and_chunks(tmp_path):
+    """A true re-import — same content, same title — must stay free."""
     lib = _lib(tmp_path)
     doc = _embedded_doc(lib, content='same body')
 
-    lib.update_document(doc.id, content='same body', title='New Title')
+    lib.update_document(doc.id, content='same body')
 
     after = lib.get_document(doc.id)
-    assert after.title == 'New Title'
     assert after.embedding is not None, 're-importing identical content must not re-embed'
     assert len(lib.get_chunks(doc.id)) == 1
+def test_title_only_change_invalidates_the_embedding(tmp_path):
+    """A rename changes the embedded text, so the old vector is stale.
 
+    This test previously asserted the opposite. The vector is computed from
+    ``doc_embedding_text(title, content)`` — the title is part of the embedded
+    string — so after a rename the stored vector describes text the document no
+    longer contains, and it keeps ranking for the old name. Preserving it kept
+    re-import cheap at the cost of serving a wrong vector, which is the wrong
+    trade for a retrieval store.
 
-def test_title_only_change_preserves_embedding(tmp_path):
+    Chunks are derived from content alone and are deliberately left intact.
+    """
     lib = _lib(tmp_path)
     doc = _embedded_doc(lib)
 
     lib.update_document(doc.id, title='Renamed')
 
     after = lib.get_document(doc.id)
-    assert after.embedding is not None
-    assert len(lib.get_chunks(doc.id)) == 1
+    assert after.embedding is None, 'title is embedded, so a rename invalidates'
+    assert len(lib.get_chunks(doc.id)) == 1, 'chunks are content-derived; keep them'
 
 
 def test_new_content_with_explicit_embedding_keeps_that_embedding(tmp_path):

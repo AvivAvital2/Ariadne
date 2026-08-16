@@ -7,6 +7,8 @@ to fill ariadne.yaml. Wired into the parser via this module's
 """
 from __future__ import annotations
 
+import sqlite3
+
 import argparse
 import functools
 from pathlib import Path
@@ -98,6 +100,14 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     index_parser.add_argument(
         '--kind', choices=['python', 'typescript', 'java'],
         help='Run only entries of this indexer kind (skip the rest)',
+    )
+    index_parser.add_argument(
+        '--persist-only', action='store_true',
+        help='Skip the indexers and rebuild library_scip from the .scip artifacts '
+             'already on disk. For a store that has drifted from the ingest code: the '
+             'artifacts are still correct, only the rows written from them are stale. '
+             'Costs minutes instead of a full re-index, and ignores artifact age, since '
+             're-reading a deliberately old artifact is the point.',
     )
     index_parser.add_argument(
         '--force', '-f', action='store_true',
@@ -436,12 +446,19 @@ def cmd_index(
             )
             return 1
 
-    if indexer_registry is None:
+    persist_only = bool(getattr(args, 'persist_only', False))
+    if indexer_registry is None and not persist_only:
         indexer_registry = _default_indexer_registry()
-    if merger is None:
+    if merger is None and not persist_only:
         merger = _SubprocessMerger()
+    if persist_only and not getattr(args, 'quiet', False):
+        console.print(
+            '[cyan]persist-only: skipping indexers, rebuilding library_scip from '
+            'the .scip artifacts already on disk[/cyan]')
 
-    for source_name in sources_to_process:
+    # An empty iterable skips the whole indexer phase. Guarding the loop body
+    # instead would re-indent four hundred lines for one condition.
+    for source_name in ([] if persist_only else sources_to_process):
         sc = cfg.get_source_config(source_name)
         if sc is None:
             console.print(
@@ -873,6 +890,7 @@ def cmd_index(
             persist_go_http_clients,
             persist_go_routes,
             persist_js_http_clients,
+            persist_literal_url_clients,
             persist_python_http_clients,
             persist_python_routes,
             persist_scala_http_clients,
@@ -894,7 +912,11 @@ def cmd_index(
             dialect_by_source[name] = other_sc.sql_dialect
             # honor a source's ignore_staleness for the data-model SCIP load
             # (effective_scip_staleness_days -> None disables the age gate)
-            max_staleness_by_source[name] = cfg.effective_scip_staleness_days(name)
+            # persist-only exists to re-read artifacts that ARE old; the 7-day
+            # default is what silently dropped a freshly rebuilt 638MB index.
+            max_staleness_by_source[name] = (
+                None if persist_only
+                else cfg.effective_scip_staleness_days(name))
             if other_sc.schema_sql:
                 schema_paths_by_source[name] = list(other_sc.schema_sql)
             if other_sc.swagger_paths:
@@ -906,7 +928,7 @@ def cmd_index(
         scoped_swagger = [s for s in swagger_pairs if s[0] in scoped]
         with persist_progress(console, 'cross-source graph') as report:
 
-            persisted = persist_all_sources(Path(cfg.db_path), source_pairs, progress_callback = report)
+            persisted = persist_all_sources(Path(cfg.db_path), source_pairs, progress_callback = report, max_staleness_by_source=max_staleness_by_source, reconcile=True)
         if persisted and not getattr(args, 'quiet', False):
             console.print(
                 f'[green]Persisted cross-source graph '
@@ -1094,6 +1116,21 @@ def cmd_index(
                 f'→ http_client_calls[/green]',
             )
 
+        # Detector A — client URL literals in situ (the SPA idiom): each API
+        # function's endpoint URL literal → http_client_calls, even when it's
+        # funneled through a shared request wrapper (so no recognized fetch
+        # sink carries it). Runs after routes + string_literals, before the
+        # resolver that matches the rows it writes.
+        with console.status('[bold cyan]extracting literal-URL clients…'):
+            lit_url = persist_literal_url_clients(
+                Path(cfg.db_path), scoped_pairs,
+            )
+        if lit_url and not quiet:
+            console.print(
+                f'[green]Extracted {lit_url} literal-URL client call(s) '
+                f'→ http_client_calls[/green]',
+            )
+
         # Wave 4 Phase 8c — URL→endpoint resolution. The closing
         # step: matches client URLs (http_client_calls) against
         # server templates (api_endpoints), writes resolved edges
@@ -1115,6 +1152,35 @@ def cmd_index(
         from docgen.extraction_coverage import stamp_coverage
         for _name, _root in scoped_pairs:
             stamp_coverage(_root)
+
+        # The ingest invariants, checked out loud. Every SCIP defect in this codebase's
+        # history succeeded silently -- `build_graph` never on the onboard path, staleness
+        # computed and never threaded, body extents computed and discarded, `local N` ids
+        # never namespaced -- and in each case the run printed success. The live store then
+        # sat two days behind the rebuilt ingest, failing all four invariants, while every
+        # command reported fine. `wiring_report` is the definition of "the ingest works",
+        # and until now nothing but tests invoked it.
+        #
+        # Reporting only: a corpus can legitimately hold no `is_implementation`
+        # relationships, so a failing check is not by itself grounds to fail the run.
+        from docgen.scip_wiring import wiring_report
+        with sqlite3.connect(f'file:{cfg.db_path}?mode=ro', uri=True) as _gate_conn:
+            _report = wiring_report(_gate_conn)
+        if _report.ok:
+            if not quiet:
+                console.print('[green]SCIP wiring gate: all ingest invariants hold'
+                              '[/green]')
+        else:
+            console.print(
+                '[red]SCIP wiring gate FAILED — the store does not satisfy the ingest '
+                'invariants:[/red]')
+            for _check in _report.failures():
+                console.print(f'[red]  {_check.name}: {_check.detail}[/red]')
+                console.print(f'[red]    measured {_check.measured}[/red]')
+            console.print(
+                '[yellow]Nothing that reads scip_symbols/scip_edges can be trusted '
+                'until these pass. If the ingest code changed since this store was '
+                'written, re-persist it.[/yellow]')
 
     return 0
 

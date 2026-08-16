@@ -205,3 +205,34 @@ async def test_ask_synthesis_error_degrades_to_docs(service, library, monkeypatc
 
     assert 'Widget Guide' in result.answer      # retrieval content still returned
     assert 'unavailable' in result.answer        # graceful-degrade marker
+
+
+@pytest.mark.asyncio
+async def test_ask_synthesizes_on_an_anthropic_only_install(
+    service, library, monkeypatch,
+):
+    """The provider gate must be the configured provider, not a hardcoded one.
+
+    ``ask`` checked ``os.environ['OPENAI_API_KEY']`` before synthesizing, but
+    ``llm.chat_complete`` routes by ``provider:`` and reads ANTHROPIC_API_KEY
+    for Anthropic models. This repo is configured ``provider: anthropic`` /
+    ``model: claude-opus-4-8``, so an install holding only an Anthropic key
+    silently fell back to dumping retrieval context — synthesis skipped, with
+    a perfectly valid key present.
+
+    The redundant pre-check is also the wrong place to fail: ``chat_complete``
+    already raises a specific "ANTHROPIC_API_KEY is required" error, which the
+    caller's exception path reports.
+    """
+    _seed(library)
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'test-key')
+    service.config._config['provider'] = 'anthropic'
+    service.config._config['model'] = 'claude-opus-4-8'
+    fake = AsyncMock(return_value='SYNTHESIZED-BY-ANTHROPIC')
+    monkeypatch.setattr('llm.chat_complete', fake)
+
+    result = await service.ask(question='How does the widget subsystem work?')
+
+    fake.assert_called_once()
+    assert 'SYNTHESIZED-BY-ANTHROPIC' in result.answer

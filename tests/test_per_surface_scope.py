@@ -12,6 +12,8 @@ end-to-end closure semantics.
 
 Fixture nomenclature: ``shared`` is a leaf library; ``product`` depends
 on ``shared``; ``extension`` depends on ``product``.
+
+See ``designs/directional-closure-scoping.md`` Phase 4 for the cycle plan.
 """
 from __future__ import annotations
 
@@ -133,7 +135,8 @@ sources:
     # library-internal cross-source data (theme docs are created without
     # ``source_name`` by ``docgen/cluster.py``), so routing themes_action
     # through ScopedLibrary would filter out every theme that has no
-    # source_name. The architectural decision
+    # source_name. The architectural decision recorded in
+    # ``designs/directional-closure-scoping.md`` §
     # "Library-internal modules — legitimately unscoped" is that themes
     # operate below the chokepoint, using the raw library.
     #
@@ -238,8 +241,8 @@ sources:
                      'extension.bootstrap', None),
                 ]
                 conn.executemany(
-                    'INSERT INTO scip_symbols VALUES '
-                    '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    'INSERT INTO scip_symbols (canonical_id, source_name, language, file, line_start, line_end, kind, display_name, qualified_name, parent_qualified_name) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                     symbols,
                 )
                 edges = [

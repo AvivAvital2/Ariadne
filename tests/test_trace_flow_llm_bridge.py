@@ -46,8 +46,8 @@ def _insert_symbol(
 ) -> None:
     qn = qualified_name or canonical_id
     conn.execute(
-        'INSERT INTO scip_symbols VALUES '
-        '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO scip_symbols (canonical_id, source_name, language, file, line_start, line_end, kind, display_name, qualified_name, parent_qualified_name) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (canonical_id, source_name, language, file,
          line_start, line_end, 'function',
          qn.rsplit('.', 1)[-1], qn, None),

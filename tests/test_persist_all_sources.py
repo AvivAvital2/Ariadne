@@ -11,8 +11,12 @@ the data they need.
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from pathlib import Path
+from docgen.scip_extractor import ScipIndex as _ExtractorScipIndex
+from docgen.scip_persist import persist_all_sources
+from docgen.scip_extractor import _ScipDoc, _ScipOccurrence, _ScipSymbol
 
 
 def _write_manifest(source_root: Path, indexer_entries: list[dict]) -> None:
@@ -90,6 +94,93 @@ def _user_index_calling_spark():
                              display_name='run'),),
     )
     return ScipIndex(documents=(doc,))
+
+
+def _merged_multi_project_index():
+    """One source's MERGED index: project B defines ``spark.sql.Dataset``,
+    project A references it from inside ``DeltaTable`` via a moniker carrying a
+    different package coordinate.
+
+    This is the shape a merged multi-project corpus actually has — several
+    ``.scip`` files combined under ONE source name, where a reference crossing a
+    project boundary keeps that project's own package/version coordinates and so
+    misses the canonical-id lookup.
+    """
+    from docgen.scip_extractor import (
+        ScipIndex, _ScipDoc, _ScipOccurrence, _ScipSymbol,
+    )
+
+    dataset_def = 'scip-java java spark-core 0.1 `spark.sql`/Dataset#'
+    dataset_ref = 'scip-java java spark-core 3.5.0 `spark.sql`/Dataset#'
+    table_def = 'scip-java java delta 0.1 `delta.tables`/DeltaTable#'
+
+    spark_doc = _ScipDoc(
+        relative_path='sql/core/src/main/scala/spark/sql/Dataset.scala',
+        occurrences=(
+            _ScipOccurrence(symbol=dataset_def, range=(0, 0, 40, 0),
+                            is_definition=True),
+        ),
+        symbols=(_ScipSymbol(symbol=dataset_def, kind='Class',
+                             display_name='Dataset'),),
+    )
+    delta_doc = _ScipDoc(
+        relative_path='spark/src/main/scala/delta/tables/DeltaTable.scala',
+        occurrences=(
+            _ScipOccurrence(symbol=table_def, range=(10, 0, 30, 0),
+                            is_definition=True),
+            # DeltaTable's body uses Dataset — a real cross-project dependency
+            _ScipOccurrence(symbol=dataset_ref, range=(15, 8, 15, 15),
+                            is_definition=False),
+        ),
+        symbols=(_ScipSymbol(symbol=table_def, kind='Class',
+                             display_name='DeltaTable'),),
+    )
+    return ScipIndex(documents=(spark_doc, delta_doc))
+
+
+def test_persist_resolves_refs_within_a_bare_named_source(tmp_path: Path) -> None:
+    """The resolvable set must be keyed on the sources actually loaded, not on a
+    ``spool:`` name prefix.
+
+    SCIP rows are written under the BARE source name, so a prefix test never
+    matches anything the SCIP tier emits and external-reference resolution never
+    fires in production. A merged multi-project corpus indexed under one bare
+    name consequently drops every reference that crosses a project boundary,
+    leaving the call graph as disconnected per-project islands.
+    """
+    from docgen.scip_persist import persist_all_sources
+
+    db_path = tmp_path / 'ariadne.db'
+    source_root = tmp_path / 'databricks'
+    source_root.mkdir()
+    _write_manifest(source_root, [{
+        'kind': 'java',
+        'scip_path': 'intermediate/index-java.scip',
+    }])
+
+    def _factory(scip_path, *, repo, max_staleness_days):
+        return _merged_multi_project_index()
+
+    persist_all_sources(
+        db_path, [('databricks', source_root)], index_factory=_factory,
+    )
+
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            'SELECT caller_canonical_id, callee_canonical_id, confidence '
+            'FROM scip_edges',
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert len(rows) == 1, (
+        'expected DeltaTable -> Dataset to survive as a resolved edge, '
+        f'got {rows}'
+    )
+    caller, callee, confidence = rows[0]
+    assert 'DeltaTable' in caller and 'Dataset' in callee
+    assert confidence == 'resolved'
 
 
 def test_persist_resolves_user_ref_into_enabled_spool(tmp_path: Path) -> None:
@@ -422,3 +513,198 @@ def test_persist_all_sources_skips_scip_index_state_when_no_merged_file(
         'no merged index.scip → no scip_index_state row '
         '(refuse to fabricate a SHA)'
     )
+
+
+class TestStalenessIsHonoured:
+    """A source configured to ignore staleness must not hit the 7-day default.
+
+    ``cli/index.py`` computes ``max_staleness_by_source`` from
+    ``effective_scip_staleness_days`` and threads it into
+    ``persist_data_model`` — but not into ``persist_all_sources``, which had no
+    such parameter. So the load fell back to ``load_source_from_manifest``'s
+    default of 7 days.
+
+    Measured on the databricks spool corpus: 48 of 50 manifest entries were
+    ~11 days old, the first one raised ``ScipTooStaleError``, the blanket
+    ``except Exception: continue`` swallowed it, and the run reported
+    "Persisted cross-source graph (7 source(s))" while silently dropping the
+    source whose 638MB index had just been rebuilt. The configured intent
+    never reached the code that enforces it.
+    """
+
+    def test_configured_staleness_reaches_the_loader(self, tmp_path):
+        from docgen.scip_persist import persist_all_sources
+
+        root = tmp_path / 'svc'
+        root.mkdir()
+        _write_manifest(root, [{'kind': 'python',
+                                'scip_path': 'intermediate/svc.scip'}])
+        seen = {}
+
+        def factory(path, *, repo, max_staleness_days):
+            seen[repo] = max_staleness_days
+            return _synthetic_python_index_with_one_class()
+
+        persist_all_sources(
+            tmp_path / 'a.db', [('svc', root)], index_factory=factory,
+            max_staleness_by_source={'svc': None},
+        )
+        assert seen == {'svc': None}, (
+            'a source that opts out of staleness must reach the loader with '
+            f'None, not the 7-day default; got {seen}'
+        )
+
+    def test_unlisted_source_keeps_the_default(self, tmp_path):
+        """Absent configuration still gets the conservative default."""
+        from docgen.scip_persist import persist_all_sources
+
+        root = tmp_path / 'other'
+        root.mkdir()
+        _write_manifest(root, [{'kind': 'python',
+                                'scip_path': 'intermediate/other.scip'}])
+        seen = {}
+
+        def factory(path, *, repo, max_staleness_days):
+            seen[repo] = max_staleness_days
+            return _synthetic_python_index_with_one_class()
+
+        persist_all_sources(
+            tmp_path / 'b.db', [('other', root)], index_factory=factory,
+            max_staleness_by_source={'svc': None},
+        )
+        assert seen == {'other': 7}
+
+    def test_a_skipped_source_is_announced(self, tmp_path, caplog):
+        """A load failure must be audible, not swallowed.
+
+        The blanket ``except Exception: continue`` is deliberate — one bad
+        source must not forfeit persistence for the rest — but silence made it
+        indistinguishable from success. A 20-minute scip-java rebuild was
+        discarded this way while the run printed "Persisted cross-source graph
+        (7 source(s))" about seven *other* sources.
+        """
+        import logging
+
+        from docgen.scip_persist import persist_all_sources
+
+        root = tmp_path / 'brokensrc'
+        root.mkdir()
+        _write_manifest(root, [{'kind': 'python',
+                                'scip_path': 'intermediate/brokensrc.scip'}])
+
+        def exploding(path, *, repo, max_staleness_days):
+            raise RuntimeError('index unreadable')
+
+        with caplog.at_level(logging.WARNING, logger='docgen.scip_persist'):
+            n = persist_all_sources(
+                tmp_path / 'c.db', [('brokensrc', root)],
+                index_factory=exploding)
+        assert n == 0
+        messages = [r.getMessage() for r in caplog.records]
+        assert any('brokensrc' in m for m in messages), \
+            f'the skip must be logged; got {messages}'
+        assert any('index unreadable' in m for m in messages), \
+            'the cause must be reported, not just the fact of a skip'
+class TestTheStoreConvergesOnDiskTruth:
+    """Graph rows survive only while something on disk can still refresh them.
+
+    ``clear_source`` and ``save_to`` are scoped to the sources registered in the
+    current run -- correctly, since re-persisting one source must not wipe another.
+    The consequence was that a source disk no longer backs could never be reached
+    again. Measured on the live store: a corpus whose code had been deleted still
+    owned 487 symbols and 563,601 edges, and ``local 0`` -- a local binding in one of
+    its deleted files -- was the endpoint of 16,061 edges drawn from 5,976 files
+    across three OTHER sources. No re-index could remove it, because removal only
+    ever happens for a source that registers.
+
+    So persistence reconciles what the store holds against what the run could find.
+    A source with no manifest cannot be refreshed by anything, and its graph rows go.
+    A source whose artifact IS present but failed to load -- stale, corrupt,
+    unreadable -- is a different case, and its rows are KEPT: deleting them would
+    turn a transient read failure into data loss.
+
+    Scope is deliberate. Reconciliation clears the SCIP graph tables this function
+    owns; it does not touch ``documents``, whose rows cost LLM spend and belong to
+    the generation pipeline.
+    """
+
+    def _factory(self, *, broken=()):
+        def factory(scip_path, *, repo, max_staleness_days):
+            if repo in broken:
+                msg = f'simulated unreadable index for {repo}'
+                raise RuntimeError(msg)
+            return _synthetic_python_index_with_one_class(repo=repo)
+        return factory
+
+    def _sources_in(self, db_path):
+        conn = sqlite3.connect(db_path)
+        try:
+            return {r[0] for r in conn.execute(
+                'SELECT DISTINCT source_name FROM scip_symbols')}
+        finally:
+            conn.close()
+
+    def test_a_source_disk_no_longer_backs_is_cleared(self, tmp_path: Path) -> None:
+        """The corpus is gone, so nothing can ever rewrite these rows -- they go.
+
+        The source stays in the caller's list, which is what actually happens: a
+        deleted corpus is usually still named in ``ariadne.yaml``, so the run is
+        handed the pair and finds no manifest behind it.
+        """
+        from docgen.scip_persist import persist_all_sources
+
+        db_path = tmp_path / 'a.db'
+        gone_root = tmp_path / 'gone'
+        live_root = tmp_path / 'live'
+        for root in (gone_root, live_root):
+            root.mkdir()
+            _write_manifest(root, [{'kind': 'python',
+                                    'scip_path': 'intermediate/i.scip'}])
+
+        pairs = [('gone', gone_root), ('live', live_root)]
+        assert persist_all_sources(
+            db_path, pairs, index_factory=self._factory()) == 2
+        assert self._sources_in(db_path) == {'gone', 'live'}
+
+        # The corpus is deleted -- manifest and all -- but still configured.
+        shutil.rmtree(gone_root)
+
+        persist_all_sources(
+            db_path, pairs, index_factory=self._factory(), reconcile=True)
+
+        assert self._sources_in(db_path) == {'live'}, (
+            'rows for a source disk can no longer back must be cleared, or no '
+            'run can ever remove them'
+        )
+
+    def test_a_source_whose_index_failed_to_load_keeps_its_rows(
+        self, tmp_path: Path,
+    ) -> None:
+        """Present but unreadable is not the same as gone.
+
+        A stale or corrupt artifact is a transient, reportable condition. Clearing
+        on it would delete a good graph because one read raised.
+        """
+        from docgen.scip_persist import persist_all_sources
+
+        db_path = tmp_path / 'b.db'
+        flaky_root = tmp_path / 'flaky'
+        live_root = tmp_path / 'live'
+        for root in (flaky_root, live_root):
+            root.mkdir()
+            _write_manifest(root, [{'kind': 'python',
+                                    'scip_path': 'intermediate/i.scip'}])
+
+        pairs = [('flaky', flaky_root), ('live', live_root)]
+        assert persist_all_sources(
+            db_path, pairs, index_factory=self._factory()) == 2
+
+        # Manifest still on disk; the read explodes.
+        persist_all_sources(
+            db_path, pairs, index_factory=self._factory(broken=('flaky',)),
+            reconcile=True)
+
+        assert self._sources_in(db_path) == {'flaky', 'live'}, (
+            'a load failure must not be treated as absence -- the rows stay and '
+            'the skip is reported'
+        )

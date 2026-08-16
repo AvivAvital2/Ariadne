@@ -8,6 +8,7 @@ artifacts and writes one slice of the cross-source picture into the
 "The persist pipeline".
 """
 from __future__ import annotations
+import logging
 
 from typing import TYPE_CHECKING
 
@@ -16,18 +17,62 @@ from docgen.scip_cross_source import (
     load_source_from_manifest,
 )
 from progress_util import iter_with_progress
+_logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
     from pathlib import Path
+def _reconcile_scip_sources(conn: 'Connection',
+                            *, keep: 'set[str]') -> 'list[tuple[str, int, int]]':
+    """Clear graph rows for sources this run could neither refresh nor protect.
 
+    ``clear_source`` and ``save_to`` are scoped to the sources registered in a run, so
+    a source that stops registering becomes unreachable: nothing deletes it and nothing
+    rewrites it. On the live store that left a deleted corpus owning 487 symbols and
+    563,601 edges, one of its local bindings serving as the endpoint for 16,061 edges
+    drawn from 5,976 files in three other sources.
 
+    ``keep`` is every source the run either wrote or deliberately protected. Everything
+    else in the store is rows disk can no longer account for.
+
+    Scope is deliberate: only the SCIP graph tables this module owns are touched.
+    ``documents`` rows cost LLM spend and belong to the generation pipeline, so they are
+    never removed here.
+
+    Returns ``(source_name, symbols, edges)`` per cleared source.
+    """
+    from docgen.scip_store import clear_source
+
+    owned = ('SELECT canonical_id FROM scip_symbols WHERE source_name = ?')
+    stored = {row[0] for row in conn.execute(
+        'SELECT DISTINCT source_name FROM scip_symbols')}
+
+    cleared: list[tuple[str, int, int]] = []
+    for source_name in sorted(stored - keep):
+        symbols = conn.execute(
+            'SELECT COUNT(*) FROM scip_symbols WHERE source_name = ?',
+            (source_name,)).fetchone()[0]
+        edges = conn.execute(
+            f'SELECT COUNT(*) FROM scip_edges '
+            f'WHERE caller_canonical_id IN ({owned}) '
+            f'OR callee_canonical_id IN ({owned})',
+            (source_name, source_name)).fetchone()[0]
+        clear_source(conn, source_name)
+        conn.execute('DELETE FROM scip_index_state WHERE source_name = ?',
+                     (source_name,))
+        cleared.append((source_name, symbols, edges))
+        _logger.warning(
+            'SCIP reconcile cleared source %r: nothing on disk can refresh it '
+            '(%d symbols, %d edges removed)', source_name, symbols, edges)
+    return cleared
 def persist_all_sources(
     db_path: 'Path',
     sources: 'Iterable[tuple[str, Path]]',
     *,
     index_factory=None,
     progress_callback: 'Callable[[str, int, int], None] | None' = None,
+    max_staleness_by_source: 'dict[str, int | None] | None' = None,
+    reconcile: bool = False,
 ) -> int:
     """Materialize the cross-source SCIP graph for every source with a
     current manifest and write it to ``library_scip`` tables.
@@ -40,10 +85,23 @@ def persist_all_sources(
 
     Cross-source edges only resolve when both endpoints are registered
     in the same materialized graph, so this walks every source up front
-    rather than persisting one at a time. Sources whose manifest is
-    missing or whose ``.scip`` is stale/unreadable are silently skipped
-    — this runs optimistically after ``ariadne index`` where some
-    sources may not have been processed yet.
+    rather than persisting one at a time.
+
+    Each source ends the run in one of three states, and they are not
+    interchangeable:
+
+    * **loaded** — manifest and artifact read; its rows are replaced.
+    * **unrefreshable** — no manifest to read, so nothing can ever rewrite its
+      rows. With ``reconcile``, they are cleared.
+    * **failed** — the artifact is there but stale, corrupt or unreadable. Its rows
+      are KEPT and the skip is logged; deleting on a transient read failure would
+      turn it into data loss.
+
+    ``reconcile`` additionally clears any source present in the store that this run
+    was never handed. Only pass it from a caller that enumerated every configured
+    source — ``ariadne index`` does — or it will delete the sources you left out.
+    Reconciliation is skipped entirely when nothing loaded, so a wholly failed run
+    cannot empty the store.
 
     Returns the number of sources whose data was registered before the
     save. ``index_factory`` is injectable for tests; defaults to the
@@ -57,10 +115,17 @@ def persist_all_sources(
 
     graph = CrossSourceGraph()
     loaded_pairs: list[tuple[str, _P]] = []
+    presented: set[str] = set()
+    unrefreshable: list[str] = []
+    failed: list[str] = []
 
     for source_name, source_root in iter_with_progress(sources, progress_callback, ''):
+        presented.add(source_name)
         manifest = _P(source_root) / '.ariadne' / 'manifest.json'
         if not manifest.exists():
+            # Discover was never run here, or the corpus is gone. Either way no
+            # artifact exists to rewrite this source's rows from.
+            unrefreshable.append(source_name)
             continue
         try:
             load_source_from_manifest(
@@ -68,26 +133,48 @@ def persist_all_sources(
                 source_name,
                 _P(source_root),
                 index_factory=index_factory,
-            )
+                            max_staleness_days=(max_staleness_by_source or {}).get(source_name, 7),
+                        )
         except FileNotFoundError:
+            unrefreshable.append(source_name)
             continue
-        except Exception:
-            # ScipUnavailableError / ScipTooStaleError / parser errors
-            # for one source must not forfeit persistence for the rest.
+
+        except Exception as exc:
+            # ScipUnavailableError / ScipTooStaleError / parser errors for one
+            # source must not forfeit persistence for the rest -- but silence
+            # here once cost a 20-minute scip-java rebuild: the source was
+            # dropped, its stale edges survived, and the run still reported
+            # "Persisted cross-source graph (N source(s))" about the others.
+            # The rows stay: the artifact exists, so this is a read that failed,
+            # not a source that went away.
+            _logger.warning(
+                'SCIP persist skipped source %r: %s: %s',
+                source_name, type(exc).__name__, exc)
+            failed.append(source_name)
             continue
         loaded_pairs.append((source_name, _P(source_root)))
 
     if not loaded_pairs:
         return 0
-    from spools import is_spool_source
-    _spool_srcs = frozenset(
-        name for name, _ in loaded_pairs if is_spool_source(name))
-    graph.materialize(resolve_external_to=_spool_srcs or None)
+    # Every loaded source is a resolution target. Keying this on a `spool:`
+    # name prefix made the set permanently empty -- SCIP rows are written
+    # under the BARE source name -- so `resolve_external_to` never engaged
+    # and a merged multi-project corpus kept only within-project edges. The
+    # unique-qualified-name guard in `_resolve_external`, not the source set,
+    # is what stops unrelated same-named symbols from inventing an edge.
+    graph.materialize(
+        resolve_external_to=frozenset(name for name, _ in loaded_pairs))
 
     library = Library(db_path)
     try:
         with library._conn_provider.acquire() as conn:
             graph.save_to(conn)
+            if reconcile:
+                # Protect what was written and what merely failed to read; every
+                # other source in the store is rows disk cannot account for.
+                _reconcile_scip_sources(
+                    conn,
+                    keep={name for name, _ in loaded_pairs} | set(failed))
             # Record per-source bookkeeping in scip_index_state so
             # staleness checks have one DB-queryable surface. PRIMARY
             # KEY on source_name → INSERT OR REPLACE upserts on every
@@ -117,7 +204,7 @@ def persist_all_sources(
                         None,  # per-indexer versions live in manifest.json
                     ),
                 )
-            
+
             for source_name, source_root in loaded_pairs:
                 persist_rst_autodoc_index(conn, source_root, source_name, graph)
             conn.commit()
@@ -386,6 +473,37 @@ def persist_js_http_clients(
                 )
                 conn.commit()
                 total += count
+    finally:
+        library.close()
+    return total
+
+
+def persist_literal_url_clients(
+    db_path: 'Path',
+    sources: 'Iterable[tuple[str, Path]]',
+) -> int:
+    """Detector A — emit ``http_client_calls`` from URL literals written
+    directly in client functions (``docgen.scip_literal_url_extractor``).
+
+    Complements the sink-based extractors: catches the SPA idiom where each API
+    function holds its endpoint URL as a literal, funneled through a shared
+    request wrapper, so the URL never reaches a recognized ``fetch`` site as a
+    literal. Must run AFTER ``persist_python_routes`` (needs ``api_endpoints``
+    producers to exclude a route's own URL literal) and ``persist_string_literals``,
+    and BEFORE ``persist_url_resolver`` (which matches the rows it writes).
+    """
+    from docgen.scip_literal_url_extractor import ingest_literal_url_clients
+    from library import Library
+
+    library = Library(db_path)
+    total = 0
+    try:
+        for source_name, _source_root in sources:
+            with library._conn_provider.acquire() as conn:
+                total += ingest_literal_url_clients(
+                    source_name=source_name, conn=conn,
+                )
+                conn.commit()
     finally:
         library.close()
     return total

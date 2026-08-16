@@ -53,8 +53,8 @@ def _seed_chain(
         for sym in (caller, callee):
             if sym not in seen:
                 conn.execute(
-                    'INSERT INTO scip_symbols VALUES '
-                    '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    'INSERT INTO scip_symbols (canonical_id, source_name, language, file, line_start, line_end, kind, display_name, qualified_name, parent_qualified_name) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                     (
                         sym, source_name, 'python', 'app.py',
                         1, 10, 'function', sym, sym, None,

@@ -67,7 +67,11 @@ def test_stamp_creates_manifest_when_absent(tmp_path):
 def test_notice_is_actionable_when_behind_else_none(tmp_path):
     behind = _src(tmp_path, {})
     msg = coverage_notice('mylib', behind)
-    assert msg and 'behind' in msg and 'ariadne index --source mylib' in msg
+    # `--persist-only` is the remedy this signal calls for: the artifact is
+    # unchanged, only the rows written from it are behind, so re-indexing would
+    # rebuild a .scip that is already correct.
+    assert msg and 'behind' in msg
+    assert 'ariadne index --persist-only --source mylib' in msg
     stamp_coverage(behind)
     assert coverage_notice('mylib', behind) is None
 

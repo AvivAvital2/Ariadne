@@ -468,3 +468,100 @@ def test_cmd_index_source_scopes_per_source_steps_but_keeps_graph_global(
         'persist_js_http_clients', 'persist_scala_http_clients', 'persist_url_resolver',
     ]:
         assert captured[step] == ['alpha'], f'{step} got {captured.get(step)}'
+def test_cmd_index_runs_the_wiring_gate_and_names_what_broke(
+    tmp_path: Path, monkeypatch, capsys,
+) -> None:
+    """``wiring_report`` is the definition of "the ingest works", and nothing but tests
+    called it.
+
+    Every SCIP defect in this codebase's history succeeded silently: ``build_graph`` was
+    never on the onboard path, ``resolve_external_to`` was gated on an id production never
+    emits, staleness was computed and never threaded, body extents were computed and
+    discarded, and ``local N`` ids were never namespaced so one row fused 4,446 files. In
+    each case the run printed success and the numbers looked plausible. The live store then
+    sat two days behind the rebuilt ingest, failing all four invariants, while every
+    command reported fine.
+
+    So ``ariadne index`` runs the gate and names which invariant broke, with the numbers
+    behind it. Reporting only -- whether a failure should also change the exit code is a
+    separate policy question, since a pure-Python corpus can legitimately hold no
+    ``is_implementation`` relationships.
+    """
+    source_root = _setup_python_source(tmp_path)
+    yaml_path = tmp_path / 'ariadne.yaml'
+    yaml_path.write_text(
+        f'db_path: {tmp_path / "ariadne.db"}\n'
+        f'sources:\n  webapp:\n    path: {source_root}\n',
+        encoding='utf-8')
+    _activate_yaml(yaml_path)
+
+    # Every persist step is a no-op, so the store stays empty and each invariant fails.
+    for name in (
+        'persist_all_sources', 'persist_api_endpoints', 'persist_string_literals',
+        'persist_config_values', 'persist_config_reads', 'persist_data_model',
+        'persist_akka_http_endpoints', 'persist_python_routes', 'persist_express_routes',
+        'persist_python_http_clients', 'persist_js_http_clients',
+        'persist_scala_http_clients', 'persist_url_resolver',
+    ):
+        monkeypatch.setattr(f'docgen.scip_persist.{name}', lambda *a, **k: 0)
+
+    cmd_index(_make_args(source='webapp'),
+              indexer_registry={'python': _FakeAdapter()}, merger=None)
+
+    out = capsys.readouterr().out
+    for check in ('local_ids_namespaced', 'locals_never_cross_sources',
+                  'definition_extents_present', 'implements_edges_present'):
+        assert check in out, f'the gate must name {check}; got:\n{out}'
+def test_persist_only_skips_the_indexers_and_disables_the_staleness_gate(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Repairing a store that drifted from the ingest code must not re-index.
+
+    The rebuilt ingest reached the store only through ``ariadne index``, and even its
+    cheapest path runs the indexer phase — so the live store sat two days behind the
+    rebuild while its ``.scip`` artifacts were byte-identical to what a correct persist
+    would have read. Re-reading what is already on disk costs minutes; re-indexing
+    databricks costs a scip-java run over 50 packages.
+
+    The staleness gate is disabled on purpose here: re-reading an artifact that is old
+    *by design* is the entire point, and the 7-day default is exactly what silently
+    dropped a source whose 638MB index had just been rebuilt.
+    """
+    source_root = _setup_python_source(tmp_path)
+    yaml_path = tmp_path / 'ariadne.yaml'
+    yaml_path.write_text(
+        f'db_path: {tmp_path / "ariadne.db"}\n'
+        f'sources:\n  webapp:\n    path: {source_root}\n',
+        encoding='utf-8')
+    _activate_yaml(yaml_path)
+
+    class _RefusesToRun:
+        def run(self, *, cwd, output, env_hints, **kwargs):
+            raise AssertionError('persist-only must not invoke an indexer')
+
+    captured: dict = {}
+
+    def _spy_persist(db_path, sources, **kwargs):
+        captured['sources'] = sorted(n for n, *_ in sources)
+        captured.update(kwargs)
+        return len(captured['sources'])
+
+    monkeypatch.setattr('docgen.scip_persist.persist_all_sources', _spy_persist)
+    for name in (
+        'persist_api_endpoints', 'persist_string_literals', 'persist_config_values',
+        'persist_config_reads', 'persist_data_model', 'persist_akka_http_endpoints',
+        'persist_python_routes', 'persist_express_routes', 'persist_python_http_clients',
+        'persist_js_http_clients', 'persist_scala_http_clients', 'persist_url_resolver',
+    ):
+        monkeypatch.setattr(f'docgen.scip_persist.{name}', lambda *a, **k: 0)
+
+    rc = cmd_index(_make_args(source='webapp', persist_only=True),
+                   indexer_registry={'python': _RefusesToRun()}, merger=None)
+
+    assert rc == 0
+    assert captured['sources'] == ['webapp'], 'the graph still sees every source'
+    assert captured['reconcile'] is True, (
+        'a repair must still drop sources disk can no longer refresh')
+    assert captured['max_staleness_by_source'] == {'webapp': None}, (
+        'a deliberately old artifact must not be skipped as stale; got '
+        f'{captured.get("max_staleness_by_source")}')

@@ -1,0 +1,63 @@
+digraph scip {
+  rankdir=TB;
+  node [shape=box, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+
+  subgraph cluster_a {
+    label="A · DISCOVER  (ariadne discover)"; style=dashed; color=grey50;
+    tree [label="source tree"];
+    disc [label="scip_discovery.py\nscip_languages.py\nscip_indexers.py"];
+    man  [label=".ariadne/manifest.json\nindexers[].cwd + indexed_at", shape=note];
+    yaml [label="ariadne.yaml\nindex_kinds, scip: block", shape=note];
+    tree -> disc; disc -> man; disc -> yaml;
+  }
+
+  subgraph cluster_b {
+    label="B · INDEX  (external tools, ariadne index)"; style=dashed; color=grey50;
+    ext  [label="scip-python · scip-java\nscip-typescript · scip-go", shape=ellipse];
+    scip [label=".ariadne/index.scip\n(protobuf, merged per package)", shape=note];
+    ok   [label=".ariadne/index.ok\nscip_index_marker.py", shape=note];
+    ext -> scip; scip -> ok;
+  }
+
+  subgraph cluster_c {
+    label="C · LOAD  (the model)"; style=dashed; color="#2f6f4f";
+    idx  [label="scip_index.py\nScipIndex.load\n· locals scoped\n· extents decided\n· relationships kept", color="#2f6f4f"];
+    pb   [label="docgen/scip/scip_pb2.py\nvendored protobuf", shape=ellipse];
+    desc [label="scip_descriptors.py\nmoniker -> qualified_name"];
+    pb -> idx; idx -> desc [style=dotted, label="uses"];
+  }
+
+  subgraph cluster_d {
+    label="D · PROJECT  (rows)"; style=dashed; color="#2f6f4f";
+    gph [label="scip_graph.py\nbuild_symbols / build_edges\n· edge typed by callee\n· implements emitted", color="#2f6f4f"];
+  }
+
+  subgraph cluster_e {
+    label="E · PERSIST"; style=dashed; color="#2f6f4f";
+    sto [label="scip_store.py\nsave_rows / load_rows", color="#2f6f4f"];
+    sch [label="library/scip.py\ninit_scip_schema"];
+    db  [label="scip_symbols\nscip_edges", shape=cylinder];
+    sto -> db; sch -> db [style=dotted];
+  }
+
+  subgraph cluster_f {
+    label="F · ORCHESTRATE  (17 steps)"; style=dashed; color=grey50;
+    per [label="scip_persist.py\npersist_all_sources"];
+    xtr [label="extractors\n(see chart 3)"];
+    per -> xtr;
+  }
+
+  subgraph cluster_g {
+    label="G · SERVE"; style=dashed; color=grey50;
+    fac [label="scip_cross_source.py\nCrossSourceGraph\ncallers/callees/reach/impact"];
+    ans [label="answer path\n(see chart 4)"];
+  }
+
+  gate [label="scip_wiring.py\nTHE GATE\n4 invariants, fails loud", shape=hexagon, color="#8a2f2f"];
+
+  man -> ext [label="cwd per package"];
+  scip -> idx;
+  idx -> gph; gph -> sto; db -> per; db -> fac; db -> ans;
+  db -> gate [label="checked", color="#8a2f2f"];
+}

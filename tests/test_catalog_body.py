@@ -251,3 +251,133 @@ class TestRealLibraryIntegration:
         assert 'body' not in result
         # lookup_symbol should supply suggestions structure
         assert 'suggestions_in_source' in result
+
+
+class TestRelativePathResolution:
+    """A spool's catalog stores CORPUS-RELATIVE paths, not absolute ones.
+
+    `ariadne body` read `info['file']` literally, which works for a source
+    catalogued with absolute paths (ariadne's own) but not for a spool, where
+    the stored path is `delta/spark/.../X.scala`. The result was
+    `read_failed: No such file or directory` for every spool symbol -- so the
+    knowledge tool could not return the code it indexes.
+    """
+
+    @patch('docgen.catalog_lookup.lookup_symbol')
+    def test_relative_file_resolves_against_the_source_root(
+        self, mock_lookup, tmp_path, monkeypatch,
+    ):
+        root = tmp_path / 'spool-corpus'
+        target = root / 'delta' / 'Writer.scala'
+        target.parent.mkdir(parents=True)
+        target.write_text('one\ntwo\nthree\nfour\n')
+        mock_lookup.return_value = _make_found_info('delta/Writer.scala', 2, 3)
+
+        cfg = MagicMock()
+        cfg.get_source_path.return_value = root
+        monkeypatch.setattr('config.get_config', lambda: cfg)
+
+        result = get_element_body(MagicMock(), 'databricks', None, 'x.foo')
+        assert 'body_error' not in result, result.get('body_error')
+        assert result['body'] == 'two\nthree'
+        assert result['body_line_count'] == 2
+
+    @patch('docgen.catalog_lookup.lookup_symbol')
+    def test_absolute_path_still_wins(self, mock_lookup, tmp_path, monkeypatch):
+        """Sources catalogued with absolute paths must keep working untouched."""
+        fp = tmp_path / 'abs.py'
+        fp.write_text('x\ny\n')
+        mock_lookup.return_value = _make_found_info(fp, 1, 1)
+        cfg = MagicMock()
+        cfg.get_source_path.return_value = tmp_path / 'somewhere-else'
+        monkeypatch.setattr('config.get_config', lambda: cfg)
+        result = get_element_body(MagicMock(), 'x', None, 'x.foo')
+        assert result['body'] == 'x'
+
+    @patch('docgen.catalog_lookup.lookup_symbol')
+    def test_unresolvable_still_reports_read_failed(
+        self, mock_lookup, tmp_path, monkeypatch,
+    ):
+        """A genuinely missing file must still fail loudly, not silently."""
+        mock_lookup.return_value = _make_found_info('nope/gone.scala', 1, 2)
+        cfg = MagicMock()
+        cfg.get_source_path.return_value = tmp_path
+        monkeypatch.setattr('config.get_config', lambda: cfg)
+        result = get_element_body(MagicMock(), 'databricks', None, 'x.foo')
+        assert 'read_failed' in result.get('body_error', '')
+
+
+class TestScipExtentWidensTheBody:
+    """A catalog location is the identifier span; SCIP knows the body extent.
+
+    Measured on the live store: the catalog element for
+    ``ClassicMergeExecutor.writeAllChanges`` records
+    ``{'line_start': 285, 'line_end': 285, 'col_start': 16, 'col_end': 31}`` — exactly the
+    15 characters of the identifier — so a body read returned a 32-character signature
+    fragment. SCIP now persists the definition's body extent, so the body path prefers it.
+
+    Widening only, never narrowing: where the catalog's extent is the larger of the two it
+    stays, so this cannot shrink an answer that was already right.
+    """
+
+    @staticmethod
+    def _library_with_scip(tmp_path, *, line_start, line_end):
+        from library import Library
+        from library.scip import init_scip_schema
+
+        lib = Library(tmp_path / 'l.db')
+        with lib._conn_provider.acquire() as conn:
+            init_scip_schema(conn)
+            conn.execute(
+                'INSERT INTO scip_symbols (canonical_id, source_name, language, file, '
+                'line_start, line_end, kind, display_name, qualified_name, '
+                'parent_qualified_name) '
+                "VALUES ('c1','x','python','sample.py',?,?,'Function','foo','x.foo','x')",
+                (line_start, line_end))
+            conn.commit()
+        return lib
+
+    @patch('docgen.catalog_lookup.lookup_symbol')
+    def test_the_scip_body_extent_wins_over_an_identifier_span(
+            self, mock_lookup, tmp_path):
+        fp = tmp_path / 'sample.py'
+        fp.write_text('def foo():\n    a = 1\n    b = 2\n    return a + b\ntail\n')
+        mock_lookup.return_value = _make_found_info(fp, 1, 1)
+        lib = self._library_with_scip(tmp_path, line_start=1, line_end=4)
+        try:
+            result = get_element_body(lib, 'x', None, 'x.foo')
+        finally:
+            lib.close()
+
+        assert result['body_line_count'] == 4
+        assert result['body'].startswith('def foo():')
+        assert result['body'].endswith('return a + b')
+
+    @patch('docgen.catalog_lookup.lookup_symbol')
+    def test_a_wider_catalog_extent_is_not_narrowed_by_scip(
+            self, mock_lookup, tmp_path):
+        fp = tmp_path / 'sample.py'
+        fp.write_text('one\ntwo\nthree\nfour\nfive\n')
+        mock_lookup.return_value = _make_found_info(fp, 1, 5)
+        lib = self._library_with_scip(tmp_path, line_start=1, line_end=2)
+        try:
+            result = get_element_body(lib, 'x', None, 'x.foo')
+        finally:
+            lib.close()
+
+        assert result['body_line_count'] == 5
+
+    @patch('docgen.catalog_lookup.lookup_symbol')
+    def test_a_symbol_scip_never_indexed_behaves_exactly_as_before(
+            self, mock_lookup, tmp_path):
+        fp = tmp_path / 'sample.py'
+        fp.write_text('alpha\nbeta\ngamma\n')
+        mock_lookup.return_value = _make_found_info(fp, 2, 2)
+        lib = self._library_with_scip(tmp_path, line_start=1, line_end=9)
+        try:
+            result = get_element_body(lib, 'x', None, 'x.absent')
+        finally:
+            lib.close()
+
+        assert result['body'] == 'beta'
+        assert result['body_line_count'] == 1

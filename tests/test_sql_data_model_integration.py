@@ -28,7 +28,7 @@ def conn():
     c = sqlite3.connect(':memory:')
     init_scip_schema(c)
     c.execute(
-        'INSERT INTO scip_symbols VALUES (?,?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO scip_symbols (canonical_id, source_name, language, file, line_start, line_end, kind, display_name, qualified_name, parent_qualified_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (CLEAR, 'src1', 'python', 'q.py', 1, 1, 'Function', 'clear',
          'src1.clear', None),
     )

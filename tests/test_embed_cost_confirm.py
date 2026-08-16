@@ -33,7 +33,7 @@ def printed(monkeypatch):
 def embed_recorder(monkeypatch):
     rec = {'called': False}
 
-    async def fake_rebuild_all(self, only_missing=False, on_progress=None):
+    async def fake_rebuild_all(self, only_missing=False, on_progress=None, source=None):
         rec['called'] = True
         rec['only_missing'] = only_missing
         return 0
@@ -144,7 +144,7 @@ def test_rebuild_parser_has_yes_flag():
 async def test_cmd_rebuild_threads_yes(monkeypatch, tmp_path):
     seen: dict[str, object] = {}
 
-    async def fake(library, only_missing=False, assume_yes=False, use_batch=False):
+    async def fake(library, only_missing=False, assume_yes=False, use_batch=False, source=None):
         seen['assume_yes'] = assume_yes
 
     monkeypatch.setattr(core, '_rebuild_embeddings', fake)
@@ -161,7 +161,7 @@ def test_import_parser_has_yes_flag():
 def test_cmd_import_threads_yes(monkeypatch, tmp_path):
     seen: dict[str, object] = {}
 
-    async def fake(library, only_missing=False, assume_yes=False, use_batch=False):
+    async def fake(library, only_missing=False, assume_yes=False, use_batch=False, source=None):
         seen['assume_yes'] = assume_yes
 
     monkeypatch.setattr(core, '_rebuild_embeddings', fake)
@@ -182,7 +182,7 @@ def batch_recorder(monkeypatch):
     rec = {'called': False}
 
     async def fake_batch(self, strategy, only_missing=False, on_progress=None,
-                         on_submit=None):
+                         on_submit=None, source=None):
         rec['called'] = True
         rec['only_missing'] = only_missing
         if on_submit is not None:
@@ -237,7 +237,7 @@ def test_parsers_expose_batch_flag():
 async def test_cmd_rebuild_threads_batch(monkeypatch, tmp_path):
     seen: dict[str, object] = {}
 
-    async def fake(library, only_missing=False, assume_yes=False, use_batch=False):
+    async def fake(library, only_missing=False, assume_yes=False, use_batch=False, source=None):
         seen['use_batch'] = use_batch
 
     monkeypatch.setattr(core, '_rebuild_embeddings', fake)
@@ -249,7 +249,7 @@ async def test_cmd_rebuild_threads_batch(monkeypatch, tmp_path):
 def test_cmd_import_threads_batch(monkeypatch, tmp_path):
     seen: dict[str, object] = {}
 
-    async def fake(library, only_missing=False, assume_yes=False, use_batch=False):
+    async def fake(library, only_missing=False, assume_yes=False, use_batch=False, source=None):
         seen['use_batch'] = use_batch
 
     monkeypatch.setattr(core, '_rebuild_embeddings', fake)
@@ -372,7 +372,7 @@ def test_parsers_expose_live_flag_and_exclusivity():
 async def test_cmd_rebuild_resolves_three_state_mode(monkeypatch, tmp_path):
     seen: dict[str, object] = {}
 
-    async def fake(library, only_missing=False, assume_yes=False, use_batch=False):
+    async def fake(library, only_missing=False, assume_yes=False, use_batch=False, source=None):
         seen['use_batch'] = use_batch
 
     monkeypatch.setattr(core, '_rebuild_embeddings', fake)
@@ -386,7 +386,7 @@ async def test_cmd_rebuild_resolves_three_state_mode(monkeypatch, tmp_path):
 def test_cmd_import_resolves_three_state_mode(monkeypatch, tmp_path):
     seen: dict[str, object] = {}
 
-    async def fake(library, only_missing=False, assume_yes=False, use_batch=False):
+    async def fake(library, only_missing=False, assume_yes=False, use_batch=False, source=None):
         seen['use_batch'] = use_batch
 
     monkeypatch.setattr(core, '_rebuild_embeddings', fake)

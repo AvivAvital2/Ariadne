@@ -263,8 +263,8 @@ class TestIngestSwaggerForSource:
         with lib._conn_provider.acquire() as conn:
             # Pre-populate a matching symbol
             conn.execute(
-                'INSERT INTO scip_symbols VALUES '
-                '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO scip_symbols (canonical_id, source_name, language, file, line_start, line_end, kind, display_name, qualified_name, parent_qualified_name) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (
                     'scip-java maven g a 1 com/scalaproject/Login#login().',
                     'scalaproject', 'scala', 'Login.scala',

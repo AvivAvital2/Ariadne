@@ -1,24 +1,25 @@
-"""SCIP-driven extractor for Scala/Java (SCIP plan, Phase A.5).
+"""Catalog projection over the SCIP model.
 
-Replaces ast-grep for ``.scala``/``.sbt``/``.java`` when the source has
-``index_kinds.scala = "scip"`` (or ``.java``) declared in ``ariadne.yaml``.
-SCIP gives us the typed-tree facts the compiler itself sees — resolved
-implicits, JVM-decoded overload signatures, structured scaladoc/javadoc.
+The SCIP *reading* half of this module became ``docgen/scip_index.py``, where identity,
+extents, relationships and empty-vs-absent are settled once. What remains here is the other
+concern it used to carry: turning a document into catalog ``ElementInfo`` — scaladoc/jsdoc
+parsing, subtype mapping, signature fallback.
 
-The extractor is structured so its core logic operates on small frozen
-duck-typed intermediates (``_ScipDoc`` / ``_ScipSymbol`` / ``_ScipOccurrence``).
-``ScipIndex.load`` reads a real ``.scip`` file and converts the protobuf
-into those intermediates; tests can synthesize them directly without
-needing the protobuf bindings.
+That projection is **restored verbatim**, deliberately. It is not where any of the defects
+lived, and its behaviour is pinned by 36 test files; rewriting it from memory would risk
+regressions for no gain. Mixing it with index reading is what made the old module hard to
+reason about, so the split is the fix, not a rewrite of both halves.
+
+The model classes are re-exported under their historical private names so existing fixtures
+construct them unchanged.
 """
 from __future__ import annotations
 
+from __future__ import annotations
 import hashlib
 import time
 from pathlib import Path
-
 from attrs import asdict, field, frozen
-
 from docgen.catalog_extractor import ElementInfo
 from docgen.doc_parser import parse_javadoc, parse_jsdoc, parse_scaladoc
 from docgen.scip_config import (
@@ -31,136 +32,15 @@ from docgen.scip_descriptors import (
     _qualified_name_from_symbol,
 )
 
-# ---------------------------------------------------------------------------
-# Test-friendly intermediates — populated either from real SCIP protobuf
-# (in load()) or directly in tests.
-# ---------------------------------------------------------------------------
 
+# The model, re-exported under the names callers already import.
+from docgen.scip_index import ScipDocument as _ScipDoc  # noqa: E402,F401
+from docgen.scip_index import ScipIndex  # noqa: E402,F401
+from docgen.scip_index import ScipOccurrence as _ScipOccurrence  # noqa: E402,F401
+from docgen.scip_index import ScipSymbolInfo as _ScipSymbol  # noqa: E402,F401
+from docgen.scip_index import document_from_proto as _proto_to_doc  # noqa: E402,F401
 
-@frozen
-class _ScipOccurrence:
-    """One occurrence of a symbol in a SCIP document.
-
-    ``range`` is ``(start_line, start_col, end_col)`` (3-tuple, same line)
-    or ``(start_line, start_col, end_line, end_col)`` (4-tuple).
-    ``enclosing_range`` is the definition's *body* span (SCIP's separate field,
-    same tuple shapes; ``()`` when absent — references, locals, and indexers
-    that do not emit it). Lines/cols are 0-indexed in the wire format.
-    """
-    symbol: str
-    range: tuple[int, ...]
-    is_definition: bool
-    enclosing_range: tuple[int, ...] = ()
-
-
-@frozen
-class _ScipSymbol:
-    """SCIP ``SymbolInformation`` flattened to the bits the extractor uses."""
-    symbol: str
-    kind: str  # SCIP SymbolKind enum name: "Class", "Object", "Method", ...
-    documentation: str = ''
-    is_implicit: bool = False
-    is_var: bool = False
-    display_name: str = ''
-    # SemanticDB's typed signature for this symbol (e.g.
-    # "def bar(x: Int): String"). Falls back to a file-slice read in
-    # extract() when empty.
-    signature_text: str = ''
-
-
-@frozen
-class _ScipDoc:
-    relative_path: str
-    occurrences: tuple[_ScipOccurrence, ...] = ()
-    symbols: tuple[_ScipSymbol, ...] = ()
-
-
-# ---------------------------------------------------------------------------
-# ScipIndex
-# ---------------------------------------------------------------------------
-
-
-@frozen
-class ScipIndex:
-    """Loaded SCIP index, keyed by relative path for ``document_for`` lookups.
-
-    Constructed either via ``ScipIndex.load(path)`` (production) or
-    directly with synthetic ``_ScipDoc`` tuples (tests).
-    """
-    documents: tuple[_ScipDoc, ...] = ()
-    source_root: Path = field(factory=Path)
-
-    @classmethod
-    def load(
-        cls,
-        path: Path,
-        *,
-        repo: str,
-        max_staleness_days: int | None,
-    ) -> "ScipIndex":
-        """Read and parse a ``.scip`` artifact, raising structured errors.
-
-        Failure modes (in order):
-          1. ``ScipUnavailableError`` — file does not exist.
-          2. ``ScipTooStaleError`` — mtime older than ``max_staleness_days``.
-          3. ``ScipCorruptError`` — protobuf parse failure or scip_pb2
-             bindings absent (run ``tests/setup_scip_pb2.py`` once).
-        """
-        if not path.exists():
-            raise ScipUnavailableError(repo=repo, reason='index_missing')
-
-        mtime = path.stat().st_mtime
-        age_days = (time.time() - mtime) / 86400
-        if max_staleness_days is not None and age_days > max_staleness_days:
-            raise ScipTooStaleError(
-                repo=repo,
-                reason='index_too_stale',
-                last_good_age_days=int(age_days),
-            )
-
-        # Parse protobuf — bindings may not be present.
-        try:
-            from docgen.scip import scip_pb2  # type: ignore[import-not-found]
-        except ImportError as e:
-            raise ScipCorruptError(
-                repo=repo, reason='index_corrupt',
-            ) from e
-
-        try:
-            wire = path.read_bytes()
-            pb_index = scip_pb2.Index()
-            pb_index.ParseFromString(wire)
-        except Exception as e:
-            raise ScipCorruptError(
-                repo=repo, reason='index_corrupt',
-            ) from e
-
-        documents = tuple(_proto_to_doc(d) for d in pb_index.documents)
-        return cls(documents=documents, source_root=path.parent)
-
-    def document_for(
-        self, file: Path, source_root: Path | None = None,
-    ) -> _ScipDoc | None:
-        """Look up the SCIP document for ``file``.
-
-        SCIP records ``relative_path`` from the project root (where the
-        scip-java build was invoked) — NOT relative to wherever the
-        ``.scip`` artifact happens to live. Callers should pass
-        ``source_root`` explicitly (the project root) for correct lookups.
-        The instance's stored ``source_root`` is used only as a fallback;
-        it is wrong whenever the artifact lives under a subdir like
-        ``target/``.
-        """
-        root = source_root if source_root is not None else self.source_root
-        try:
-            rel = file.relative_to(root).as_posix()
-        except ValueError:
-            return None
-        for doc in self.documents:
-            if doc.relative_path == rel:
-                return doc
-        return None
-
+__all__ = ['ScipIndex', '_ScipDoc', '_ScipOccurrence', '_ScipSymbol', 'extract']
 
 def _offset_range(range_tuple, offset: int):
     """Add ``offset`` to the line components of a SCIP range tuple.
@@ -212,67 +92,6 @@ def apply_vue_mapping(index: "ScipIndex", mapping: dict) -> "ScipIndex":
         documents=tuple(translated_docs),
         source_root=index.source_root,
     )
-
-
-def _proto_to_doc(pb_doc) -> _ScipDoc:
-    """Translate a ``scip_pb2.Document`` into our intermediate ``_ScipDoc``.
-
-    Lazy-imports the protobuf bindings so this module imports cleanly
-    when scip_pb2 is missing (tests don't go through this path).
-    """
-    from docgen.scip import scip_pb2  # type: ignore[import-not-found]
-
-    occurrences: list[_ScipOccurrence] = []
-    for o in pb_doc.occurrences:
-        is_def = bool(
-            o.symbol_roles & scip_pb2.SymbolRole.Definition
-        ) if hasattr(o, 'symbol_roles') else False
-        occurrences.append(_ScipOccurrence(
-            symbol=o.symbol,
-            range=tuple(o.range),
-            is_definition=is_def,
-            enclosing_range=tuple(getattr(o, 'enclosing_range', ())),
-        ))
-
-    symbols: list[_ScipSymbol] = []
-    for s in pb_doc.symbols:
-        kind_name = scip_pb2.SymbolInformation.Kind.Name(s.kind) if hasattr(
-            s, 'kind') else ''
-        documentation = '\n'.join(s.documentation) if hasattr(
-            s, 'documentation') else ''
-        properties = getattr(s, 'properties', 0)
-        is_implicit = bool(
-            properties & scip_pb2.SymbolInformation.Property.IMPLICIT
-        ) if properties else False
-        is_var = bool(
-            properties & scip_pb2.SymbolInformation.Property.VAR
-        ) if properties else False
-        # signature_documentation is a Document message with a `text` field
-        # carrying the typed signature (e.g. "def bar(x: Int): String").
-        signature_text = ''
-        sig_doc = getattr(s, 'signature_documentation', None)
-        if sig_doc is not None:
-            signature_text = getattr(sig_doc, 'text', '') or ''
-        symbols.append(_ScipSymbol(
-            symbol=s.symbol,
-            kind=kind_name,
-            documentation=documentation,
-            is_implicit=is_implicit,
-            is_var=is_var,
-            display_name=getattr(s, 'display_name', ''),
-            signature_text=signature_text,
-        ))
-
-    return _ScipDoc(
-        relative_path=pb_doc.relative_path,
-        occurrences=tuple(occurrences),
-        symbols=tuple(symbols),
-    )
-
-
-# ---------------------------------------------------------------------------
-# extract — the entry point used by catalog_extractor
-# ---------------------------------------------------------------------------
 
 
 def _range(occ: _ScipOccurrence) -> tuple[int, int, int, int]:
@@ -497,12 +316,3 @@ def extract(
         out.extend(cases)
 
     return out
-
-
-__all__ = [
-    'ScipIndex',
-    '_ScipDoc',
-    '_ScipOccurrence',
-    '_ScipSymbol',
-    'extract',
-]
