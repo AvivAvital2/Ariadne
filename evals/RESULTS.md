@@ -111,28 +111,18 @@ corpus with `ariadne themes stats`.
   facts, provenance rows) validated against the battery — never a
   per-question fix.
 
-## The honest finding: training saturation
+## Scope of this battery
 
-An answer-level A/B (bare frontier models, zero tools, vs the full
-product) on version-drift questions about Spark/Delta scored **8/8 for
-the bare models** — that corpus is training-saturated down to `@Since`
-sub-versions. So for famous environments this system does **not** claim
-"knows more than the model." The measured claim is different:
+This development battery measures routing, participation, and whether known
+ground truth reached context. It does not support a conclusion about model
+training saturation. The earlier bare-model A/B result is historical and is not
+a current Ariadne-versus-bare-LLM finding.
 
-- the product's 8/8 answers are **pinned and cited** — every version fact
-  traces to a corpus SHA, not to training-data recall that silently goes
-  stale;
-- the anti-gap-fill property holds: the ground truth is *in the context*,
-  so the model doesn't confabulate around your pinned versions;
-- the knowledge delta lives where training is thin — post-cutoff
-  releases, internal platforms, niche standards. That is untested here by
-  construction, and this file will say so until someone measures it.
+For the reviewed compiler-aware comparison and its stated limits, see the
+[compiler-aware comparison](../evaluation/chain-benchmark/COMPILER_AWARE_COMPARISON.md).
 
 ## Reading the numbers
 
-Participation and junk are the contract ("decisive at the seam, quiet
-away from it"); ground-truth-in-context is the value; neither is an
-answer-quality score. LLM-judged answer quality is deliberately out of
-scope for the offline battery — it would reintroduce a paid,
-non-deterministic judge into a harness whose job is to be free, offline,
-and diffable in CI.
+Participation and junk are the contract ("decisive at the seam, quiet away
+from it"). Ground-truth-in-context records whether the known material reached
+context. The offline battery remains free and diffable in CI.
