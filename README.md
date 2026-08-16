@@ -25,12 +25,12 @@ The public comparison uses twelve difficult, target-pinned questions about Spark
 | Reviewed measure | Ariadne | Bare LLM |
 | --- | ---: | ---: |
 | Completed questions | **8 / 12** | **2 / 12** |
-| Symbols | 112 / 121 (93%) | 0 / 121 (0%)¹ |
+| Canonical symbol IDs emitted | 112 / 121 (93%) | 0 / 121 (0%)¹ |
 | Definitions | 109 / 122 (89%) | 74 / 122 (61%) |
 | Relation sites | 88 / 97 (91%) | 26 / 97 (27%) |
 | Witness fragments | 159 / 187 (85%) | 114 / 187 (61%) |
 
-¹ The bare run did not emit canonical symbol IDs, so its symbol figure is a format-limited lower bound. These results apply to this reviewed panel only.
+¹ The bare run did not emit machine-readable canonical SCIP IDs, so this is a format-limited lower bound, not a completion criterion. Its two completed answers qualified through verified target repository paths, exact source quotes and line locations, and complete directed explanations. These results apply to this reviewed panel only.
 
 - [Comparison report](evaluation/chain-benchmark/COMPILER_AWARE_COMPARISON.md)
 - [Public panel record](evaluation/chain-benchmark/compiler-aware-comparison-record.json)
