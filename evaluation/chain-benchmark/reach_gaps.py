@@ -213,7 +213,9 @@ def main() -> int:
             claim for claim in question["claims"]
             if claim.get("id") == record["claim"])
         items = required_items(claim)
-        raw_names = {row[0] for row in artifact["raw_pool"]}
+        raw_names = {
+            row["qualified_name"] if isinstance(row, dict) else row[0]
+            for row in artifact["raw_pool"]}
         raw_names.update((artifact.get("seeds") or {}).get(
             "pool_clews") or ())
         missing = sorted(items["symbols"] - raw_names)

@@ -167,13 +167,13 @@ class TestGrader:
         complete = shadow_eval.claim_stage_flags(
             self.make_artifact(menu_has_helper=True), items)
         assert complete == {
-            "raw": True, "menu": True, "retained": True,
+            "raw": True, "internal_menu": True, "retained": True,
             "materialized": True, "ledger": True, "final": True}
 
         menu_loss = shadow_eval.claim_stage_flags(
             self.make_artifact(menu_has_helper=False), items)
         assert menu_loss["raw"] is True
-        assert menu_loss["menu"] is False
+        assert menu_loss["internal_menu"] is False
 
 
 class TestFrontierSemantics:
@@ -187,7 +187,7 @@ class TestFrontierSemantics:
         # Retained by a net while never menu-visible: real information
         # in the flags, but the consecutive frontier stays at raw.
         assert flags["retained"] is True
-        assert flags["menu"] is False
+        assert flags["internal_menu"] is False
 
     def test_raw_surface_includes_the_clew_candidate_pool(self):
         grader = TestGrader()
@@ -216,3 +216,42 @@ class TestArtifactRecording:
         assert isinstance(artifact["expansion"], dict)
         assert "required" in artifact["body_plan"]
         assert isinstance(artifact["facets"], list)
+
+
+class TestExactIdentityResolution:
+    def test_occurrences_resolve_exact_ambiguous_and_missing(
+            self, service):
+        with service.library._conn_provider.acquire() as conn:
+            conn.execute(
+                "INSERT INTO scip_symbols VALUES (?,?,?,?,?,?,?,?,?,?)",
+                ("dup-a", SOURCE, "x", "d.py", 4, 9, "", "", "m.dup", ""))
+            conn.execute(
+                "INSERT INTO scip_symbols VALUES (?,?,?,?,?,?,?,?,?,?)",
+                ("dup-b", SOURCE, "x", "d.py", 4, 9, "", "", "m.dup", ""))
+            conn.commit()
+        resolver = shadow_eval.OccurrenceResolver(service, SOURCE)
+
+        exact = resolver.resolve("m.run", "m.py", 5, 20)
+        assert exact["resolution"] == "exact"
+        assert exact["canonical_id"] == RUN
+
+        missing = resolver.resolve("m.ghost", "g.py", 1, 2)
+        assert missing["resolution"] == "missing"
+        assert missing["canonical_id"] == "unresolved"
+
+        ambiguous = resolver.resolve("m.dup", "d.py", 4, 9)
+        assert ambiguous["resolution"] == "ambiguous"
+        assert ambiguous["canonical_id"] == "unresolved"
+        assert ambiguous["resolution_candidates"] == ["dup-a", "dup-b"]
+
+    def test_artifact_v3_carries_resolution_on_every_raw_row(
+            self, service):
+        vector = np.zeros(3072, dtype=np.float32)
+
+        artifact = shadow_eval.blind_artifact(
+            service, 1, "how does run reach helper?", vector,
+            source=SOURCE)
+
+        assert artifact.get("resolution_census")
+        for row in artifact["raw_pool"]:
+            assert row["resolution"] in ("exact", "ambiguous", "missing")

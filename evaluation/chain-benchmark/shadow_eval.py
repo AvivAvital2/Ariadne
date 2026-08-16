@@ -33,11 +33,16 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(HERE))
-
 STAGES = (
-    "store", "raw", "menu", "retained", "materialized", "ledger", "final")
+    "store", "raw", "internal_menu", "retained", "materialized",
+    "ledger", "final")
 def blind_artifact(service, question_id, question, vector, *, source) -> dict:
-    """One question's immutable blind artifact. No reviewed data enters."""
+    """One question's immutable blind artifact. No reviewed data enters.
+
+    Every raw occurrence carries exact-identity resolution: the four-way
+    conjunction (source, qualified name, file, extent) resolved against
+    the store as exact/ambiguous/missing — never a first-row guess.
+    """
     from offline_earliest_failure import stage_pipeline
 
     from library.question_facets import extract_question_facets
@@ -45,11 +50,21 @@ def blind_artifact(service, question_id, question, vector, *, source) -> dict:
     artifacts = stage_pipeline(
         service, question_id, question, vector, source=source,
         selection_mode="deterministic")
+    resolver = OccurrenceResolver(service, source)
     raw_pool = [
-        [citation.qualified_name, citation.file, citation.line_start,
-         citation.line_end, citation.parent_qualified_name,
-         citation.call_site_file, citation.call_site_line,
-         citation.relation, citation.hop, citation.stop_reason]
+        {"qualified_name": citation.qualified_name,
+         "file": citation.file,
+         "line_start": citation.line_start,
+         "line_end": citation.line_end,
+         "parent_qualified_name": citation.parent_qualified_name,
+         "call_site_file": citation.call_site_file,
+         "call_site_line": citation.call_site_line,
+         "relation": citation.relation,
+         "hop": citation.hop,
+         "stop_reason": citation.stop_reason,
+         **resolver.resolve(
+             citation.qualified_name, citation.file,
+             citation.line_start, citation.line_end)}
         for citation in (
             hop.citation for hop in artifacts["evidence"].hops)]
     excerpts = [
@@ -64,6 +79,7 @@ def blind_artifact(service, question_id, question, vector, *, source) -> dict:
         "question": question,
         "source": source,
         "mode": "blind-facet",
+        "resolution_census": OccurrenceResolver.census(raw_pool),
         "seeds": {
             "pool_clews": sorted({
                 symbol for match in artifacts["pool"]
@@ -143,6 +159,7 @@ def run_blind(argv) -> int:
     parser.add_argument("--embedding-cache", required=True)
     parser.add_argument("--source", default="databricks")
     parser.add_argument("--only", default="")
+    parser.add_argument("--strong-db-fingerprint", action="store_true")
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
 
@@ -175,9 +192,12 @@ def run_blind(argv) -> int:
             vectors[key], source=args.source))
         print(f"q{question_id}: blind artifact in "
               f"{time.perf_counter() - started:.1f}s", flush=True)
-    payload = {"schema": "ariadne-blind-shadow-v2", "mode": "blind-facet",
-               "provenance": build_provenance(args),
-               "questions": rows}
+    from exp_seal import seal
+    payload = seal({
+        "schema": "ariadne-blind-shadow-v3", "mode": "blind-facet",
+        "provenance": build_provenance(
+            args, strong_db=bool(args.strong_db_fingerprint)),
+        "questions": rows})
     Path(args.out).write_text(json.dumps(payload, indent=1, sort_keys=True))
     print(f"wrote {args.out} ({len(rows)} questions)")
     return 0
@@ -228,7 +248,9 @@ def claim_stage_flags(artifact, items) -> dict:
     any model-facing cut.
     """
     seeds = artifact.get("seeds") or {}
-    raw_names = {row[0] for row in artifact["raw_pool"]}
+    raw_names = {
+        row["qualified_name"] if isinstance(row, dict) else row[0]
+        for row in artifact["raw_pool"]}
     raw_names.update(seeds.get("pool_clews") or ())
     raw_names.update(seeds.get("selected_clews") or ())
     menu_names = {
@@ -245,7 +267,7 @@ def claim_stage_flags(artifact, items) -> dict:
     symbols = items["symbols"]
     flags = {
         "raw": bool(symbols) and symbols <= raw_names,
-        "menu": bool(symbols) and symbols <= menu_names,
+        "internal_menu": bool(symbols) and symbols <= menu_names,
         "retained": bool(symbols) and symbols <= retained_names,
     }
     covered = []
@@ -273,8 +295,9 @@ def grade(argv) -> int:
     parser.add_argument("--db", default=str(ROOT / "ariadne.db"))
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
-
+    from exp_seal import verify_seal
     payload = json.loads(Path(args.artifacts).read_text())
+    verify_seal(payload)
     artifacts = {int(row["id"]): row for row in payload["questions"]}
     gold = json.loads(Path(args.gold).read_text())
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
@@ -355,64 +378,101 @@ def store_diagnostics(conn, items) -> tuple:
         if row is None:
             gaps.append(f"edge-absent:{edge_type}:{caller}->{callee}")
     return (not gaps, gaps)
+def build_provenance(args, *, strong_db: bool = False) -> dict:
+    """Prove which implementation, store, and configuration produced this.
 
-
-def build_provenance(args) -> dict:
-    """Prove which implementation produced an artifact.
-
-    The main checkout is dirty, so an artifact without provenance cannot
-    be attributed. In a git checkout this records HEAD plus the hash of
-    the tracked diff; in an archive (no .git) the module hashes carry
-    the identity on their own.
+    The runtime manifest covers every imported runtime file — tracked or
+    not — because this checkout is dirty and a hand-picked module list
+    cannot attribute a result. The database fingerprint level is
+    recorded; paid-canary certification requires the strong level.
     """
-    import subprocess
+    from exp_fingerprint import (
+        effective_configuration,
+        fast_db_fingerprint,
+        runtime_manifest,
+        strong_db_fingerprint,
+    )
 
     def file_sha(path) -> str:
         return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
-    def run_git(*arguments):
-        probe = subprocess.run(
-            ["git", *arguments], cwd=ROOT,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        return probe.stdout.strip() if probe.returncode == 0 else None
-
-    head = run_git("rev-parse", "HEAD") or "not-a-git-checkout"
-    diff = run_git("diff", "HEAD")
-    modules = {}
-    for relative in (
-            "evaluation/chain-benchmark/shadow_eval.py",
-            "evaluation/chain-benchmark/offline_earliest_failure.py",
-            "library/structural_assembly.py", "library/chain_answer.py",
-            "library/chain_menu.py", "library/body_plan.py",
-            "library/question_facets.py", "library/chain_story.py",
-            "library/source_chunks.py", "library/chain_bundle.py",
-            "library/source_materialization.py"):
-        path = ROOT / relative
-        if path.exists():
-            modules[relative] = file_sha(path)
-    connection = sqlite3.connect(
-        f"file:{ROOT / 'ariadne.db'}?mode=ro", uri=True)
-    counts = {
-        table: connection.execute(
-            f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        for table in ("scip_symbols", "scip_edges")}
-    schema_version = connection.execute(
-        "PRAGMA schema_version").fetchone()[0]
-    connection.close()
+    database = ROOT / "ariadne.db"
+    fingerprint = (
+        strong_db_fingerprint(database) if strong_db
+        else fast_db_fingerprint(database))
     return {
-        "git_head": head,
-        "tracked_diff_sha256": (
-            hashlib.sha256(diff.encode()).hexdigest()
-            if diff is not None else "not-a-git-checkout"),
-        "module_sha256": modules,
-        "database_fingerprint": {
-            "schema_version": schema_version, **counts},
+        "runtime_manifest": runtime_manifest(ROOT),
+        "database_fingerprint": fingerprint,
+        "effective_configuration": effective_configuration(),
+        "command": {
+            "argv": list(sys.argv),
+            "questions": str(args.questions),
+            "embedding_cache": str(args.embedding_cache),
+            "source": str(args.source),
+            "only": str(getattr(args, "only", "") or ""),
+        },
         "embedding_cache_sha256": file_sha(args.embedding_cache),
         "questions_sha256": file_sha(args.questions),
-        "limits": {
-            "expansion_depth": 2, "expansion_per_seed": 8,
-            "expansion_reserve": 16, "scoped_routes": 32},
+        "offline_policy": "no-network; cached embeddings only",
     }
+
+
+class OccurrenceResolver:
+    """Exact-identity resolution by four-way conjunction, never first-row.
+
+    Production citations do not yet carry canonical ids, so the evaluator
+    resolves (source, qualified name, file, extent) against the store:
+    one row is exact, zero is missing, several are ambiguous — and an
+    ambiguous required occurrence must fail certification rather than be
+    guessed at.
+    """
+
+    def __init__(self, service, source: str):
+        self._service = service
+        self._source = source
+        self._cache: dict = {}
+
+    def resolve(self, qualified_name, file, line_start, line_end) -> dict:
+        key = (str(qualified_name), str(file),
+               int(line_start or 0), int(line_end or 0))
+        if key in self._cache:
+            return self._cache[key]
+        with self._service.library._conn_provider.acquire() as conn:
+            rows = conn.execute(
+                "SELECT canonical_id, kind FROM scip_symbols "
+                "WHERE source_name = ? AND qualified_name = ? "
+                "AND file = ? AND line_start = ? AND line_end = ? "
+                "AND canonical_id NOT GLOB ? ORDER BY canonical_id",
+                (self._source, key[0], key[1], key[2], key[3],
+                 "local *")).fetchall()
+        if len(rows) == 1:
+            record = {
+                "canonical_id": rows[0][0],
+                "kind": rows[0][1],
+                "resolution": "exact",
+                "resolution_candidates": []}
+        elif not rows:
+            record = {
+                "canonical_id": "unresolved",
+                "kind": "",
+                "resolution": "missing",
+                "resolution_candidates": []}
+        else:
+            record = {
+                "canonical_id": "unresolved",
+                "kind": rows[0][1],
+                "resolution": "ambiguous",
+                "resolution_candidates": [row[0] for row in rows]}
+        self._cache[key] = record
+        return record
+
+    @staticmethod
+    def census(rows) -> dict:
+        counts: dict = {"exact": 0, "ambiguous": 0, "missing": 0}
+        for row in rows:
+            counts[row["resolution"]] = counts.get(
+                row["resolution"], 0) + 1
+        return counts
 
 
 if __name__ == "__main__":

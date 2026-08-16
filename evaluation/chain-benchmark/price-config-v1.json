@@ -1,0 +1,10 @@
+{
+  "version": "price-config-v1",
+  "source": "docgen/pricing.py LLM_PRICING is authoritative; this file pins the values an offline projection used",
+  "models": {
+    "claude-opus-4-8": {
+      "input_per_mtok": 5.0,
+      "output_per_mtok": 25.0
+    }
+  }
+}
