@@ -37,7 +37,7 @@ from scope_resolution import make_scoped_library
 from tests._scoped_config_fixture import install_test_config
 
 _DIM = 3072  # matches schema.EMBEDDING_DIM
-QUESTION = 'how does the widget flush records?'
+QUESTION = 'how does `m.run` flush records?'
 ROUTE = ['m.run', 'm.helper']
 
 
@@ -97,8 +97,6 @@ def service(library):
     svc._query_cache = {}
     svc.embedding_service = _StableEmbedder()
     return svc
-
-
 def _store_clew(library, *, embedded: bool) -> None:
     with library._conn_provider.acquire() as conn:
         init_clews_schema(conn)
@@ -106,6 +104,11 @@ def _store_clew(library, *, embedded: bool) -> None:
                  steps=[name.split('.')[-1] for name in ROUTE], route=ROUTE,
                  files=['m.py'], strategy='theme-walk',
                  embedding=_vector_for(QUESTION) if embedded else None)
+        if embedded:
+            add_clew(conn, source_name='test', entry_symbol='other.run',
+                     steps=['run', 'unrelated'], route=['other.run', 'other.unrelated'],
+                     files=['other.py'], strategy='theme-walk',
+                     embedding=_vector_for(QUESTION))
         conn.commit()
 
 
@@ -114,13 +117,12 @@ def _capture(monkeypatch) -> dict:
     seen: dict = {}
 
     def fake_evidence_for(library, documents, **kwargs):
+        seen['documents'] = list(documents)
         seen.update(kwargs)
         return AnswerEvidence()
 
     monkeypatch.setattr('library.chain_answer.evidence_for', fake_evidence_for)
     return seen
-
-
 @pytest.mark.asyncio
 async def test_a_matched_clew_route_reaches_the_walk(service, library, monkeypatch):
     _store_clew(library, embedded=True)
@@ -129,8 +131,11 @@ async def test_a_matched_clew_route_reaches_the_walk(service, library, monkeypat
 
     await service.ask(QUESTION, source='test')
 
-    assert seen.get('clew_symbols') == ROUTE, (
-        'the route the clew index matched must be what positions the walk')
+    matches = seen.get('clew_matches')
+    assert len(matches) == 1
+    assert matches[0].clew.route == ROUTE
+    assert matches[0].similarity == pytest.approx(1.0)
+    assert 'clew_symbols' not in seen, 'route identity must not be flattened before localization'
 
 
 @pytest.mark.asyncio
@@ -156,4 +161,114 @@ async def test_no_embedding_is_spent_when_no_clew_is_embedded(service, library,
 
 
 async def _answer() -> str:
-    return 'answered'
+    return 'K1'
+@pytest.mark.asyncio
+async def test_the_user_question_reaches_compiler_localization(service, monkeypatch):
+    seen = _capture(monkeypatch)
+    monkeypatch.setattr("llm.chat_complete", lambda *a, **k: _answer())
+
+    await service.ask(QUESTION, source="test")
+
+    assert seen.get("question") == QUESTION
+@pytest.mark.asyncio
+async def test_ask_retrieves_a_recall_pool_before_filtering_clews(
+        service, library, monkeypatch):
+    _store_clew(library, embedded=True)
+    _capture(monkeypatch)
+    monkeypatch.setattr('llm.chat_complete', lambda *a, **k: _answer())
+    seen = {}
+
+    from library import clews
+    original = clews.nearest_clew_matches
+
+    def recording_nearest(*args, **kwargs):
+        seen['top_k'] = kwargs['top_k']
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(clews, 'nearest_clew_matches', recording_nearest)
+
+    await service.ask(QUESTION, source='test')
+
+    assert seen['top_k'] == 5000
+@pytest.mark.asyncio
+async def test_selected_clew_does_not_discard_semantic_positioning_documents(
+        service, library, monkeypatch):
+    _store_clew(library, embedded=True)
+    seen = _capture(monkeypatch)
+    monkeypatch.setattr("llm.chat_complete", lambda *a, **k: _answer())
+
+    await service.ask(QUESTION, source="test")
+
+    assert [document.title for document in seen["documents"]] == ["Widget Guide"]
+@pytest.mark.asyncio
+async def test_catalog_positioning_is_added_only_to_structural_documents(
+        service, library, monkeypatch):
+    from ariadne_mcp.models import DocumentResult, SearchResponse
+    from schema import Document
+
+    with library._conn_provider.acquire() as conn:
+        guide_id = conn.execute(
+            "SELECT id FROM documents WHERE title = ?", ("Widget Guide",)).fetchone()[0]
+    guide = library.get_documents_batch([guide_id])[0]
+    catalog = Document(
+        id="catalog-only", content_type="catalog",
+        title="LedgerWriter.recordStableIdentifier",
+        content="STRUCTURAL-ONLY-CATALOG-CONTENT",
+        source_files=["ledger.py"], metadata={"qualified_name": "LedgerWriter.recordStableIdentifier"},
+        source_name="test")
+    assembled = []
+    seen = _capture(monkeypatch)
+
+    async def fake_search(**_kwargs):
+        return SearchResponse(documents=[DocumentResult(
+            id=guide.id, title=guide.title, content_type=guide.content_type,
+            content=guide.content, source_files=guide.source_files,
+            metadata=guide.metadata, source_name=guide.source_name, score=1.0)], event_id=1)
+
+    def capture_context(documents, *args, **kwargs):
+        assembled.extend(documents)
+        return "retrieved prose only"
+
+    monkeypatch.setattr(service, "search", fake_search)
+    monkeypatch.setattr("library.chain_answer.catalog_positioning_documents",
+                        lambda *_args, **_kwargs: [catalog])
+    monkeypatch.setattr("ariadne_mcp.service_analysis._assemble_ask_context", capture_context)
+    monkeypatch.setattr("llm.chat_complete", lambda *a, **k: _answer())
+
+    await service.ask(QUESTION, source="test")
+
+    assert [document.title for document in assembled] == ["Widget Guide"]
+    assert catalog in seen["documents"]
+@pytest.mark.asyncio
+async def test_deterministic_mode_skips_all_clew_selector_model_calls(
+        service, library, monkeypatch):
+    from library.clews import add_clew, init_clews_schema
+
+    with library._conn_provider.acquire() as conn:
+        init_clews_schema(conn)
+        for index in range(16):
+            add_clew(
+                conn, source_name="test",
+                entry_symbol=f"pkg.Owner{index}.run",
+                steps=["run", f"step{index}"],
+                route=[f"pkg.Owner{index}.run", f"pkg.Owner{index}.step{index}"],
+                files=[f"owner{index}.py"], strategy="theme-walk",
+                question=f"process widget stage {index}",
+                embedding=_vector_for(QUESTION))
+        conn.commit()
+    seen = _capture(monkeypatch)
+    service.config._config["ask_selector_mode"] = "deterministic"
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    calls = []
+
+    async def fake_cc(messages, **kwargs):
+        calls.append(messages)
+        return "Grounded response."
+
+    monkeypatch.setattr("llm.chat_complete", fake_cc)
+
+    result = await service.ask(QUESTION, source="test")
+
+    assert len(calls) == 1
+    assert 1 <= len(seen["clew_matches"]) <= 8
+    assert result.llm_calls == 1

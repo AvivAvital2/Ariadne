@@ -1,0 +1,1033 @@
+[
+  {
+    "id": 4,
+    "family": "merge",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "MergeRows",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "MergeRowsExec",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "ClassicMergeExecutor",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 3
+  },
+  {
+    "id": 6,
+    "family": "merge",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "DeltaMergeInto",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "PreprocessTableMerge",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DataSource",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 3
+  },
+  {
+    "id": 8,
+    "family": "merge",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "ResolveRowLevelCommandAssignments",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "spark"
+    ],
+    "hops": 1
+  },
+  {
+    "id": 10,
+    "family": "merge",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "DeltaTable",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeltaMergeInto",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "PreprocessTableMerge",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "MergeIntoWriter",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "MergeIntoTable",
+        "repos": [
+          "delta",
+          "spark"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 5
+  },
+  {
+    "id": 12,
+    "family": "update",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "PreprocessTableUpdate",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeltaUpdateTable",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "UpdateCommand",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "UpdateExpressionsSupport",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "UpdateTable",
+        "repos": [
+          "delta",
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DSv2",
+        "repos": [
+          "delta",
+          "spark"
+        ],
+        "defines_file": false
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 6
+  },
+  {
+    "id": 13,
+    "family": "merge",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "RowLevelOperationRuntimeGroupFiltering",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "SupportsRuntimeV2Filtering",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "ClassicMergeExecutor",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 3
+  },
+  {
+    "id": 15,
+    "family": "write",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "TransactionalWrite",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "SparkPlan",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeltaFileFormatWriter",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeltaOptions",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 4
+  },
+  {
+    "id": 16,
+    "family": "write",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "DelayedCommitProtocol",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "FileCommitProtocol",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "HadoopMapReduceCommitProtocol",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 3
+  },
+  {
+    "id": 17,
+    "family": "write",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "DeltaFileFormatWriter",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "FileCommitProtocol",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DelayedCommitProtocol",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "AddFile",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 4
+  },
+  {
+    "id": 18,
+    "family": "write",
+    "flag": true,
+    "required": [
+      {
+        "symbol": "DeltaFileFormatWriter",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "WriteJobDescription",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "AdaptiveSparkPlanExec",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 3
+  },
+  {
+    "id": 23,
+    "family": "write",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "TransactionalWrite",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeltaFileFormatWriter",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta"
+    ],
+    "hops": 2
+  },
+  {
+    "id": 27,
+    "family": "catalog",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "DeltaCatalog",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DelegatingCatalogExtension",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "CREATE",
+        "repos": [
+          "databricks-sdk-py",
+          "delta",
+          "spark"
+        ],
+        "defines_file": false
+      },
+      {
+        "symbol": "TABLE",
+        "repos": [
+          "databricks-sdk-py",
+          "delta",
+          "spark"
+        ],
+        "defines_file": false
+      },
+      {
+        "symbol": "USING",
+        "repos": [
+          "delta",
+          "spark"
+        ],
+        "defines_file": false
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "databricks-sdk-py",
+      "delta",
+      "spark"
+    ],
+    "hops": 5
+  },
+  {
+    "id": 31,
+    "family": "catalog",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "V2SessionCatalog",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "TableCatalog",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "SessionCatalog",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "CatalogTable",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeltaCatalog",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 5
+  },
+  {
+    "id": 33,
+    "family": "catalog",
+    "flag": true,
+    "required": [
+      {
+        "symbol": "DeltaDataSource",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "StructType",
+        "repos": [
+          "delta",
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeltaTableV2",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 3
+  },
+  {
+    "id": 62,
+    "family": "streaming",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "MicroBatchExecution",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeltaSource",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "AdmissionLimits",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": false
+      },
+      {
+        "symbol": "ReadLimit",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeltaSourceOffset",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 5
+  },
+  {
+    "id": 66,
+    "family": "streaming",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "DeltaSource",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeltaSourceOffset",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "IndexedFile",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "MicroBatchExecution",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 4
+  },
+  {
+    "id": 67,
+    "family": "streaming",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "DeltaSink",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "StreamExecution",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "SetTransaction",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 3
+  },
+  {
+    "id": 84,
+    "family": "gen-cols",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "StructField",
+        "repos": [
+          "delta",
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DataSource",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeltaCatalog",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "GeneratedColumnsTableFeature",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 4
+  },
+  {
+    "id": 87,
+    "family": "identity",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "IdentityColumn",
+        "repos": [
+          "delta",
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "TableCatalog",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "TableCatalogCapability",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeltaCatalog",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "IdentityColumnsTableFeature",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 5
+  },
+  {
+    "id": 88,
+    "family": "identity",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "GENERATED",
+        "repos": [
+          "databricks-sdk-py",
+          "delta",
+          "spark"
+        ],
+        "defines_file": false
+      },
+      {
+        "symbol": "ALWAYS",
+        "repos": [
+          "delta",
+          "spark"
+        ],
+        "defines_file": false
+      },
+      {
+        "symbol": "IdentityColumn",
+        "repos": [
+          "delta",
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "IdentityColumnSpec",
+        "repos": [
+          "delta",
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "IdentityInfo",
+        "repos": [
+          "delta",
+          "spark"
+        ],
+        "defines_file": false
+      },
+      {
+        "symbol": "DeltaSqlParser",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "databricks-sdk-py",
+      "delta",
+      "spark"
+    ],
+    "hops": 6
+  },
+  {
+    "id": 89,
+    "family": "defaults",
+    "flag": true,
+    "required": [
+      {
+        "symbol": "ResolveDefaultColumns",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "ALTER",
+        "repos": [
+          "databricks-sdk-py",
+          "delta",
+          "spark"
+        ],
+        "defines_file": false
+      },
+      {
+        "symbol": "TABLE",
+        "repos": [
+          "databricks-sdk-py",
+          "delta",
+          "spark"
+        ],
+        "defines_file": false
+      },
+      {
+        "symbol": "COLUMN",
+        "repos": [
+          "databricks-sdk-py",
+          "delta",
+          "spark"
+        ],
+        "defines_file": false
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "databricks-sdk-py",
+      "delta",
+      "spark"
+    ],
+    "hops": 4
+  },
+  {
+    "id": 107,
+    "family": "type-coercion",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "DeltaAnalysis",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "RequiresDistributionAndOrdering",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DistributionAndOrderingUtils",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "TypeCoercionExecutor",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": false
+      },
+      {
+        "symbol": "ANSI",
+        "repos": [
+          "databricks-sdk-py",
+          "delta",
+          "spark"
+        ],
+        "defines_file": false
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "databricks-sdk-py",
+      "delta",
+      "spark"
+    ],
+    "hops": 5
+  },
+  {
+    "id": 147,
+    "family": "deletion-vectors",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "PreprocessTableWithDVs",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeltaParquetFileFormat",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta"
+    ],
+    "hops": 2
+  },
+  {
+    "id": 156,
+    "family": "deletion-vectors",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "RoaringBitmap",
+        "repos": [
+          "delta",
+          "spark"
+        ],
+        "defines_file": false
+      },
+      {
+        "symbol": "DMLWithDeletionVectorsHelper",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeletionVectorBitmapGenerator",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeltaParquetFileFormat",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 4
+  },
+  {
+    "id": 187,
+    "family": "write",
+    "flag": false,
+    "required": [
+      {
+        "symbol": "DeltaFileFormatWriter",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "FileFormatWriter",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "DeltaOptions",
+        "repos": [
+          "delta"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "WriteFiles",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      },
+      {
+        "symbol": "V1WritesUtils",
+        "repos": [
+          "spark"
+        ],
+        "defines_file": true
+      }
+    ],
+    "unresolved": [],
+    "repos_spanned": [
+      "delta",
+      "spark"
+    ],
+    "hops": 5
+  }
+]

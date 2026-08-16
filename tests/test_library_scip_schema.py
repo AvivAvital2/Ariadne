@@ -145,3 +145,20 @@ def test_scip_schema_indexes_exact_display_name_lookup(fresh_scip_db):
 
     assert "idx_scip_symbols_display" in indexes
     assert columns == ["display_name", "source_name"]
+def test_scip_schema_indexes_source_scoped_qualified_name_lookup(fresh_scip_db):
+    conn = fresh_scip_db
+
+    indexes = {row[1] for row in conn.execute(
+        "PRAGMA index_list(scip_symbols)")}
+    columns = [row[2] for row in conn.execute(
+        "PRAGMA index_info(idx_scip_symbols_source_qualified)")]
+    plan = conn.execute(
+        "EXPLAIN QUERY PLAN SELECT canonical_id FROM scip_symbols "
+        "WHERE source_name=? AND qualified_name=?",
+        ("source", "pkg.Flow.run")).fetchall()
+
+    assert "idx_scip_symbols_source_qualified" in indexes
+    assert columns == ["source_name", "qualified_name"]
+    assert any(
+        "idx_scip_symbols_source_qualified" in str(row[3])
+        for row in plan)

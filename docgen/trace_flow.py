@@ -125,6 +125,18 @@ def _lookup_symbol_location(
     return (row[0], row[1])
 
 
+def _is_flow_edge(callee_id: str) -> bool:
+    """True if a ``scip_edges`` callee is a genuine CALL (flow), not a type ref.
+
+    Delegates to the ingest-time classifier so there is ONE rule. This used to
+    sniff the suffix here, with a subtly different test (`().`) that dropped
+    every overloaded method -- `foo(+1).` -- from flow traces.
+    """
+    from docgen.scip_cross_source import classify_edge
+
+    return classify_edge(callee_id) == 'call'
+
+
 def trace_flow(
     *,
     start_symbol: str,
@@ -162,9 +174,12 @@ def trace_flow(
         scip_rows = conn.execute(
             'SELECT callee_canonical_id, file, line '
             'FROM scip_edges '
-            'WHERE caller_canonical_id = ?',
+            "WHERE caller_canonical_id = ? AND edge_type = 'call'",
             (cursor,),
         ).fetchall()
+        # Keep only genuine call edges — type/attribute refs and anonymous
+        # locals aren't flow and blow the walk up combinatorially.
+        scip_rows = [r for r in scip_rows if _is_flow_edge(r[0])]
         if scip_rows:
             for callee, file, line in scip_rows:
                 if callee in visited:

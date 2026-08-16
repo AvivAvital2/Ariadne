@@ -3,6 +3,7 @@ so the cost estimator can self-tune to this codebase + model instead of
 relying on fixed heuristic token counts.
 """
 from __future__ import annotations
+from pathlib import Path
 
 import pytest
 
@@ -120,3 +121,7 @@ def test_persists_across_instances(tmp_path):
     # Re-open: data survives.
     cal = CalibrationStore(db).mean_tokens(phase='describe', model='m')
     assert cal is not None and cal.n == 1
+def test_chat_completion_records_each_provider_usage_once():
+    source = Path("llm.py").read_text()
+    assert source.count("collector = _completion_usage.get()") == 1
+    assert source.count('collector.append({"phase": phase, "model": model, **usage})') == 1

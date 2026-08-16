@@ -146,6 +146,7 @@ class AnthropicProvider:
     timeout: float = 120.0
     _client: httpx.AsyncClient | None = field(default=None, init=False)
     cache_stats: CacheStats = field(factory=CacheStats, init=False)
+    last_usage: dict = field(factory=dict, init=False)
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -239,6 +240,7 @@ class AnthropicProvider:
                 response.raise_for_status()
                 data = response.json()
                 usage = data.get('usage', {}) if isinstance(data, dict) else {}
+                self.last_usage = dict(usage)
                 cache_create = usage.get('cache_creation_input_tokens', 0) or 0
                 cache_read = usage.get('cache_read_input_tokens', 0) or 0
                 self.cache_stats.record(

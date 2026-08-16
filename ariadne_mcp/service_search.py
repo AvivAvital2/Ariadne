@@ -939,23 +939,18 @@ class SearchMixin:
                 tuple(names)))
 
     def _get_embedding_matrix(self):
-        """Load + freshness-check the shared embedding matrix; None falls back to SQLite."""
+        """Return a fresh mmap, recovering an offline rebuild without restart."""
         from pathlib import Path
 
         from library.embedding_matrix import EmbeddingMatrix
 
-        matrix_dir = Path(self.library._conn_provider.path).parent / '.ariadne'
-        if not hasattr(self, '_embedding_matrix_cache'):
+        matrix_dir = Path(self.library._conn_provider.path).parent / ".ariadne"
+        if not hasattr(self, "_embedding_matrix_cache"):
             self._embedding_matrix_cache = EmbeddingMatrix.load(matrix_dir)
         matrix = self._embedding_matrix_cache
         with self.library._conn_provider.acquire() as conn:
             if matrix is not None and matrix.is_fresh(conn):
                 return matrix
-            # Stale (or absent) in-process copy: the store changed after we
-            # loaded — e.g. a `spools install`/`theme` run rebuilt the matrix
-            # on disk. Re-load ONCE and swap it in, so semantic ranking
-            # recovers without a server restart; still-stale -> None (SQLite
-            # fallback), never a wrong-dimension rank.
             reloaded = EmbeddingMatrix.load(matrix_dir)
             if reloaded is not None and reloaded.is_fresh(conn):
                 self._embedding_matrix_cache = reloaded

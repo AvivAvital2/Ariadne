@@ -261,6 +261,41 @@ class AskResponse(BaseModel):
     #: check a citation against: scoring against the cited set alone would
     #: make the gate self-satisfying.
     chain_files: list[str] = Field(default_factory=list)
+    chain_citations: list[dict] = Field(default_factory=list)
+    unsupported_locations: list[str] = Field(default_factory=list)
+    claims: list[dict] = Field(default_factory=list)
+    transition_claims: list[dict] = Field(default_factory=list)
+    evidence_gaps: list[str] = Field(default_factory=list)
+    confidence_reasons: list[str] = Field(default_factory=list)
+    chain_confidence: str = 'low'
+    formulation_confidence: str = 'low'
+    scope_confidence: str = 'low'
+    chain_summary: dict = Field(default_factory=dict)
+    chain_complete: bool = False
+    completeness_reasons: list[str] = Field(default_factory=list)
+    scope_complete: bool = False
+    scope_reasons: list[str] = Field(default_factory=list)
+    formulation_complete: bool = False
+    formulation_reasons: list[str] = Field(default_factory=list)
+    route_candidates: dict[str, list[str]] = Field(default_factory=dict)
+    selected_route_ids: list[str] = Field(default_factory=list)
+    selected_section_ids: list[str] = Field(default_factory=list)
+    selected_symbols: list[str] = Field(default_factory=list)
+    selected_body_symbols: list[str] = Field(default_factory=list)
+    hydrated_symbols: list[str] = Field(default_factory=list)
+    hydrated_sections: list[dict] = Field(default_factory=list)
+    excluded_question_symbols: list[str] = Field(default_factory=list)
+    cited_route_ids: list[str] = Field(default_factory=list)
+    route_selection_status: str = 'not-applicable'
+    selection_complete: bool = False
+    selection_reasons: list[str] = Field(default_factory=list)
+    route_candidate_occurrences: dict[str, list] = Field(default_factory=dict)
+    route_scope_total: int = 0
+    route_scope_retained: int = 0
+    section_candidates: int = 0
+    graph_diagnostics: dict = Field(default_factory=dict)
+    phase_timings: dict[str, float] = Field(default_factory=dict)
+    llm_calls: int = 0
 
 
 class ExplainDocument(BaseModel):

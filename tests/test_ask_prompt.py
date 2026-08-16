@@ -69,8 +69,8 @@ def test_the_menu_prompt_states_the_reply_format_and_permits_choosing_nothing():
     """
     prompt = _menu_prompt('How does MERGE decide?', 'DEFINITIONS\n  1. A — does a thing')
 
-    assert 'numbers only' in prompt.lower()
-    assert 'S-prefixed' in prompt
+    assert 'ids only' in prompt.lower()
+    assert 'R-prefixed' in prompt
     assert 'How does MERGE decide?' in prompt
     assert 'choose nothing' in prompt.lower(), (
         'an empty selection must stay available; the chain still travels')

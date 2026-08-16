@@ -23,7 +23,7 @@ import sqlite3
 import pytest
 
 from docgen.catalog_writer import _element_doc_id
-from docgen.pricing import CHARS_PER_TOKEN, PROMPT_OVERHEAD_TOKENS
+from docgen.pricing import PROMPT_OVERHEAD_TOKENS
 from library import Library, chain_answer
 from library.chain_answer import (
     AnswerEvidence,
@@ -34,7 +34,7 @@ from library.chain_answer import (
     render_spine,
     spine_budget_chars,
     unsupported_locations,
-)
+PROMPT_CHARS_PER_TOKEN, resolve_location)
 from library.chain_bundle import BundleHop, ChainBundle; from library.scip import init_scip_schema
 from library.structural_assembly import StructuralCitation
 
@@ -106,6 +106,28 @@ class TestEvidence:
                                 source=SOURCE, depth=3)
 
         assert evidence.bundle_citations == []
+    def test_downstream_localization_recovers_the_connected_caller_path(self, library):
+        evidence = evidence_for(
+            library, [{'source_files': ['h.py']}], source=SOURCE, depth=3)
+
+        names = [citation.qualified_name for citation in evidence.bundle_citations]
+        assert names[:3] == ['m.run', 'm.helper', 'm.deep']
+        assert evidence.bundle_citations[0].relation == 'called_by'
+        assert evidence.bundle_citations[0].call_site_file == 'm.py'
+        assert evidence.bundle_citations[0].call_site_line == 8
+    def test_high_fan_in_caller_frontier_is_disclosed(self, library):
+        with library._conn_provider.acquire() as conn:
+            for number in range(15):
+                caller = f'scip-python python src1 0.1 `wide{number}`/run().'
+                _symbol(conn, caller, file=f'wide{number}.py', qn=f'wide{number}.run',
+                        line_start=1, line_end=3)
+                _edge(conn, caller, HELPER, line=2, file=f'wide{number}.py')
+            conn.commit()
+
+        evidence = evidence_for(
+            library, [{'source_files': ['h.py']}], source=SOURCE, depth=3)
+
+        assert evidence.caller_frontiers == (HELPER,)
 
 
 class TestSpine:
@@ -203,23 +225,21 @@ class TestTheSpineIsBounded:
     hops and ~73k characters, which every window in the table holds many times over — so
     truncation now means the window, not a preference.
     """
-
     def test_the_spine_respects_a_character_budget_and_says_what_it_cut(self, library):
         evidence = evidence_for(library, DOCS, source=SOURCE, depth=3,
                                 max_spine_chars=60)
 
-        assert 'm.deep' not in evidence.spine, 'the budget must actually bind'
-        assert 'omitted' in evidence.spine.lower()
+        assert "m.helper" not in evidence.spine, "ancillary work yields to the mandatory route"
+        assert "m.deep" in evidence.spine
+        assert "omitted" in evidence.spine.lower()
         assert evidence.truncation_reason
 
-    def test_the_surviving_hops_are_the_first_ones_not_the_shortest(self, library):
-        full = evidence_for(library, DOCS, source=SOURCE, depth=3)
+    def test_the_surviving_hops_preserve_the_mandatory_route(self, library):
         clipped = evidence_for(library, DOCS, source=SOURCE, depth=3,
                                max_spine_chars=60)
 
-        first_full = [ln for ln in full.spine.splitlines() if '  [' in ln][0]
-        first_clipped = [ln for ln in clipped.spine.splitlines() if '  [' in ln][0]
-        assert first_clipped == first_full, 'the chain must keep its beginning'
+        assert "m.deep" in clipped.spine
+        assert "m.helper" not in clipped.spine
 
     def test_a_revisited_body_renders_compactly_because_it_is_a_duplicate(self, library):
         """67 of 279 live hops were `revisit`. The call site is new evidence; the body was
@@ -268,7 +288,7 @@ class TestTheSpineIsBounded:
         haiku = spine_budget_chars('claude-haiku-4-5')
 
         assert opus == int((1_000_000 - ANSWER_MAX_TOKENS - PROMPT_OVERHEAD_TOKENS)
-                           * CHARS_PER_TOKEN)
+                           * PROMPT_CHARS_PER_TOKEN)
         assert haiku < opus, 'a smaller window must yield a smaller budget'
         assert haiku > 200_000, (
             'even the smallest window in the table dwarfs the 20,000 this replaced')
@@ -436,9 +456,11 @@ class TestWhatTheCallerGetsBack:
 
         cited = evidence.cited_by('Written by InsertOnlyMergeExecutor.scala:53, '
                                  'called at MergeIntoCommand.scala:130.')
-
-        assert [entry['qualified_name'] for entry in cited] == [
-            'm.InsertOnly.writeOnlyInserts']
+        assert {entry["qualified_name"] for entry in cited} == {"m.InsertOnly.writeOnlyInserts"}
+        assert {(entry["file"], entry["line"]) for entry in cited} == {
+            ("spark/src/main/scala/delta/merge/InsertOnlyMergeExecutor.scala", 53),
+            ("spark/src/main/scala/delta/MergeIntoCommand.scala", 130),
+        }
 class TestBareLineReferences:
     """`(and again at :166)` names a line without a file. Expand it, don't ask the model to.
 
@@ -515,3 +537,477 @@ class TestAHopSaysWhatSCIPRecorded:
             'a type_ref edge must be presented as a reference')
         assert spine.count('called at') == 1, (
             'the reference hop must not be described as a call')
+def test_prompt_preflight_is_a_hard_character_ceiling():
+    from library.chain_answer import bounded_prompt, resolve_location
+
+    bounded = bounded_prompt("x" * 100, max_chars=40)
+
+    assert len(bounded) <= 40
+    assert bounded.endswith("[prompt truncated]")
+    assert bounded_prompt("short", max_chars=40) == "short"
+def test_answer_reserve_can_finish_a_multi_repository_chain():
+    assert ANSWER_MAX_TOKENS >= 4096
+def test_an_accepted_clew_route_replaces_broad_document_seed_expansion(library):
+    from library.clews import Clew, ClewMatch
+    with library._conn_provider.acquire() as conn:
+        for number in range(20):
+            symbol = f"scip-python python src1 0.1 `noise{number}`/run()."
+            _symbol(conn, symbol, file="m.py", qn=f"noise{number}.run",
+                    line_start=100 + number, line_end=100 + number)
+        conn.commit()
+    match = ClewMatch(clew=Clew(
+        id="route", source_name=SOURCE, entry_symbol="m.helper",
+        route=["m.helper", "m.deep"], files=["h.py"], strategy="test"),
+        similarity=0.9)
+
+    evidence = evidence_for(library, DOCS, source=SOURCE, depth=3,
+                            clew_matches=[match])
+    names = {citation.qualified_name for citation in evidence.bundle_citations}
+
+    assert names == {"m.helper", "m.deep"}
+    assert not any(name.startswith("noise") for name in names)
+    assert len(evidence.bundle_citations) < 10
+def test_recovered_roots_and_original_seeds_share_one_graph_walk(library, monkeypatch):
+    import library.structural_assembly as assembly
+    original = assembly.chain_from_seeds
+    nonempty_calls = []
+    def recording(conn, symbols, **kwargs):
+        if symbols:
+            nonempty_calls.append(tuple(symbols))
+        return original(conn, symbols, **kwargs)
+    monkeypatch.setattr(assembly, "chain_from_seeds", recording)
+
+    evidence_for(library, [{"source_files": ["h.py"]}],
+                 source=SOURCE, depth=3)
+
+    assert len(nonempty_calls) == 1
+    assert RUN in nonempty_calls[0] and HELPER not in nonempty_calls[0]
+def test_cited_by_preserves_an_exact_supported_line_inside_a_definition():
+    hop = StructuralCitation(
+        qualified_name="DeltaSink.PendingTxn.commit",
+        file="delta/DeltaSink.scala", line_start=78, line_end=96,
+        source_name=SOURCE, relation="calls", hop=1,
+        call_site_file="delta/Caller.scala", call_site_line=10)
+    evidence = AnswerEvidence(bundle_citations=[hop], locations=locations_for([hop]))
+
+    cited = evidence.cited_by("SetTransaction is constructed at DeltaSink.scala:87.")
+
+    assert cited and cited[0]["line"] == 87
+    assert cited[0]["file"] == "delta/DeltaSink.scala"
+def test_cited_by_expands_every_supported_line_in_a_cited_range():
+    hop = StructuralCitation(
+        qualified_name="DeltaSink.PendingTxn.commit",
+        file="delta/DeltaSink.scala", line_start=78, line_end=103,
+        source_name=SOURCE, relation="calls", hop=1,
+        call_site_file="delta/Caller.scala", call_site_line=10)
+    evidence = AnswerEvidence(bundle_citations=[hop], locations=locations_for([hop]))
+
+    cited = evidence.cited_by("See DeltaSink.scala:78-103.")
+    assert [(entry["line"], entry["line_end"]) for entry in cited] == [(78, 103)]
+def test_an_ellipsis_path_resolves_only_by_a_unique_basename():
+    locations = frozenset({
+        "spark/src/delta/DeltaFileFormatWriter.scala:123",
+        "spark/src/other/Other.scala:123",
+    })
+    assert resolve_location("spark/.../DeltaFileFormatWriter.scala:123", locations) == \
+        "spark/src/delta/DeltaFileFormatWriter.scala:123"
+    ambiguous = locations | {"other/DeltaFileFormatWriter.scala:123"}
+    assert resolve_location("spark/.../DeltaFileFormatWriter.scala:123", ambiguous) is None
+def test_summary_exposes_exact_structural_blockers():
+    from library.structural_assembly import FanOut
+    evidence = AnswerEvidence(
+        unresolved_paths=("docs/missing.md",),
+        caller_frontiers=("pkg.Dispatch.run",),
+        source_gaps=("src: outside root: docs/missing.md",),
+        fan_outs=(FanOut("pkg.Interface.run", "api.py", 9, 25,
+                         (("prod", 20), ("test", 5)), 5),),
+        truncation_reason="chain truncated")
+
+    summary = evidence.summary()
+
+    assert summary["source_gaps"] == ["src: outside root: docs/missing.md"]
+    assert summary["unresolved_paths"] == ["docs/missing.md"]
+    assert summary["caller_frontiers"] == ["pkg.Dispatch.run"]
+    assert summary["forks"][0]["by_package"] == [["prod", 20], ["test", 5]]
+    assert summary["forks"][0]["test_implementations"] == 5
+def test_question_route_decides_which_forks_are_executable_blockers():
+    from library.chain_answer import mandatory_fan_outs
+    from library.structural_assembly import FanOut
+    ancillary = FanOut("org.spark.SupportsWrite.newWriteBuilder", "SupportsWrite.scala", 10, 25)
+    routed = FanOut("org.delta.DeltaSink.addBatch", "DeltaSink.scala", 20, 12)
+
+    assert mandatory_fan_outs("How does DeltaSink add a batch?", (routed,), (ancillary, routed)) == (routed,)
+    assert mandatory_fan_outs("How does DeltaSink add a batch?", (), (ancillary,)) == ()
+def test_spine_budget_reserves_space_for_later_mandatory_route_hops():
+    from library.chain_bundle import BundleHop, ChainBundle
+    from library.structural_assembly import StructuralCitation
+    def item(name, relation, payload):
+        return BundleHop(StructuralCitation(name, f"{name}.py", 1, "src", relation, 1,
+                                            "caller.py", 2, line_end=1), evidence=payload)
+    bundle = ChainBundle(hops=[
+        item("noise", "calls", "x" * 400),
+        item("target", "localized", "mandatory evidence"),
+    ])
+
+    spine = render_spine(bundle, max_chars=260)
+
+    assert "target" in spine
+    assert "mandatory evidence" in spine
+    assert "x" * 100 not in spine
+    assert "omitted" in spine
+def test_external_cost_ceiling_can_tighten_the_model_window(monkeypatch):
+    from library.chain_answer import bounded_prompt
+    monkeypatch.setenv("ARIADNE_MAX_PROMPT_CHARS", "40")
+    bounded = bounded_prompt("x" * 100, max_chars=90)
+    assert len(bounded) <= 40
+def test_document_fallback_seeds_are_ranked_by_the_question_before_traversal(
+        library, monkeypatch):
+    target = "scip-python python src1 0.1 `TargetCommit`/write()."
+    with library._conn_provider.acquire() as conn:
+        _symbol(conn, target, file="m.py", qn="pkg.TargetCommit.write",
+                line_start=70, line_end=74)
+        for number in range(30):
+            noise = f"scip-python python src1 0.1 `Noise{number}`/unrelated()."
+            _symbol(conn, noise, file="m.py", qn=f"pkg.Noise{number}.unrelated",
+                    line_start=100 + number, line_end=100 + number)
+        conn.commit()
+
+    import library.structural_assembly as assembly
+    original = assembly.chain_from_seeds
+    calls = []
+    def recording(conn, symbols, **kwargs):
+        calls.append(tuple(symbols))
+        return original(conn, symbols, **kwargs)
+    monkeypatch.setattr(assembly, "chain_from_seeds", recording)
+
+    evidence_for(
+        library, DOCS, source=SOURCE, depth=1,
+        question="How does TargetCommit write the commit?")
+
+    assert any(target in call for call in calls)
+    assert not any("`Noise" in seed for call in calls for seed in call)
+def test_entity_candidates_do_not_expand_ordinary_document_files(
+        library, monkeypatch):
+    from library.clews import Clew, ClewMatch
+    target = "scip-python python src1 0.1 `StableQueryId`/read()."
+    with library._conn_provider.acquire() as conn:
+        _symbol(conn, target, file="m.py", qn="spark.StableQueryId.read",
+                line_start=70, line_end=74)
+        conn.commit()
+    match = ClewMatch(clew=Clew(
+        id="delta-route", source_name=SOURCE, entry_symbol="m.helper",
+        route=["m.helper", "m.deep"], files=["h.py"], strategy="test"),
+        similarity=0.9)
+    import library.structural_assembly as assembly
+    original = assembly.chain_from_seeds
+    calls = []
+    def recording(conn, symbols, **kwargs):
+        calls.append(tuple(symbols))
+        return original(conn, symbols, **kwargs)
+    monkeypatch.setattr(assembly, "chain_from_seeds", recording)
+
+    evidence_for(
+        library, DOCS, source=SOURCE, depth=1, clew_matches=[match],
+        question="Which StableQueryId survives the restart?")
+
+    flattened = {seed for call in calls for seed in call}
+    assert target not in flattened, "entity candidates remain menus, not traversal seeds"
+    assert not any("`Noise" in seed for seed in flattened)
+def test_catalog_positioning_selects_only_the_best_described_code_files(library):
+    from library.chain_answer import catalog_positioning_documents
+
+    library.add_document(
+        content_type="catalog", title="ClassicMergeExecutor",
+        content=("Performs joins between source and target rows, decides matched insert "
+                 "update delete actions, and writes resulting output rows."),
+        source_files=["delta/ClassicMergeExecutor.scala"],
+        doc_id="classic", source_name="src1")
+    library.add_document(
+        content_type="catalog", title="MergeMetrics",
+        content="Records merge counters and timing metrics.",
+        source_files=["delta/MergeMetrics.scala"],
+        doc_id="metrics", source_name="src1")
+    library.add_document(
+        content_type="catalog", title="UnrelatedClock",
+        content="Tracks wall clock time.", source_files=["util/Clock.scala"],
+        doc_id="clock", source_name="src1")
+
+    found = catalog_positioning_documents(
+        library,
+        "For MERGE, when is the join run relative to deciding insert update delete fate, "
+        "and how are resulting rows emitted?",
+        sources=("src1",), limit=2)
+
+    assert [document.id for document in found] == ["classic"]
+def test_catalog_positioning_is_source_scoped_and_hard_capped(library):
+    from library.chain_answer import catalog_positioning_documents
+
+    for number in range(5):
+        library.add_document(
+            content_type="catalog", title=f"MergeWriter{number}",
+            content="Merge writer joins rows and writes output records.",
+            source_files=[f"src/MergeWriter{number}.scala"],
+            doc_id=f"local-{number}", source_name="src1")
+    library.add_document(
+        content_type="catalog", title="ForeignMergeWriter",
+        content="Merge writer joins rows and writes output records.",
+        source_files=["foreign/MergeWriter.scala"],
+        doc_id="foreign", source_name="foreign")
+
+    found = catalog_positioning_documents(
+        library, "How does the merge writer join rows and write output records?",
+        sources=("src1",), limit=2)
+
+    assert len(found) == 2
+    assert all(document.source_name == "src1" for document in found)
+def test_selected_obligation_targets_are_connected_by_bounded_scip_path(library):
+    from library.clews import Clew, ClewMatch
+    from library.structural_assembly import connect_obligation_targets
+    with library._conn_provider.acquire() as conn:
+        match = ClewMatch(clew=Clew(id="route", source_name=SOURCE,
+            entry_symbol="m.run", route=["m.run"], files=["m.py"]),
+            similarity=1.0, obligations=(1,),
+            target_symbols=((1, "m.run"), (1, "m.deep")))
+
+        citations = connect_obligation_targets(conn, [match], source=SOURCE)
+
+    assert [citation.qualified_name for citation in citations] == [
+        "m.run", "m.helper", "m.deep"]
+
+
+def test_selected_clew_target_symbol_is_materialized_as_evidence(library):
+    from library.clews import Clew, ClewMatch
+    target = "scip-python python src1 0.1 `Reconciliation`#complete()."
+    with library._conn_provider.acquire() as conn:
+        _symbol(conn, target, file="target.py",
+                qn="billing.Reconciliation.complete", line_start=70, line_end=75)
+        conn.commit()
+    library.add_document(
+        content_type="catalog", title="reconciliation complete",
+        content="Completes reconciliation.", source_files=["target.py"],
+        doc_id=_element_doc_id(SOURCE, "billing.Reconciliation.complete"),
+        source_name=SOURCE)
+    match = ClewMatch(clew=Clew(
+        id="route", source_name=SOURCE, entry_symbol="m.helper",
+        route=["m.helper"], files=["h.py"], strategy="test"),
+        similarity=0.9, obligations=(1,),
+        target_symbols=((1, "billing.Reconciliation.complete"),))
+
+    evidence = evidence_for(
+        library, DOCS, source=SOURCE, clew_matches=[match],
+        question="How does reconciliation complete?", defer_source=True)
+
+    targets = [hop.citation for hop in evidence.hops
+               if hop.citation.qualified_name == "billing.Reconciliation.complete"]
+    assert targets
+    assert targets[0].relation == "localized"
+
+
+def test_targeted_positioning_stays_mandatory_when_a_clew_is_authoritative(library):
+    from library.clews import Clew, ClewMatch
+
+    target = "scip-python python src1 0.1 `TargetMerge`/run()."
+    with library._conn_provider.acquire() as conn:
+        _symbol(conn, target, file="target.py", qn="delta.TargetMerge.run",
+                line_start=50, line_end=60)
+        _edge(conn, target, HELPER, line=55, file="target.py")
+        conn.commit()
+    targeted = [{"source_files": ["target.py"],
+                 "content": "Target merge run orchestration."}]
+    match = ClewMatch(clew=Clew(
+        id="route", source_name=SOURCE, entry_symbol="m.helper",
+        route=["m.helper", "m.deep"], files=["h.py"], strategy="test"),
+        similarity=0.9)
+
+    evidence = evidence_for(
+        library, DOCS, source=SOURCE, depth=2, clew_matches=[match],
+        question="How does TargetMerge run?",
+        positioning_documents=targeted)
+
+    targeted_hops = [hop.citation for hop in evidence.hops
+                     if hop.citation.qualified_name == "delta.TargetMerge.run"]
+    assert targeted_hops
+    assert targeted_hops[0].relation == "localized"
+def test_targeted_positioning_rejects_nonproduction_files(library):
+    from library.chain_answer import catalog_positioning_documents
+
+    library.add_document(
+        content_type="explanation", title="MergeExecutorBenchmark",
+        content="Merge executor joins rows, updates deletes inserts, and writes output.",
+        source_files=["delta/benchmarks/MergeExecutorBenchmark.scala"],
+        doc_id="benchmark", source_name="src1")
+    library.add_document(
+        content_type="explanation", title="MergeExecutor",
+        content="Merge executor joins rows, updates deletes inserts, and writes output.",
+        source_files=["delta/main/MergeExecutor.scala"],
+        doc_id="production", source_name="src1")
+
+    found = catalog_positioning_documents(
+        library, "How does MERGE join rows and write update delete insert output?",
+        sources=("src1",), limit=2)
+
+    assert [document.id for document in found] == ["production"]
+def test_catalog_positioning_uses_embedding_before_fetching_selected_documents(library):
+    import numpy as np
+    from library.chain_answer import catalog_positioning_documents
+
+    library.add_document(
+        content_type="catalog", title="GenericDeltaStreamingWrite",
+        content="Mentions every surface term but describes unrelated metrics.",
+        source_files=["delta/Metrics.scala"], doc_id="semantic-decoy",
+        source_name="src1", embedding=np.array([0.0, 1.0], dtype=np.float32))
+    library.add_document(
+        content_type="catalog", title="DeltaSink.addBatch",
+        content="Checks the transaction log for the query identifier and batch version before writing.",
+        source_files=["delta/DeltaSink.scala"], doc_id="semantic-target",
+        source_name="src1", embedding=np.array([1.0, 0.0], dtype=np.float32))
+    library.add_document(
+        content_type="catalog", title="GeneratedStreamingBatch",
+        content="Generated wire model.", source_files=["target/Generated.java"],
+        doc_id="semantic-generated", source_name="src1",
+        embedding=np.array([1.0, 0.0], dtype=np.float32))
+
+    found = catalog_positioning_documents(
+        library, "How does replay remain exactly once after restart?",
+        sources=["src1"], limit=1,
+        query_embedding=np.array([1.0, 0.0], dtype=np.float32),
+        matrix_provider=lambda: None)
+
+    assert [document.id for document in found] == ["semantic-target"]
+def test_selected_catalog_heading_resolves_only_its_exact_scip_symbol(library, monkeypatch):
+    target = "exact-catalog-target"
+    neighbor = "same-file-neighbor"
+    with library._conn_provider.acquire() as conn:
+        _symbol(conn, target, file="delta/Merge.scala", qn="delta.Merge.apply",
+                line_start=10, line_end=20)
+        _symbol(conn, neighbor, file="delta/Merge.scala", qn="delta.Merge.metrics",
+                line_start=30, line_end=40)
+        conn.commit()
+    positioning = [{
+        "source_files": ["delta/Merge.scala"],
+        "metadata": {"qualified_name": "delta.Merge.apply"},
+        "content": "Selected compact catalog description."}]
+    import library.structural_assembly as assembly
+    original = assembly.chain_from_seeds
+    calls = []
+    def recording(conn, symbols, **kwargs):
+        calls.append(tuple(symbols))
+        return original(conn, symbols, **kwargs)
+    monkeypatch.setattr(assembly, "chain_from_seeds", recording)
+
+    evidence = evidence_for(library, [], source=SOURCE, depth=1,
+                           question="Why is merge diverted during analysis?",
+                           positioning_documents=positioning)
+
+    assert {item["symbol"]: item["origins"] for item in evidence.seed_provenance}[
+        "delta.Merge.apply"] == ["catalog"]
+    flattened = {seed for call in calls for seed in call}
+    assert target in flattened
+    assert neighbor not in flattened
+def test_catalog_positioning_covers_compound_question_roles_before_embedding_ties(library):
+    import numpy as np
+    from library.chain_answer import catalog_positioning_documents
+    vector = np.array([1.0, 0.0], dtype=np.float32)
+    for doc_id, title, file, embedding in (
+        ("conflict", "ConflictChecker.checkForDeletedFilesAgainstCurrentTxnReadFiles",
+         "conflict/ConflictChecker.scala", np.array([1.0, 0.0], dtype=np.float32)),
+        ("scan", "ScanWithDeletionVectors.createRowIndexFilterNode",
+         "delta/ScanWithDeletionVectors.scala", np.array([0.98, 0.2], dtype=np.float32)),
+        ("reader", "ParquetFileFormat.buildPhysicalReader",
+         "spark/ParquetFileFormat.scala", np.array([0.97, 0.24], dtype=np.float32))):
+        library.add_document(
+            content_type="catalog", title=title,
+            content="Equally similar compact catalog description.",
+            source_files=[file], doc_id=doc_id, source_name="src1",
+            embedding=embedding)
+
+    found = catalog_positioning_documents(
+        library,
+        "How do the deletion vectors query-plan filter and physical Parquet reader agree?",
+        sources=["src1"], limit=2, query_embedding=vector,
+        matrix_provider=lambda: None)
+
+    assert {document.id for document in found} == {"scan", "reader"}
+def test_catalog_role_ranking_contains_no_domain_vocabulary_aliases():
+    import inspect
+    from library.chain_answer import catalog_positioning_documents
+
+    source = inspect.getsource(catalog_positioning_documents)
+
+    assert '"identifier": "id"' not in source
+    assert '"streaming": "stream"' not in source
+    assert '"transaction": "txn"' not in source
+    assert '"deleted": "deletion"' not in source
+def test_authoritative_clew_still_expands_a_semantic_document_seed(library):
+    from library.clews import Clew, ClewMatch
+    match = ClewMatch(clew=Clew(
+        id="route", source_name=SOURCE, entry_symbol="m.helper",
+        route=["m.helper", "m.deep"], files=["h.py"], strategy="test"),
+        similarity=0.9)
+
+    evidence = evidence_for(
+        library, DOCS, source=SOURCE, depth=2, clew_matches=[match],
+        question="How does m.run reach the terminal?", positioning_documents=DOCS)
+
+    names = {citation.qualified_name for citation in evidence.bundle_citations}
+    assert {"m.run", "m.helper", "m.deep"}.issubset(names)
+def test_shared_reference_target_is_prioritized_with_its_sibling_owners(library):
+    import inspect
+
+    source = inspect.getsource(evidence_for)
+    target = source.index("target_citations =")
+    bridge = source.index("*bridge_expansion.citations", target)
+    curate = source.index("curate_bundle(", bridge)
+
+    assert target < bridge < curate
+    assert "citation.qualified_name in bridge_targets" in source[target:bridge]
+def test_catalog_positioning_fuses_a_lexical_owner_outside_the_semantic_cut(library):
+    import numpy as np
+    from library.chain_answer import catalog_positioning_documents
+
+    vector = np.array([1.0, 0.0], dtype=np.float32)
+    for number in range(60):
+        library.add_document(
+            content_type="catalog", title=f"GenericTransactionWorker{number}",
+            content="Generic transaction worker description.",
+            source_files=[f"generic/Worker{number}.scala"], doc_id=f"generic-{number}",
+            source_name="src1", embedding=vector)
+    library.add_document(
+        content_type="catalog", title="StableQueryIdReplayOwner.recordRestartState",
+        content="Records the stable query identifier before replay after restart.",
+        source_files=["replay/StableQueryIdReplayOwner.scala"], doc_id="lexical-owner",
+        source_name="src1", embedding=np.array([0.0, 1.0], dtype=np.float32))
+
+    found = catalog_positioning_documents(
+        library,
+        "How does StableQueryId protect the replay transaction after a writer restart?",
+        sources=["src1"], limit=2, query_embedding=vector,
+        matrix_provider=lambda: None)
+
+    assert "lexical-owner" in [document.id for document in found]
+def test_render_spine_does_not_describe_contains_as_called():
+    from library.chain_answer import render_spine
+    from library.chain_bundle import BundleHop, ChainBundle
+    from library.structural_assembly import StructuralCitation
+
+    hop = BundleHop(citation=StructuralCitation(
+        qualified_name="pkg.Owner.member", file="owner.py", line_start=8,
+        source_name=SOURCE, relation="contains", hop=1,
+        call_site_file="owner.py", call_site_line=8,
+        parent_qualified_name="pkg.Owner", line_end=12))
+
+    spine = render_spine(ChainBundle(hops=[hop]))
+
+    assert "contained at owner.py:8" in spine
+    assert "called at owner.py:8" not in spine
+def test_render_spine_revisit_preserves_non_call_relation():
+    hop = BundleHop(citation=StructuralCitation(
+        qualified_name="pkg.Owner.member", file="owner.py", line_start=8,
+        line_end=8, source_name=SOURCE, relation="contains", hop=1,
+        call_site_file="owner.py", call_site_line=8,
+        stop_reason="revisit", parent_qualified_name="pkg.Owner"))
+
+    spine = render_spine(ChainBundle(hops=[hop]))
+
+    assert "contained at owner.py:8" in spine
+    assert "called again" not in spine

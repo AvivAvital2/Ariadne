@@ -49,9 +49,7 @@ MISSING = 'not measured'
 WEIGHTS = {
     'evidence': 0.40,      # of the required mechanisms, how many are quoted at
                            # a line that actually matches the file
-    'completeness': 0.30,  # does the answer join first mechanism to last:
-                           # 1.0 every hop quoted, 0.6 ends quoted + middle
-                           # articulated, 0.0 neither
+    'completeness': 0.30,  # every required mechanism is quoted from exact source
     'correctness': 0.30,   # judge score /10, counted ONLY where admissible
 }
 
@@ -75,11 +73,9 @@ def _chain_stats(rows) -> dict:
         'n': n,
         'admissible': f"{sum(1 for r in rows if r['admissible'])}/{n}",
         'full_route': str(sum(1 for r in rows if r.get('complete_full'))),
-        'endpoint_route': str(sum(1 for r in rows if r.get('complete_endpoints')
-                                  and not r.get('complete_full'))),
         'chain_evidence': f'{st.mean(cs):.0%}' if cs else MISSING,
         'zero_quote': f"{sum(1 for r in rows if r['verified_quotes'] == 0)}/{n}",
-        'ends_no_middle': f"{sum(1 for r in rows if r['verified_quotes'] >= 2 and r.get('missing_middle'))}/{n}",
+        'missing_evidence': f"{sum(1 for r in rows if r.get('missing_middle'))}/{n}",
         'answer_first': f"{sum(1 for r in rows if r.get('answer_first'))}/{n}",
         'correctness': (f"{st.mean([r['correctness'] for r in rows if r.get('correctness') is not None]):.2f}"
                         if any(r.get('correctness') is not None for r in rows) else MISSING),
@@ -110,7 +106,6 @@ def _pillars(rows) -> dict | None:
     evidence = st.mean([r.get('chain_score') or 0.0 for r in rows])
     completeness = st.mean([
         1.0 if r.get('complete_full')
-        else 0.6 if r.get('complete_endpoints')
         else 0.0
         for r in rows])
     graded = [r for r in rows if r.get('correctness') is not None]
@@ -214,9 +209,8 @@ def main() -> int:
         ('  admissible', 'admissible'),
         ('  chain evidence (mean)', 'chain_evidence'),
         ('  full-chain route', 'full_route'),
-        ('  endpoint route', 'endpoint_route'),
         ('  answers with zero quotes', 'zero_quote'),
-        ('  ends read, middle unnamed', 'ends_no_middle'),
+        ('  missing required evidence', 'missing_evidence'),
     ):
         print(f'{label:<{W}} {cell(ari, key, ari_why or MISSING):>16} '
               f'{cell(bare, key):>16}')

@@ -122,17 +122,16 @@ class EmbeddingMatrix:
         self, query_embedding: 'NDArray[np.float32]', candidate_ids, limit: int, weights=None
     ) -> list[tuple[str, float]]:
         """Rank the in-matrix candidate ids by similarity. Ids absent from the
-        matrix are skipped; closure scoping is the caller's (candidate_ids).
-        ``weights`` optionally maps a candidate id to a similarity multiplier
-        (provenance down-ranking), applied before the top-k cut."""
+    matrix are skipped; closure scoping is the caller's (candidate_ids).
+    ``weights`` optionally maps a candidate id to a similarity multiplier
+    (provenance down-ranking), applied before the top-k cut."""
         from search import batch_dot_similarity, top_k_indices
 
         present = [cid for cid in candidate_ids if cid in self.id_to_row]
         if not present:
             return []
         rows = [self.id_to_row[cid] for cid in present]
-        similarities = batch_dot_similarity(query_embedding, self.M)
-        candidate_similarities = similarities[rows]
+        candidate_similarities = batch_dot_similarity(query_embedding, self.M[rows])
         if weights is not None:
             candidate_similarities = candidate_similarities * np.array(
                 [weights.get(cid, 1.0) for cid in present], dtype=np.float32)

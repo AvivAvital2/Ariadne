@@ -21,6 +21,11 @@ class SourceExcerpt:
 class SourceMaterialization:
     excerpts: tuple[SourceExcerpt, ...] = field(default_factory=tuple)
     gaps: tuple[str, ...] = field(default_factory=tuple)
+def _is_header_line(line: str) -> bool:
+    """A comment or annotation line that belongs to the definition below it."""
+    stripped = line.strip()
+    return stripped.startswith(
+        ("//", "/*", "*", "#", "@", '"""', "'''"))
 def materialize_citations(
         citations, source_roots, *, expected_hashes=None, extra_ranges=()):
     """Fetch exact definition, call-site, and explicit source ranges.
@@ -115,6 +120,14 @@ def materialize_citations(
             kind=kind,
             content="\n".join(lines[line_start - 1:line_end]),
             sha256=digest))
+        if kind in ("definition", "definition_body"):
+            top = line_start
+            while (top > 1 and line_start - top < 60
+                   and _is_header_line(lines[top - 2])):
+                top -= 1
+            if top < line_start:
+                materialize(source_name, file, top, line_start - 1,
+                            "doc_header")
 
     for citation in citations:
         materialize(

@@ -47,6 +47,7 @@ class OpenAIProvider:
     # OpenAI's automatic prompt caching for GPT-4o+ doesn't surface per-call
     # cache token counts in the API response, so we can't populate this here.
     cache_stats: CacheStats = field(factory=CacheStats, init=False)
+    last_usage: dict = field(factory=dict, init=False)
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -96,6 +97,11 @@ class OpenAIProvider:
                 elapsed = _time.monotonic() - t0
                 response.raise_for_status()
                 data = response.json()
+                usage = data.get('usage', {}) if isinstance(data, dict) else {}
+                self.last_usage = {
+                    'input_tokens': int(usage.get('prompt_tokens', 0) or 0),
+                    'output_tokens': int(usage.get('completion_tokens', 0) or 0),
+                }
                 _logger.info(
                     'OpenAI response: status=%d elapsed=%.1fs',
                     response.status_code, elapsed,

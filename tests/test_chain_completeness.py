@@ -1,29 +1,8 @@
-"""Completeness: an answer must show how A leads to B, not just land on B.
-
-The original gate demanded a verified quote for EVERY hop, which scored "read
-nothing and recited the architecture" identically to "read both endpoints and
-knew the middle". Those are different epistemic states. So an answer is complete
-either way:
-
-* **full** -- every required hop carries a quote that matches its file at the
-  cited line; or
-* **endpoints** -- the first and last hop carry such quotes AND every
-  intermediate mechanism is named, so the transition is articulated rather than
-  jumped.
-
-Both paths need at least two verified snippets, and on a cross-repo question the
-two endpoint quotes must come from different repositories -- otherwise a chain
-spanning delta and spark is satisfied by two quotes from one file.
-
-The line numbers carry the load in the endpoint path. Naming intermediate
-mechanisms is exactly what a model that memorised the corpus does well; citing
-the line a symbol actually occupies *at the pinned revision* is what it cannot
-do without reading. That is why a quote which does not match its cited line is
-not evidence, and why the endpoint concession is safe.
-"""
+"""Completeness requires exact source evidence for every required mechanism."""
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -35,6 +14,14 @@ _SPEC = importlib.util.spec_from_file_location(
 )
 score_chain = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(score_chain)
+
+_REQ_SPEC = importlib.util.spec_from_file_location(
+    'build_chain_requirements',
+    Path(__file__).resolve().parent.parent / 'evaluation' / 'spool-clean-room'
+    / 'build_chain_requirements.py',
+)
+build_requirements = importlib.util.module_from_spec(_REQ_SPEC)
+_REQ_SPEC.loader.exec_module(build_requirements)
 
 WIDGET = """package alpha.core
 
@@ -77,16 +64,20 @@ def corpus(tmp_path):
 
 def _quote(sym: str, line: int | None = None) -> str:
     fname, real_line, text = SNIPPETS[sym]
-    return f'{fname}:{line or real_line}\n```scala\n{text}\n```\n'
+    path = f'/corpus/{REPO_OF[sym]}/src/{fname}'
+    return f'{path}:{line or real_line}\n```scala\n{text}\n```\n'
 
 
 def _answer(quoted: list[str], prose: str = '', bad_line: dict | None = None) -> dict:
     bad_line = bad_line or {}
     body = '\n'.join(_quote(s, bad_line.get(s)) for s in quoted)
+    files = [f'/corpus/{REPO_OF[s]}/src/{SNIPPETS[s][0]}' for s in quoted]
     return {
         'id': 1,
         'answer': f'{body}\n{prose}',
-        'files_read': [f'/corpus/{REPO_OF[s]}/src/{SNIPPETS[s][0]}' for s in quoted],
+        'files_read': files,
+        '_hash_paths': files,
+        'file_hashes': {},
         'tool_calls': [],
     }
 
@@ -102,11 +93,34 @@ def _req(symbols: list[str]) -> dict:
 
 
 def _score(rec, req, corpus):
+    rec['file_hashes'] = {
+        path: hashlib.sha256(
+            (corpus / path.removeprefix('/corpus/')).read_bytes()).hexdigest()[:16]
+        for path in rec.pop('_hash_paths', rec.get('files_read', []))
+        if (corpus / path.removeprefix('/corpus/')).is_file()
+    }
     return score_chain.score_answer(
-        rec, req, score_chain.index(corpus), corpus, {}, tol=3)
+        rec, req, score_chain.index(corpus), corpus, {}, tol=0)
+
+
+def _add_hashes(rec, corpus):
+    rec['file_hashes'] = {
+        path: hashlib.sha256(
+            (corpus / path.removeprefix('/corpus/')).read_bytes()).hexdigest()[:16]
+        for path in rec.get('files_read', [])
+        if (corpus / path.removeprefix('/corpus/')).is_file()
+    }
+    return rec
 
 
 CHAIN = ['Widget', 'Middle', 'Gadget']
+
+
+def test_requirement_symbols_preserve_expert_causal_order():
+    text = ('SourceWidget invokes RelayMiddle, which hands the result to '
+            'TargetGadget; SourceWidget returns.')
+    assert build_requirements.symbols_in_order(text) == [
+        'SourceWidget', 'RelayMiddle', 'TargetGadget']
 
 
 class TestFullPath:
@@ -118,15 +132,14 @@ class TestFullPath:
 
 
 class TestEndpointPath:
-    def test_endpoints_quoted_and_middle_named_is_complete(self, corpus):
-        """The concession: read both ends, articulate the transit between them."""
+    def test_endpoints_quoted_and_middle_named_is_incomplete(self, corpus):
         rec = _answer(['Widget', 'Gadget'],
                       prose='Widget hands off through Middle, which relays '
                             'downstream to Gadget.')
         r = _score(rec, _req(CHAIN), corpus)
-        assert r['complete_endpoints'] is True
+        assert r['complete_endpoints'] is False
         assert r['complete_full'] is False, 'the middle hop was never quoted'
-        assert r['admissible'] is True
+        assert r['admissible'] is False
 
     def test_unnamed_middle_is_a_jump_not_a_chain(self, corpus):
         """Landing on B from A without saying how is the failure being caught."""
@@ -145,14 +158,13 @@ class TestEndpointPath:
         assert r['admissible'] is False
 
 
-class TestTwoSnippetFloor:
-    def test_a_single_snippet_never_completes(self, corpus):
-        """Even a one-hop question needs two snippets: quote-then-recite is out."""
+class TestSingleHop:
+    def test_one_hop_requires_one_verified_snippet(self, corpus):
         rec = _answer(['Widget'], prose='Widget is the whole mechanism.')
         r = _score(rec, _req(['Widget']), corpus)
         assert r['verified_quotes'] == 1
-        assert r['complete'] is False
-        assert r['admissible'] is False
+        assert r['complete'] is True
+        assert r['admissible'] is True
 
 
 class TestCrossRepoEndpoints:
@@ -162,8 +174,35 @@ class TestCrossRepoEndpoints:
         rec = _answer(['Widget', 'Middle'],
                       prose='Widget reaches Middle by way of Gadget.')
         r = _score(rec, _req(chain), corpus)
-        assert r['endpoint_repos'] == ['alpha'], 'both ends quoted inside alpha'
+        assert r['repos'] == ['alpha'], 'all evidence remains inside alpha'
         assert r['complete_endpoints'] is False
+        assert r['admissible'] is False
+
+
+class TestProvenance:
+    def test_missing_hashes_fail_closed(self, corpus):
+        rec = _answer(CHAIN)
+        rec.pop('_hash_paths')
+        rec['file_hashes'] = {}
+        r = score_chain.score_answer(
+            rec, _req(CHAIN), score_chain.index(corpus), corpus, {}, tol=0)
+        assert r['provenance_ok'] is False
+        assert r['admissible'] is False
+
+    def test_unhashable_glob_directory_does_not_poison_file_provenance(self, corpus):
+        rec = _answer(CHAIN)
+        rec['files_read'].append('/corpus/alpha')
+        r = _score(rec, _req(CHAIN), corpus)
+        assert r['provenance_ok'] is True
+        assert r['admissible'] is True
+
+    def test_mismatched_hash_fails_closed(self, corpus):
+        rec = _answer(CHAIN)
+        rec.pop('_hash_paths')
+        rec['file_hashes'] = {path: '0' * 16 for path in rec['files_read']}
+        r = score_chain.score_answer(
+            rec, _req(CHAIN), score_chain.index(corpus), corpus, {}, tol=0)
+        assert r['provenance_ok'] is False
         assert r['admissible'] is False
 
 
@@ -181,32 +220,32 @@ class TestQuoteFormats:
     def test_line_numbers_inside_the_fence(self, corpus):
         """``4 def emit(): ...`` -- the number is a per-line claim, so use it."""
         _, line, text = SNIPPETS['Widget']
-        rec = {'id': 1, 'tool_calls': [],
+        rec = _add_hashes({'id': 1, 'tool_calls': [],
                'files_read': ['/corpus/alpha/src/Widget.scala'],
-               'answer': f'Widget.scala:{line}\n```scala\n{line} {text}\n```\n'}
+               'answer': f'/corpus/alpha/src/Widget.scala:{line}\n```scala\n{line} {text}\n```\n'}, corpus)
         q = score_chain.verified_quotes(
-            rec, score_chain.index(corpus), corpus, {}, 3)
+            rec, score_chain.index(corpus), corpus, {}, 0)
         assert len(q) == 1, 'a numbered line must verify against its own number'
 
     def test_a_path_header_opens_the_fence(self, corpus):
         """The header carries both the file and the line; no prose cite needed."""
         _, line, text = SNIPPETS['Gadget']
-        rec = {'id': 1, 'tool_calls': [],
+        rec = _add_hashes({'id': 1, 'tool_calls': [],
                'files_read': ['/corpus/beta/src/Gadget.scala'],
-               'answer': f'```scala\n/corpus/beta/src/Gadget.scala:{line}\n{text}\n```\n'}
+               'answer': f'```scala\n/corpus/beta/src/Gadget.scala:{line}\n{text}\n```\n'}, corpus)
         q = score_chain.verified_quotes(
-            rec, score_chain.index(corpus), corpus, {}, 3)
+            rec, score_chain.index(corpus), corpus, {}, 0)
         assert len(q) == 1, 'a path-header fence must resolve from its own header'
         assert q[0]['repo'] == 'beta'
 
     def test_a_wrong_inline_number_still_fails(self, corpus):
         """Format tolerance must not become line tolerance."""
         _, line, text = SNIPPETS['Widget']
-        rec = {'id': 1, 'tool_calls': [],
+        rec = _add_hashes({'id': 1, 'tool_calls': [],
                'files_read': ['/corpus/alpha/src/Widget.scala'],
-               'answer': f'Widget.scala:40\n```scala\n40 {text}\n```\n'}
+               'answer': f'/corpus/alpha/src/Widget.scala:40\n```scala\n40 {text}\n```\n'}, corpus)
         q = score_chain.verified_quotes(
-            rec, score_chain.index(corpus), corpus, {}, 3)
+            rec, score_chain.index(corpus), corpus, {}, 0)
         assert q == [], 'the text is verbatim but sits nowhere near line 40'
 
 
@@ -225,3 +264,28 @@ class TestLineNumbersAreLoadBearing:
         assert r['verified_quotes'] == 1, 'the mis-cited quote must not verify'
         assert r['complete'] is False
         assert r['admissible'] is False
+
+    def test_every_line_in_a_block_must_match(self, corpus):
+        path = '/corpus/alpha/src/Widget.scala'
+        rec = _add_hashes({
+            'id': 1, 'files_read': [path], 'tool_calls': [],
+            'answer': (
+                f'{path}:3\n```scala\nclass Widget(name: String) {{\n'
+                '  def invented(): Unit = memory()\n```\n'),
+        }, corpus)
+        q = score_chain.verified_quotes(
+            rec, score_chain.index(corpus), corpus, {}, 0)
+        assert q == [], 'one real first line must not validate invented remainder'
+
+    def test_filtered_lines_do_not_shift_later_source_coordinates(self, corpus):
+        path = '/corpus/alpha/src/Widget.scala'
+        rec = _add_hashes({
+            'id': 1, 'files_read': [path], 'tool_calls': [],
+            'answer': (
+                f'{path}:1\n```scala\npackage alpha.core\n\n'
+                'class Widget(name: String) {\n'
+                '  def emit(): Unit = registry.publish(name, payload)\n```\n'),
+        }, corpus)
+        q = score_chain.verified_quotes(
+            rec, score_chain.index(corpus), corpus, {}, 0)
+        assert len(q) == 1

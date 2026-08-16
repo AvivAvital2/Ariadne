@@ -60,7 +60,18 @@ CREATE TABLE IF NOT EXISTS scip_index_state (
 )
 '''
 
-_SCIP_INDEXES = "\nCREATE INDEX IF NOT EXISTS idx_scip_symbols_source ON scip_symbols(source_name);\nCREATE INDEX IF NOT EXISTS idx_scip_symbols_file   ON scip_symbols(file);\n-- `expand_to_members` looks a seed's members up by parent, and without this the\n-- planner falls back to idx_scip_symbols_source and walks every row the source\n-- owns: 0.320s against 0.060s for a runMerge chain, measured A/B/A on a warm cache.\nCREATE INDEX IF NOT EXISTS idx_scip_symbols_display ON scip_symbols(display_name, source_name);\nCREATE INDEX IF NOT EXISTS idx_scip_symbols_parent ON scip_symbols(parent_qualified_name);\nCREATE INDEX IF NOT EXISTS idx_scip_edges_callee   ON scip_edges(callee_canonical_id);\nCREATE INDEX IF NOT EXISTS idx_scip_edges_caller   ON scip_edges(caller_canonical_id);\n"
+_SCIP_INDEXES = '''
+CREATE INDEX IF NOT EXISTS idx_scip_symbols_source ON scip_symbols(source_name);
+CREATE INDEX IF NOT EXISTS idx_scip_symbols_source_qualified ON scip_symbols(source_name, qualified_name);
+CREATE INDEX IF NOT EXISTS idx_scip_symbols_file   ON scip_symbols(file);
+-- `expand_to_members` looks a seed's members up by parent, and without this the
+-- planner falls back to idx_scip_symbols_source and walks every row the source
+-- owns: 0.320s against 0.060s for a runMerge chain, measured A/B/A on a warm cache.
+CREATE INDEX IF NOT EXISTS idx_scip_symbols_display ON scip_symbols(display_name, source_name);
+CREATE INDEX IF NOT EXISTS idx_scip_symbols_parent ON scip_symbols(parent_qualified_name);
+CREATE INDEX IF NOT EXISTS idx_scip_edges_callee   ON scip_edges(callee_canonical_id);
+CREATE INDEX IF NOT EXISTS idx_scip_edges_caller   ON scip_edges(caller_canonical_id);
+'''
 
 
 # ---------------------------------------------------------------------------

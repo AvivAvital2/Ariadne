@@ -28,6 +28,7 @@ import hashlib
 from pathlib import Path
 import subprocess
 import sys
+import time
 SYSTEM = (
     "You are a senior data engineer answering questions about Apache Spark and "
     "Delta Lake. A read-only checkout (spark, delta, databricks-sdk-py) is at "
@@ -49,15 +50,11 @@ SYSTEM = (
     "COMPLETENESS -- you must show HOW the first mechanism reaches the last. The "
     "chain has a fixed number of hops, set in advance from the answer key, NOT "
     "from how you choose to structure your reply; shortening your explanation "
-    "does not shorten the chain you owe evidence for. Either route is "
-    "accepted:\n"
-    "  ROUTE A (strongest) -- quote the code at EVERY hop.\n"
-    "  ROUTE B -- quote the FIRST and the LAST mechanism, and name every "
-    "mechanism in between, in order, so a chain A->D->C->B is stated rather "
-    "than jumped.\n"
-    "Both routes need at least TWO verified quotes: one quote plus recollection "
-    "is never complete. Where the chain crosses repositories, your first and "
-    "last quotes must come from DIFFERENT repositories.\n\n"
+    "does not shorten the chain you owe evidence for. Quote the code that "
+    "establishes EVERY hop. Every required mechanism and every transition must "
+    "be accounted for from source; naming an intermediate mechanism without "
+    "showing its establishing code is incomplete and scores zero. Where the "
+    "chain crosses repositories, quote the establishing code on BOTH sides.\n\n"
 
     "EVERY QUOTE carries the full /corpus path, the EXACT starting line number, "
     "and the code verbatim: no reformatting, no elision, no paraphrase, no "
@@ -109,16 +106,21 @@ def _sha(path: str) -> str | None:
 
 def _one_session(question: str) -> dict:
     """One cold session. Returns the answer, the tool calls, and file hashes."""
+    started = time.monotonic()
+    max_turns = os.environ.get('MAX_AGENT_TURNS', '20')
+    max_cost = os.environ.get('MAX_COST_USD', '2.0')
     p = subprocess.run(
         ["claude", "-p", question,
          "--append-system-prompt", SYSTEM,
          "--model", "claude-opus-4-8",
          "--allowedTools", ALLOWED,
          "--disallowedTools", DISALLOWED,
+         "--max-turns", max_turns,
+         "--max-budget-usd", max_cost,
          "--output-format", "stream-json", "--verbose"],
         cwd="/corpus", capture_output=True, text=True, timeout=900)
 
-    answer, calls = "", []
+    answer, calls, result_meta = "", [], {}
     for line in (p.stdout or "").splitlines():
         line = line.strip()
         if not line:
@@ -129,6 +131,11 @@ def _one_session(question: str) -> dict:
             continue
         if ev.get("type") == "result" and ev.get("result"):
             answer = ev["result"]
+            result_meta = {
+                key: ev.get(key) for key in
+                ('duration_ms', 'duration_api_ms', 'num_turns', 'total_cost_usd', 'usage')
+                if ev.get(key) is not None
+            }
         content = (ev.get("message") or {}).get("content")
         for blk in content if isinstance(content, list) else []:
             if isinstance(blk, dict) and blk.get("type") == "tool_use":
@@ -138,30 +145,29 @@ def _one_session(question: str) -> dict:
                     "path": ti.get("file_path") or ti.get("path") or "",
                     "pattern": ti.get("pattern") or "",
                 })
-    files = sorted({c["path"] for c in calls if c["path"]})
-    hashes = {f: _sha(f) for f in files}
+    candidates = sorted({c["path"] for c in calls if c["path"]})
+    hashes = {f: digest for f in candidates if (digest := _sha(f))}
+    # Glob calls may name directories. Keep those in tool_calls, but files_read
+    # means regular files whose exact bytes were captured for provenance.
+    files = sorted(hashes)
     return {
         "answer": (answer or "").strip() or (
             f"(no output; rc={p.returncode}; err={p.stderr.strip()[:300]})"),
         "files_read": files,
-        "file_hashes": {k: v for k, v in hashes.items() if v},
+        "file_hashes": hashes,
         "tool_calls": calls,
+        "elapsed_s": round(time.monotonic() - started, 3),
+        "budget": {"max_turns": int(max_turns), "max_cost_usd": float(max_cost)},
+        **result_meta,
     }
 
 
 
-_MAX_ATTEMPTS = 2
+_MAX_ATTEMPTS = 1
 
 
 def _inadequate(result: dict) -> str | None:
-    """Why this answer cannot be scored at all, or None if it can.
-
-    Both checks are mechanical and free -- no verification, no judgement. They
-    catch a session that never engaged with the corpus, which is a protocol
-    failure rather than a wrong answer, and is worth one retry instead of a
-    zero. Measured on the previous run: no session read zero files, but five
-    read files and quoted nothing, so the second check is the one that bites.
-    """
+    """Why this single attempt cannot be scored, or None if it can."""
     if not result.get("files_read"):
         return "you did not open a single file in /corpus"
     if "```" not in (result.get("answer") or ""):
@@ -170,12 +176,7 @@ def _inadequate(result: dict) -> str | None:
 
 
 def ask(question: str) -> dict:
-    """Answer one question, retrying once if the session never used the corpus.
-
-    Each attempt is its own cold `claude -p`, so the rejection has to travel in
-    the prompt. The retry count is recorded: an arm that needs retries is
-    telling us something, and hiding that would flatter it.
-    """
+    """Answer one question once; protocol failures are scored as failures."""
     prompt, attempts, rejections = question, 0, []
     while True:
         attempts += 1

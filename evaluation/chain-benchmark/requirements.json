@@ -1,0 +1,804 @@
+[
+  {"id":4,"claims":[
+    {"id":"spark-join-classify","assertion":"Spark executes the joined child of MergeRowsExec first, then processPartition evaluates the row-fate instructions and emits only non-discarded rows.","anchors":[
+      {"anchor":"execute-joined-child","symbol":"org.apache.spark.sql.execution.datasources.v2.MergeRowsExec.doExecute"},
+      {"anchor":"classify-and-emit","symbol":"org.apache.spark.sql.execution.datasources.v2.MergeRowsExec.processPartition"}
+    ],"transitions":[
+      ["execute-joined-child","classify-and-emit"]
+    ],"witnesses":[
+      {"id":"spark-join-feeds-merge-rows","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/RewriteMergeIntoTable.scala","line_start":164,"line_end":171,"contains":["val joinPlan = join","buildReplaceDataMergeRowsPlan","joinPlan"]},
+      {"id":"spark-classifies-after-child","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/MergeRowsExec.scala","line_start":72,"line_end":97,"contains":["child.execute().mapPartitions(processPartition)","planInstructions","new MergeRowIterator","mergeIterator.filter(_ != null)"]}
+    ],"repos":["spark"]},
+    {"id":"delta-join-classify","assertion":"ClassicMergeExecutor constructs joinedDF before generating and selecting its per-clause output columns, then filters dropped rows and writes the emitted rows.","anchors":[
+      {"anchor":"delta-join-and-write","symbol":"org.apache.spark.sql.delta.commands.merge.ClassicMergeExecutor.writeAllChanges"},
+      {"anchor":"delta-row-classification","symbol":"org.apache.spark.sql.delta.commands.merge.MergeOutputGeneration.generateWriteAllChangesOutputCols"}
+    ],"transitions":[
+      ["delta-join-and-write","delta-row-classification"]
+    ],"witnesses":[
+      {"id":"delta-builds-join-first","file":"spark/src/main/scala/org/apache/spark/sql/delta/commands/merge/ClassicMergeExecutor.scala","line_start":354,"line_end":380,"contains":["val joinedBaseDF","left.join(right, Column(condition), joinType)"]},
+      {"id":"delta-projects-after-join","file":"spark/src/main/scala/org/apache/spark/sql/delta/commands/merge/ClassicMergeExecutor.scala","line_start":390,"line_end":466,"contains":["generatePrecomputedConditionsAndDF","generateWriteAllChangesOutputCols","joinedAndPrecomputedConditionsDF",".select(outputCols: _*)",".filter(s\"$ROW_DROPPED_COL = false\")","writeFiles(spark, deltaTxn, outputDF)"]}
+    ],"repos":["delta"]}
+  ]},
+  {"id":6,"claims":[
+    {"id":"spark-rewrite","assertion":"Spark's native analyzer matches a resolved, rewritable, aligned MergeIntoTable and rewrites a SupportsRowLevelOperations target into Spark's WriteDelta or ReplaceData path.","anchors":[
+      {"anchor":"spark-merge-plan","symbol":"org.apache.spark.sql.catalyst.plans.logical.MergeIntoTable","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/v2Commands.scala","line":763},
+      {"anchor":"spark-row-level-rewrite","symbol":"org.apache.spark.sql.catalyst.analysis.RewriteMergeIntoTable.apply"}
+    ],"transitions":[
+      ["spark-merge-plan","spark-row-level-rewrite"]
+    ],"reverse_transitions":[
+      ["spark-merge-plan","spark-row-level-rewrite"]
+    ],"witnesses":[
+      {"id":"spark-native-merge-rewrite","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/RewriteMergeIntoTable.scala","line_start":122,"line_end":138,"contains":["case m @ MergeIntoTable","SupportsRowLevelOperations","buildWriteDeltaPlan","buildReplaceDataPlan"]}
+    ],"repos":["spark"]},
+    {"id":"delta-diversion","assertion":"DeltaAnalysis recognizes the Delta target and replaces Spark's MergeIntoTable with DeltaMergeInto; Delta's injected post-hoc rule then sends that plan through PreprocessTableMerge.","anchors":[
+      {"anchor":"delta-analysis","symbol":"org.apache.spark.sql.delta.DeltaAnalysis.apply"},
+      {"anchor":"delta-merge-constructor","symbol":"org.apache.spark.sql.catalyst.plans.logical.DeltaMergeInto","file":"spark/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/deltaMerge.scala","line":336,"kind":"Object"},
+      {"anchor":"delta-merge-plan","symbol":"org.apache.spark.sql.catalyst.plans.logical.DeltaMergeInto","file":"spark/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/deltaMerge.scala","line":315,"kind":"Class"},
+      {"anchor":"delta-merge-preprocessor","symbol":"org.apache.spark.sql.delta.PreprocessTableMerge.apply","file":"spark/src/main/scala/org/apache/spark/sql/delta/PreprocessTableMerge.scala","line":47}
+    ],"transitions":[
+      ["delta-analysis","delta-merge-constructor"],
+      ["delta-merge-constructor","delta-merge-plan"],
+      ["delta-merge-plan","delta-merge-preprocessor"]
+    ],"reverse_transitions":[
+      ["delta-merge-plan","delta-merge-preprocessor"]
+    ],"witnesses":[
+      {"id":"delta-replaces-spark-merge-plan","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaAnalysis.scala","line_start":526,"line_end":590,"contains":["case merge: MergeIntoTable","if (isDelta)","val deltaMerge = DeltaMergeInto","ResolveDeltaMergeInto.resolveReferencesAndSchema"]},
+      {"id":"delta-injects-merge-preprocessor","file":"spark/src/main/scala/io/delta/sql/DeltaSparkSessionExtension.scala","line_start":115,"line_end":120,"contains":["injectPostHocResolutionRule","PreprocessTableMerge"]}
+    ],"repos":["delta"]}
+  ]},
+  {"id":8,"claims":[
+    {"id":"delta-values","assertion":"PreprocessTableMerge resolves omitted generated-column expressions against the merge source and creates a shared identity-value generator for each omitted identity column.","anchors":[
+      {"anchor":"resolve-delta-implicit-columns","symbol":"org.apache.spark.sql.delta.PreprocessTableMerge.resolveImplicitColumns"},
+      {"anchor":"generated-column-expression","symbol":"org.apache.spark.sql.delta.GeneratedColumn.getGenerationExpression"},
+      {"anchor":"identity-column-generator","symbol":"org.apache.spark.sql.delta.IdentityColumn.createIdentityColumnGenerationExpr"}
+    ],"transitions":[
+      ["resolve-delta-implicit-columns","generated-column-expression"],
+      ["resolve-delta-implicit-columns","identity-column-generator"]
+    ],"witnesses":[
+      {"id":"delta-identifies-implicit-merge-columns","file":"spark/src/main/scala/org/apache/spark/sql/delta/PreprocessTableMerge.scala","line_start":145,"line_end":176,"contains":["blockExplicitIdentityColumnInsert","implicitActions","resolveImplicitColumns","generatedColumns","identityColumns"]},
+      {"id":"delta-computes-generated-and-identity-values","file":"spark/src/main/scala/org/apache/spark/sql/delta/PreprocessTableMerge.scala","line_start":429,"line_end":467,"contains":["GeneratedColumn.getGenerationExpression","resolveReferencesForExpressions","IdentityColumn.createIdentityColumnGenerationExpr","action.copy(expr = identityExp)"]}
+    ],"repos":["delta"]},
+    {"id":"spark-values","assertion":"Spark's native V2 analyzer aligns each MERGE insert action with AssignmentUtils.alignInsertAssignments, which fills ordinary defaults or reports missing assignments rather than invoking Delta's generated/identity machinery.","anchors":[
+      {"anchor":"spark-row-level-assignment-rule","symbol":"org.apache.spark.sql.catalyst.analysis.ResolveRowLevelCommandAssignments.apply"},
+      {"anchor":"spark-align-insert-assignments","symbol":"org.apache.spark.sql.catalyst.analysis.AssignmentUtils.alignInsertAssignments"}
+    ],"transitions":[
+      ["spark-row-level-assignment-rule","spark-align-insert-assignments"]
+    ],"witnesses":[
+      {"id":"spark-aligns-merge-actions","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/ResolveRowLevelCommandAssignments.scala","line_start":51,"line_end":57,"contains":["case m: MergeIntoTable","alignActions"]},
+      {"id":"spark-aligns-inserts-to-table-output","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/ResolveRowLevelCommandAssignments.scala","line_start":108,"line_end":118,"contains":["case i @ InsertAction","AssignmentUtils.alignInsertAssignments"]}
+    ],"repos":["spark"]}
+  ]},
+  {"id":10,"claims":[
+    {"id":"delta-api-convergence","assertion":"DeltaTable.merge returns DeltaMergeBuilder; its execute path builds DeltaMergeInto directly and passes it through the same PreprocessTableMerge command conversion reached by SQL after DeltaAnalysis.","anchors":[
+      {"anchor":"delta-table-merge-api","symbol":"io.delta.tables.DeltaTable.merge","file":"spark/src/main/scala/io/delta/tables/DeltaTable.scala","line":494},
+      {"anchor":"delta-builder-constructor","symbol":"io.delta.tables.DeltaMergeBuilder","file":"spark/src/main/scala/io/delta/tables/DeltaMergeBuilder.scala","line":386,"kind":"Object"},
+      {"anchor":"delta-builder-type","symbol":"io.delta.tables.DeltaMergeBuilder","file":"spark/src/main/scala/io/delta/tables/DeltaMergeBuilder.scala","line":153,"kind":"Class"},
+      {"anchor":"execute-delta-builder","symbol":"io.delta.tables.DeltaMergeBuilder.execute","file":"spark/src/main/scala/io/delta/tables/DeltaMergeBuilder.scala","line":294},
+      {"anchor":"build-delta-merge-plan","symbol":"io.delta.tables.DeltaMergeBuilder.mergePlan","file":"spark/src/main/scala/io/delta/tables/DeltaMergeBuilder.scala","line":338},
+      {"anchor":"delta-merge-constructor","symbol":"org.apache.spark.sql.catalyst.plans.logical.DeltaMergeInto","file":"spark/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/deltaMerge.scala","line":336,"kind":"Object"},
+      {"anchor":"delta-merge-plan","symbol":"org.apache.spark.sql.catalyst.plans.logical.DeltaMergeInto","file":"spark/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/deltaMerge.scala","line":315,"kind":"Class"},
+      {"anchor":"delta-merge-preprocessor","symbol":"org.apache.spark.sql.delta.PreprocessTableMerge.apply","file":"spark/src/main/scala/org/apache/spark/sql/delta/PreprocessTableMerge.scala","line":50}
+    ],"transitions":[
+      ["delta-table-merge-api","delta-builder-constructor"],
+      ["delta-builder-constructor","delta-builder-type"],
+      ["delta-builder-type","build-delta-merge-plan"],
+      ["execute-delta-builder","build-delta-merge-plan"],
+      ["build-delta-merge-plan","delta-merge-constructor"],
+      ["delta-merge-constructor","delta-merge-plan"],
+      ["delta-merge-plan","delta-merge-preprocessor"]
+    ],"reverse_transitions":[
+      ["delta-merge-plan","delta-merge-preprocessor"]
+    ],"witnesses":[
+      {"id":"delta-api-returns-builder","file":"spark/src/main/scala/io/delta/tables/DeltaTable.scala","line_start":494,"line_end":496,"contains":["def merge","DeltaMergeBuilder(this, source, condition)"]},
+      {"id":"delta-builder-runs-preprocessor","file":"spark/src/main/scala/io/delta/tables/DeltaMergeBuilder.scala","line_start":294,"line_end":319,"contains":["def execute","resolveReferencesAndSchema(mergePlan","PreprocessTableMerge","toDataset"]},
+      {"id":"delta-builder-constructs-delta-plan","file":"spark/src/main/scala/io/delta/tables/DeltaMergeBuilder.scala","line_start":372,"line_end":382,"contains":["val merge = DeltaMergeInto","targetPlan, sourcePlan","merge"]}
+    ],"repos":["delta"]},
+    {"id":"spark-api","assertion":"Spark's concrete MergeIntoWriter.merge constructs Catalyst MergeIntoTable and submits that plan to Spark's analyzer, not DeltaMergeInto.","anchors":[
+      {"anchor":"spark-merge-writer","symbol":"org.apache.spark.sql.classic.MergeIntoWriter.merge"},
+      {"anchor":"spark-merge-plan","symbol":"org.apache.spark.sql.catalyst.plans.logical.MergeIntoTable","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/v2Commands.scala","line":808,"kind":"Object"}
+    ],"transitions":[
+      ["spark-merge-writer","spark-merge-plan"]
+    ],"witnesses":[
+      {"id":"spark-api-constructs-native-plan","file":"sql/core/src/main/scala/org/apache/spark/sql/classic/MergeIntoWriter.scala","line_start":59,"line_end":76,"contains":["def merge","val merge = MergeIntoTable","executePlan(merge)"]}
+    ],"repos":["spark"]}
+  ]},
+  {"id":12,"claims":[
+    {"id":"delta-update","assertion":"DeltaAnalysis converts Spark UpdateTable to DeltaUpdateTable; PreprocessTableUpdate aligns every target expression with Delta's update-expression machinery and emits UpdateCommand.","anchors":[
+      {"anchor":"delta-analysis","symbol":"org.apache.spark.sql.delta.DeltaAnalysis.apply"},
+      {"anchor":"delta-update-constructor","symbol":"org.apache.spark.sql.catalyst.plans.logical.DeltaUpdateTable","file":"spark/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/DeltaUpdateTable.scala","line":47,"kind":"Object"},
+      {"anchor":"delta-update-plan","symbol":"org.apache.spark.sql.catalyst.plans.logical.DeltaUpdateTable","file":"spark/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/DeltaUpdateTable.scala","line":32,"kind":"Class"},
+      {"anchor":"delta-update-preprocessor","symbol":"org.apache.spark.sql.delta.PreprocessTableUpdate.toCommand"},
+      {"anchor":"delta-update-expression-generator","symbol":"org.apache.spark.sql.delta.UpdateExpressionsSupport.generateUpdateExpressions","file":"spark/src/main/scala/org/apache/spark/sql/delta/UpdateExpressionsSupport.scala","line":301},
+      {"anchor":"delta-update-command","symbol":"org.apache.spark.sql.delta.commands.UpdateCommand","file":"spark/src/main/scala/org/apache/spark/sql/delta/commands/UpdateCommand.scala","line":501,"kind":"Object"}
+    ],"transitions":[
+      ["delta-analysis","delta-update-constructor"],
+      ["delta-update-constructor","delta-update-plan"],
+      ["delta-update-plan","delta-update-preprocessor"],
+      ["delta-update-preprocessor","delta-update-expression-generator"],
+      ["delta-update-preprocessor","delta-update-command"]
+    ],"reverse_transitions":[
+      ["delta-update-plan","delta-update-preprocessor"]
+    ],"witnesses":[
+      {"id":"delta-analysis-diverts-update","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaAnalysis.scala","line_start":513,"line_end":523,"contains":["case u @ UpdateTable","DeltaFullTable","DeltaUpdateTable"]},
+      {"id":"delta-preprocessor-builds-update-command","file":"spark/src/main/scala/org/apache/spark/sql/delta/PreprocessTableUpdate.scala","line_start":50,"line_end":94,"contains":["def toCommand","generateUpdateExpressions","generateUpdateExprsForGeneratedColumns","UpdateCommand"]}
+    ],"repos":["delta"]},
+    {"id":"spark-update","assertion":"Spark aligns a rewritable V2 UpdateTable with alignUpdateAssignments, then RewriteUpdateTable chooses Spark's WriteDelta or ReplaceData executable plan from the table capability.","anchors":[
+      {"anchor":"spark-row-level-assignment-rule","symbol":"org.apache.spark.sql.catalyst.analysis.ResolveRowLevelCommandAssignments.apply"},
+      {"anchor":"spark-align-update-assignments","symbol":"org.apache.spark.sql.catalyst.analysis.AssignmentUtils.alignUpdateAssignments"},
+      {"anchor":"spark-update-plan","symbol":"org.apache.spark.sql.catalyst.plans.logical.UpdateTable"},
+      {"anchor":"spark-update-rewrite","symbol":"org.apache.spark.sql.catalyst.analysis.RewriteUpdateTable.apply"},
+      {"anchor":"spark-replace-data-plan","symbol":"org.apache.spark.sql.catalyst.plans.logical.ReplaceData"},
+      {"anchor":"spark-write-delta-plan","symbol":"org.apache.spark.sql.catalyst.plans.logical.WriteDelta"}
+    ],"transitions":[
+      ["spark-row-level-assignment-rule","spark-align-update-assignments"],
+      ["spark-row-level-assignment-rule","spark-update-plan"],
+      ["spark-update-plan","spark-update-rewrite"],
+      ["spark-update-rewrite","spark-replace-data-plan"],
+      ["spark-update-rewrite","spark-write-delta-plan"]
+    ],"reverse_transitions":[
+      ["spark-update-plan","spark-update-rewrite"]
+    ],"witnesses":[
+      {"id":"spark-aligns-update-assignments","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/ResolveRowLevelCommandAssignments.scala","line_start":40,"line_end":46,"contains":["case u: UpdateTable","AssignmentUtils.alignUpdateAssignments"]},
+      {"id":"spark-selects-native-update-plan","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/RewriteUpdateTable.scala","line_start":38,"line_end":53,"contains":["case u @ UpdateTable","SupportsRowLevelOperations","buildWriteDeltaPlan","buildReplaceDataPlan"]}
+    ],"repos":["spark"]}
+  ]},
+  {"id":13,"claims":[
+    {"id":"spark-pruning","assertion":"For a group-based Spark row-level operation whose scan implements SupportsRuntimeV2Filtering, RowLevelOperationRuntimeGroupFiltering injects a dynamic pruning filter before the rewrite query runs.","anchors":[
+      {"anchor":"spark-runtime-group-filter-rule","symbol":"org.apache.spark.sql.execution.dynamicpruning.RowLevelOperationRuntimeGroupFiltering.apply"},
+      {"anchor":"spark-runtime-filter-capability","symbol":"org.apache.spark.sql.connector.read.SupportsRuntimeV2Filtering"}
+    ],"transitions":[
+      ["spark-runtime-group-filter-rule","spark-runtime-filter-capability"]
+    ],"witnesses":[
+      {"id":"spark-injects-group-runtime-filter","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/dynamicpruning/RowLevelOperationRuntimeGroupFiltering.scala","line_start":35,"line_end":77,"contains":["GroupBasedRowLevelOperation","SupportsRuntimeV2Filtering","buildDynamicPruningCond","Filter(dynamicPruningCond, r)"]}
+    ],"repos":["spark"]},
+    {"id":"delta-pruning","assertion":"Delta's ClassicMergeExecutor calls its transaction's Delta-owned filterFiles with target-only predicates before constructing the source-target join that finds touched files.","anchors":[
+      {"anchor":"delta-find-touched-files","symbol":"org.apache.spark.sql.delta.commands.merge.ClassicMergeExecutor.findTouchedFiles"},
+      {"anchor":"delta-transaction-file-filter","symbol":"org.apache.spark.sql.delta.OptimisticTransactionImpl.filterFiles","file":"spark/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala","line":1089}
+    ],"transitions":[
+      ["delta-find-touched-files","delta-transaction-file-filter"]
+    ],"witnesses":[
+      {"id":"delta-prunes-before-merge-scan","file":"spark/src/main/scala/org/apache/spark/sql/delta/commands/merge/ClassicMergeExecutor.scala","line_start":85,"line_end":140,"contains":["deltaTxn.filterFiles(getTargetOnlyPredicates(spark)","val targetPlan","dataSkippedFiles","sourceDF.join(targetDF, Column(condition), joinType)"]}
+    ],"repos":["delta"]}
+  ]},
+  {"id":15,"claims":[
+    {"id":"writer-fork","assertion":"TransactionalWrite hands its prepared SparkPlan to DeltaFileFormatWriter; that writer explicitly identifies itself as Spark FileFormatWriter logic copied to add Delta-specific partition-column behavior.","anchors":[
+      {"anchor":"transactional-write-files","symbol":"org.apache.spark.sql.delta.files.TransactionalWrite.writeFiles","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line":386},
+      {"anchor":"delta-file-writer","symbol":"org.apache.spark.sql.delta.files.DeltaFileFormatWriter.write","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line":86}
+    ],"transitions":[
+      ["transactional-write-files","delta-file-writer"]
+    ],"witnesses":[
+      {"id":"transactional-write-hands-off-plan","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line_start":428,"line_end":485,"contains":["val physicalPlan","DeltaFileFormatWriter.write(","plan = physicalPlan","partitionColumns = partitioningColumns"]},
+      {"id":"delta-writer-declares-copied-fork","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line_start":52,"line_end":57,"contains":["Logic is copied from FileFormatWriter from Spark 3.5","WRITE_PARTITION_COLUMNS"]}
+    ],"repos":["delta","spark"]},
+    {"id":"partition-capability","assertion":"TransactionalWrite passes WRITE_PARTITION_COLUMNS to the fork, whose output schema can append partitionColumns to dataColumns; stock FileFormatWriter always prepares and records only dataColumns.","anchors":[
+      {"anchor":"transactional-write-files","symbol":"org.apache.spark.sql.delta.files.TransactionalWrite.writeFiles","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line":386},
+      {"anchor":"delta-file-writer","symbol":"org.apache.spark.sql.delta.files.DeltaFileFormatWriter.write","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line":86},
+      {"anchor":"write-partition-columns-option","symbol":"org.apache.spark.sql.delta.DeltaOptions.WRITE_PARTITION_COLUMNS","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaOptions.scala","line":305}
+    ],"transitions":[
+      ["transactional-write-files","delta-file-writer"],
+      ["delta-file-writer","write-partition-columns-option"]
+    ],"witnesses":[
+      {"id":"transactional-write-enables-partition-output","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line_start":456,"line_end":485,"contains":["Iceberg spec requires partition columns in data files","DeltaOptions.WRITE_PARTITION_COLUMNS","DeltaFileFormatWriter.write("]},
+      {"id":"delta-writer-retains-partition-values","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line_start":105,"line_end":145,"contains":["val dataColumns","val outputDataColumns","dataColumns ++ partitionColumns","dataColumns = outputDataColumns"]},
+      {"id":"stock-writer-excludes-partition-values","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/FileFormatWriter.scala","line_start":105,"line_end":130,"contains":["filterNot(partitionSet.contains)","caseInsensitiveOptions, dataSchema","dataColumns = dataColumns"]}
+    ],"repos":["delta","spark"]}
+  ]},
+  {"id":16,"claims":[
+    {"id":"delta-commit","assertion":"DeltaFileFormatWriter still calls commitJob, but DelayedCommitProtocol's job commit only gathers AddFile metadata into addedStatuses; its setup/abort hooks are empty and it never invokes Hadoop's rename-based job commit.","anchors":[
+      {"anchor":"delta-write-and-commit","symbol":"org.apache.spark.sql.delta.files.DeltaFileFormatWriter.writeAndCommit","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line":294},
+      {"anchor":"delta-commit-job","symbol":"org.apache.spark.sql.delta.files.DelayedCommitProtocol.commitJob","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DelayedCommitProtocol.scala","line":89},
+      {"anchor":"delta-added-statuses","symbol":"org.apache.spark.sql.delta.files.DelayedCommitProtocol.addedStatuses","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DelayedCommitProtocol.scala","line":72},
+      {"anchor":"delta-add-file","symbol":"org.apache.spark.sql.delta.actions.AddFile","file":"spark/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala","line":714,"kind":"Class"}
+    ],"transitions":[
+      ["delta-write-and-commit","delta-commit-job"],
+      ["delta-commit-job","delta-added-statuses"],
+      ["delta-commit-job","delta-add-file"]
+    ],"witnesses":[
+      {"id":"delta-writer-runs-job-callbacks","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line_start":294,"line_end":320,"contains":["committer.setupJob(job)","committer.commitJob(job, commitMsgs)","committer.abortJob(job)"]},
+      {"id":"delta-job-commit-is-metadata-only","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DelayedCommitProtocol.scala","line_start":80,"line_end":105,"contains":["override def setupJob","override def commitJob","case _: AddFile","addedStatuses ++=","override def abortJob"]},
+      {"id":"stock-job-commit-invokes-hadoop-and-renames","file":"core/src/main/scala/org/apache/spark/internal/io/HadoopMapReduceCommitProtocol.scala","line_start":193,"line_end":243,"contains":["committer.commitJob(jobContext)","fs.rename","fs.delete(stagingDir, true)"]}
+    ],"repos":["delta","spark"]},
+    {"id":"spark-commit","assertion":"HadoopMapReduceCommitProtocol delegates to the Hadoop OutputCommitter, moves staged outputs to final locations, and removes its staging directory during normal job commit.","anchors":[
+      {"anchor":"spark-commit-job","symbol":"org.apache.spark.internal.io.HadoopMapReduceCommitProtocol.commitJob","file":"core/src/main/scala/org/apache/spark/internal/io/HadoopMapReduceCommitProtocol.scala","line":193},
+      {"anchor":"spark-staging-directory","symbol":"org.apache.spark.internal.io.HadoopMapReduceCommitProtocol.stagingDir","file":"core/src/main/scala/org/apache/spark/internal/io/HadoopMapReduceCommitProtocol.scala","line":108}
+    ],"transitions":[
+      ["spark-commit-job","spark-staging-directory"]
+    ],"witnesses":[
+      {"id":"stock-commit-lifecycle","file":"core/src/main/scala/org/apache/spark/internal/io/HadoopMapReduceCommitProtocol.scala","line_start":193,"line_end":243,"contains":["committer.commitJob(jobContext)","val filesToMove","fs.rename","fs.delete(stagingDir, true)"]}
+    ],"repos":["spark"]}
+  ]},
+  {"id":17,"claims":[
+    {"id":"callback-wiring","assertion":"DeltaFileFormatWriter.write enters executeWrite; executeWrite dispatches through writeAndCommit and executeTask, which invoke FileCommitProtocol.commitJob and setupTask respectively. Spark's FileFormatDataWriter invokes newTaskTempFile and commitTask on the same committer, and TransactionalWrite supplies DelayedCommitProtocol as that implementation.","anchors":[
+      {"anchor":"delta-file-writer","symbol":"org.apache.spark.sql.delta.files.DeltaFileFormatWriter.write","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line":86},
+      {"anchor":"delta-execute-write","symbol":"org.apache.spark.sql.delta.files.DeltaFileFormatWriter.executeWrite","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line":224},
+      {"anchor":"delta-write-and-commit","symbol":"org.apache.spark.sql.delta.files.DeltaFileFormatWriter.writeAndCommit","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line":294},
+      {"anchor":"file-commit-job","symbol":"org.apache.spark.internal.io.FileCommitProtocol.commitJob","file":"core/src/main/scala/org/apache/spark/internal/io/FileCommitProtocol.scala","line":61},
+      {"anchor":"delta-execute-task","symbol":"org.apache.spark.sql.delta.files.DeltaFileFormatWriter.executeTask","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line":395},
+      {"anchor":"file-setup-task","symbol":"org.apache.spark.internal.io.FileCommitProtocol.setupTask","file":"core/src/main/scala/org/apache/spark/internal/io/FileCommitProtocol.scala","line":75}
+    ],"transitions":[
+      ["delta-file-writer","delta-execute-write"],
+      ["delta-execute-write","delta-write-and-commit"],
+      ["delta-write-and-commit","file-commit-job"],
+      ["delta-execute-write","delta-execute-task"],
+      ["delta-execute-task","file-setup-task"]
+    ],"witnesses":[
+      {"id":"delta-selects-delayed-committer","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line_start":64,"line_end":65,"contains":["getCommitter","new DelayedCommitProtocol"]},
+      {"id":"delta-writer-dispatches-job-and-task-execution","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line_start":198,"line_end":286,"contains":["executeWrite(","writeAndCommit","executeTask(","committer.onTaskCommit"]},
+      {"id":"delta-writer-task-and-job-callbacks","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line_start":294,"line_end":320,"contains":["committer.setupJob(job)","committer.commitJob(job, commitMsgs)" ]},
+      {"id":"delta-writer-task-setup","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line_start":395,"line_end":459,"contains":["committer.setupTask(taskAttemptContext)","dataWriter.commit()"]},
+      {"id":"spark-data-writer-temp-and-task-callbacks","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/FileFormatDataWriter.scala","line_start":115,"line_end":180,"contains":["committer.commitTask(taskAttemptContext)","committer.newTaskTempFile("]}
+    ],"repos":["delta","spark"]},
+    {"id":"temp-repurpose","assertion":"DelayedCommitProtocol.newTaskTempFile records a relative final path and returns its destination under the table path; commitTask stats those already-written files and converts them to AddFile actions instead of scheduling a rename.","anchors":[
+      {"anchor":"delta-new-task-temp-file","symbol":"org.apache.spark.sql.delta.files.DelayedCommitProtocol.newTaskTempFile","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DelayedCommitProtocol.scala","line":193},
+      {"anchor":"delta-added-files","symbol":"org.apache.spark.sql.delta.files.DelayedCommitProtocol.addedFiles","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DelayedCommitProtocol.scala","line":59},
+      {"anchor":"delta-commit-task","symbol":"org.apache.spark.sql.delta.files.DelayedCommitProtocol.commitTask","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DelayedCommitProtocol.scala","line":251},
+      {"anchor":"delta-build-file-action","symbol":"org.apache.spark.sql.delta.files.DelayedCommitProtocol.buildActionFromAddedFile","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DelayedCommitProtocol.scala","line":234},
+      {"anchor":"delta-add-file","symbol":"org.apache.spark.sql.delta.actions.AddFile","file":"spark/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala","line":714,"kind":"Class"}
+    ],"transitions":[
+      ["delta-new-task-temp-file","delta-added-files"],
+      ["delta-commit-task","delta-added-files"],
+      ["delta-commit-task","delta-build-file-action"],
+      ["delta-build-file-action","delta-add-file"]
+    ],"witnesses":[
+      {"id":"delta-temp-call-returns-final-destination","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DelayedCommitProtocol.scala","line_start":183,"line_end":227,"contains":["override def newTaskTempFile","addedFiles.append","new Path(path, relativePathWithSubdir).toString"]},
+      {"id":"delta-task-commit-builds-file-actions","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DelayedCommitProtocol.scala","line_start":234,"line_end":267,"contains":["buildActionFromAddedFile","AddFile(","override def commitTask","new TaskCommitMessage(statuses)"]},
+      {"id":"stock-temp-call-uses-staging","file":"core/src/main/scala/org/apache/spark/internal/io/HadoopMapReduceCommitProtocol.scala","line_start":125,"line_end":163,"contains":["val stagingDir","getWorkPath","val tmpOutputPath","addedAbsPathFiles(tmpOutputPath) = absOutputPath"]}
+    ],"repos":["delta","spark"]}
+  ]},
+  {"id":23,"claims":[
+    {"id":"nullable-output","assertion":"TransactionalWrite normalizes the query output through makeOutputNullable, carries that output into its write method, and gives the resulting plan and output schema to DeltaFileFormatWriter.","anchors":[
+      {"anchor":"transactional-write-files","symbol":"org.apache.spark.sql.delta.files.TransactionalWrite.writeFiles","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line":386},
+      {"anchor":"normalize-data","symbol":"org.apache.spark.sql.delta.files.TransactionalWrite.normalizeData","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line":88},
+      {"anchor":"normalize-schema","symbol":"org.apache.spark.sql.delta.files.TransactionalWrite.normalizeSchema","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line":109},
+      {"anchor":"make-output-nullable","symbol":"org.apache.spark.sql.delta.files.TransactionalWrite.makeOutputNullable","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line":68},
+      {"anchor":"delta-file-writer","symbol":"org.apache.spark.sql.delta.files.DeltaFileFormatWriter.write","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line":86}
+    ],"transitions":[
+      ["transactional-write-files","normalize-data"],
+      ["normalize-data","normalize-schema"],
+      ["normalize-schema","make-output-nullable"],
+      ["transactional-write-files","delta-file-writer"]
+    ],"witnesses":[
+      {"id":"normalization-makes-output-nullable","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line_start":67,"line_end":75,"contains":["Makes the output attributes nullable","nullable = true","withNullability(true)"]},
+      {"id":"nullable-output-leaves-normalization","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line_start":139,"line_end":162,"contains":["val nullableOutput = makeOutputNullable","checkPartitionColumns","mappedOutput"]},
+      {"id":"normalized-output-enters-writer","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line_start":397,"line_end":485,"contains":["normalizeData","OutputSpec(","output)","DeltaFileFormatWriter.write(","plan = physicalPlan"]}
+    ],"repos":["delta"]},
+    {"id":"constraint-enforcement","assertion":"TransactionalWrite derives constraints from table metadata; schema extraction turns non-nullable fields into Constraints.NotNull, DeltaInvariantCheckerExec builds executable checks, and CheckDeltaInvariant throws when a written row evaluates to null.","anchors":[
+      {"anchor":"transactional-write-files","symbol":"org.apache.spark.sql.delta.files.TransactionalWrite.writeFiles","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line":386},
+      {"anchor":"constraints-get-all","symbol":"org.apache.spark.sql.delta.constraints.Constraints.getAll","file":"spark/src/main/scala/org/apache/spark/sql/delta/constraints/Constraints.scala","line":74},
+      {"anchor":"invariants-from-schema","symbol":"org.apache.spark.sql.delta.constraints.Invariants.getFromSchema","file":"spark/src/main/scala/org/apache/spark/sql/delta/constraints/Invariants.scala","line":73},
+      {"anchor":"not-null-constraint","symbol":"org.apache.spark.sql.delta.constraints.Constraints.NotNull","file":"spark/src/main/scala/org/apache/spark/sql/delta/constraints/Constraints.scala","line":45,"kind":"Class"},
+      {"anchor":"invariant-checker","symbol":"org.apache.spark.sql.delta.constraints.DeltaInvariantCheckerExec","file":"spark/src/main/scala/org/apache/spark/sql/delta/constraints/DeltaInvariantCheckerExec.scala","line":110,"kind":"Object"},
+      {"anchor":"build-invariant-checks","symbol":"org.apache.spark.sql.delta.constraints.DeltaInvariantCheckerExec.buildInvariantChecks","file":"spark/src/main/scala/org/apache/spark/sql/delta/constraints/DeltaInvariantCheckerExec.scala","line":164},
+      {"anchor":"check-delta-invariant","symbol":"org.apache.spark.sql.delta.constraints.CheckDeltaInvariant","file":"spark/src/main/scala/org/apache/spark/sql/delta/constraints/CheckDeltaInvariant.scala","line":35,"kind":"Class"},
+      {"anchor":"assert-invariant-rule","symbol":"org.apache.spark.sql.delta.constraints.CheckDeltaInvariant.assertRule","file":"spark/src/main/scala/org/apache/spark/sql/delta/constraints/CheckDeltaInvariant.scala","line":46}
+    ],"transitions":[
+      ["transactional-write-files","constraints-get-all"],
+      ["constraints-get-all","invariants-from-schema"],
+      ["invariants-from-schema","not-null-constraint"],
+      ["transactional-write-files","invariant-checker"],
+      ["invariant-checker","build-invariant-checks"],
+      ["build-invariant-checks","check-delta-invariant"],
+      ["check-delta-invariant","assert-invariant-rule"]
+    ],"witnesses":[
+      {"id":"transactional-write-installs-invariant-checker","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line_start":397,"line_end":443,"contains":["Constraints.getAll(metadata, spark)","DeltaInvariantCheckerExec(spark, empty2NullPlan, constraints)","physicalPlan"]},
+      {"id":"metadata-collects-schema-invariants","file":"spark/src/main/scala/org/apache/spark/sql/delta/constraints/Constraints.scala","line_start":73,"line_end":84,"contains":["def getAll","Invariants.getFromSchema(metadata.schema, spark)","checkConstraints ++ constraintsFromSchema"]},
+      {"id":"non-nullable-fields-become-not-null-constraints","file":"spark/src/main/scala/org/apache/spark/sql/delta/constraints/Invariants.scala","line_start":72,"line_end":90,"contains":["def getFromSchema","if !field.nullable","Constraints.NotNull"]},
+      {"id":"checker-builds-not-null-expression","file":"spark/src/main/scala/org/apache/spark/sql/delta/constraints/DeltaInvariantCheckerExec.scala","line_start":164,"line_end":219,"contains":["def buildInvariantChecks","case n @ NotNull(column)","CheckDeltaInvariant(executableExpr"]},
+      {"id":"physical-checker-evaluates-every-row","file":"spark/src/main/scala/org/apache/spark/sql/delta/constraints/DeltaInvariantCheckerExec.scala","line_start":84,"line_end":99,"contains":["child.execute().mapPartitionsInternal","assertions(row)"]},
+      {"id":"not-null-check-throws","file":"spark/src/main/scala/org/apache/spark/sql/delta/constraints/CheckDeltaInvariant.scala","line_start":35,"line_end":65,"contains":["case n: NotNull","child.eval(input) == null","throw DeltaInvariantViolationException(n)"]}
+    ],"repos":["delta"]}
+  ]},
+  {"id":27,"claims":[
+    {"id":"delegation","assertion":"DeltaCatalog's non-Delta create branch calls createCatalogTable, which invokes DelegatingCatalogExtension.createTable; that base implementation casts and forwards to its delegate catalog.","anchors":[
+      {"anchor":"delta-create-table","symbol":"org.apache.spark.sql.delta.catalog.DeltaCatalog.createTable","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaCatalog.scala","line":346},
+      {"anchor":"create-catalog-table","symbol":"org.apache.spark.sql.delta.catalog.DeltaCatalog.createCatalogTable","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaCatalog.scala","line":324},
+      {"anchor":"delegated-create-table","symbol":"org.apache.spark.sql.connector.catalog.DelegatingCatalogExtension.createTable","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/DelegatingCatalogExtension.java","line":97},
+      {"anchor":"delegate-as-table-catalog","symbol":"org.apache.spark.sql.connector.catalog.DelegatingCatalogExtension.asTableCatalog","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/DelegatingCatalogExtension.java","line":195},
+      {"anchor":"delegate-field","symbol":"org.apache.spark.sql.connector.catalog.DelegatingCatalogExtension.delegate","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/DelegatingCatalogExtension.java","line":41}
+    ],"transitions":[
+      ["delta-create-table","create-catalog-table"],
+      ["create-catalog-table","delegated-create-table"],
+      ["delegated-create-table","delegate-as-table-catalog"],
+      ["delegate-as-table-catalog","delegate-field"]
+    ],"witnesses":[
+      {"id":"delta-catalog-selects-non-delta-branch","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaCatalog.scala","line_start":319,"line_end":377,"contains":["def createCatalogTable","super.createTable","isDeltaDataSourceName","createCatalogTable(ident, schema, partitions, properties"]},
+      {"id":"catalog-extension-forwards-to-delegate","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/DelegatingCatalogExtension.java","line_start":30,"line_end":45,"contains":["built-in session catalog directly","protected CatalogPlugin delegate","setDelegateCatalog"]},
+      {"id":"delegate-receives-create","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/DelegatingCatalogExtension.java","line_start":97,"line_end":103,"contains":["createTable(","asTableCatalog().createTable"]},
+      {"id":"delegate-is-cast-to-table-catalog","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/DelegatingCatalogExtension.java","line_start":195,"line_end":197,"contains":["asTableCatalog","(TableCatalog) delegate"]}
+    ],"repos":["delta","spark"]},
+    {"id":"delta-intercept","assertion":"For USING delta, DeltaCatalog's provider check chooses createDeltaTable; after catalog creation that path reloads the identifier, and loadTable replaces the delegated V1 Delta table with DeltaTableV2.","anchors":[
+      {"anchor":"delta-create-table","symbol":"org.apache.spark.sql.delta.catalog.DeltaCatalog.createTable","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaCatalog.scala","line":346},
+      {"anchor":"delta-provider-check","symbol":"org.apache.spark.sql.delta.sources.DeltaSourceUtils.isDeltaDataSourceName","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSourceUtils.scala","line":46},
+      {"anchor":"create-delta-table","symbol":"org.apache.spark.sql.delta.catalog.DeltaCatalog.createDeltaTable","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaCatalog.scala","line":96},
+      {"anchor":"delta-load-table","symbol":"org.apache.spark.sql.delta.catalog.DeltaCatalog.loadTable","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaCatalog.scala","line":228},
+      {"anchor":"delta-table-constructor","symbol":"org.apache.spark.sql.delta.catalog.DeltaTableV2","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaTableV2.scala","line":408,"kind":"Object"},
+      {"anchor":"delta-table-type","symbol":"org.apache.spark.sql.delta.catalog.DeltaTableV2","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaTableV2.scala","line":64,"kind":"Class"}
+    ],"transitions":[
+      ["delta-create-table","delta-provider-check"],
+      ["delta-create-table","create-delta-table"],
+      ["create-delta-table","delta-load-table"],
+      ["delta-load-table","delta-table-constructor"],
+      ["delta-table-constructor","delta-table-type"]
+    ],"witnesses":[
+      {"id":"using-delta-selects-delta-create","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaCatalog.scala","line_start":346,"line_end":377,"contains":["DeltaSourceUtils.isDeltaDataSourceName","createDeltaTable(","TableCreationModes.Create","createCatalogTable"]},
+      {"id":"delta-create-reloads-created-table","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaCatalog.scala","line_start":210,"line_end":225,"contains":["createTableFunc","super.createTable","loadTable(ident)"]},
+      {"id":"load-enriches-delta-metastore-table","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaCatalog.scala","line_start":228,"line_end":239,"contains":["super.loadTable(ident)","DeltaTableUtils.isDeltaTable","DeltaTableV2(","case o => o"]}
+    ],"repos":["delta","spark"]}
+  ]},
+  {"id":31,"claims":[
+    {"id":"catalog-chain","assertion":"DeltaCatalog first invokes DelegatingCatalogExtension.loadTable; that method calls asTableCatalog().loadTable on the configured delegate, so ordinary lookup still comes from the wrapped Spark session catalog before Delta inspects the result.","anchors":[
+      {"anchor":"delta-load-table","symbol":"org.apache.spark.sql.delta.catalog.DeltaCatalog.loadTable","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaCatalog.scala","line":228},
+      {"anchor":"delegated-load-table","symbol":"org.apache.spark.sql.connector.catalog.DelegatingCatalogExtension.loadTable","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/DelegatingCatalogExtension.java","line":72},
+      {"anchor":"delegate-as-table-catalog","symbol":"org.apache.spark.sql.connector.catalog.DelegatingCatalogExtension.asTableCatalog","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/DelegatingCatalogExtension.java","line":195},
+      {"anchor":"delegate-field","symbol":"org.apache.spark.sql.connector.catalog.DelegatingCatalogExtension.delegate","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/DelegatingCatalogExtension.java","line":41}
+    ],"transitions":[
+      ["delta-load-table","delegated-load-table"],
+      ["delegated-load-table","delegate-as-table-catalog"],
+      ["delegate-as-table-catalog","delegate-field"]
+    ],"witnesses":[
+      {"id":"delta-load-starts-with-super","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaCatalog.scala","line_start":228,"line_end":239,"contains":["super.loadTable(ident) match","case v1: V1Table","case o => o"]},
+      {"id":"extension-loads-through-delegate","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/DelegatingCatalogExtension.java","line_start":30,"line_end":45,"contains":["built-in session catalog directly","protected CatalogPlugin delegate","setDelegateCatalog"]},
+      {"id":"delegate-load-call","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/DelegatingCatalogExtension.java","line_start":72,"line_end":74,"contains":["loadTable","asTableCatalog().loadTable"]},
+      {"id":"delegate-table-cast","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/DelegatingCatalogExtension.java","line_start":195,"line_end":197,"contains":["asTableCatalog","(TableCatalog) delegate"]}
+    ],"repos":["delta","spark"]},
+    {"id":"enrichment","assertion":"After delegated lookup, DeltaCatalog recognizes a Delta V1Table and returns DeltaTableV2; that richer type lazily resolves initialSnapshot through either a requested time-travel version or the current DeltaLog snapshot.","anchors":[
+      {"anchor":"delta-load-table","symbol":"org.apache.spark.sql.delta.catalog.DeltaCatalog.loadTable","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaCatalog.scala","line":228},
+      {"anchor":"delta-table-constructor","symbol":"org.apache.spark.sql.delta.catalog.DeltaTableV2","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaTableV2.scala","line":408,"kind":"Object"},
+      {"anchor":"delta-table-type","symbol":"org.apache.spark.sql.delta.catalog.DeltaTableV2","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaTableV2.scala","line":64,"kind":"Class"},
+      {"anchor":"initial-snapshot","symbol":"org.apache.spark.sql.delta.catalog.DeltaTableV2.initialSnapshot","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaTableV2.scala","line":167},
+      {"anchor":"time-travel-spec","symbol":"org.apache.spark.sql.delta.catalog.DeltaTableV2.timeTravelSpec","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaTableV2.scala","line":147}
+    ],"transitions":[
+      ["delta-load-table","delta-table-constructor"],
+      ["delta-table-constructor","delta-table-type"],
+      ["delta-table-type","initial-snapshot"],
+      ["initial-snapshot","time-travel-spec"]
+    ],"witnesses":[
+      {"id":"catalog-wraps-delta-table","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaCatalog.scala","line_start":228,"line_end":239,"contains":["super.loadTable(ident)","DeltaTableUtils.isDeltaTable","DeltaTableV2(","catalogTable = Some"]},
+      {"id":"delta-table-is-richer-v2-type","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaTableV2.scala","line_start":58,"line_end":74,"contains":["data source V2 representation of a Delta table","class DeltaTableV2","extends Table","with SupportsWrite"]},
+      {"id":"delta-table-resolves-time-travel-or-current-snapshot","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaTableV2.scala","line_start":147,"line_end":194,"contains":["timeTravelOpt.orElse(timeTravelByPath)","lazy val initialSnapshot","resolveTimeTravelVersion","deltaLog.getSnapshotAt","deltaLog.update"]}
+    ],"repos":["delta","spark"]}
+  ]},
+  {"id":62,"claims":[
+    {"id":"spark-request","assertion":"MicroBatchExecution.constructNextBatch obtains the current start offset, invokes SupportsAdmissionControl.latestOffset with the source-specific ReadLimit, and records the returned end offset for the next microbatch.","anchors":[
+      {"anchor":"microbatch-next","symbol":"org.apache.spark.sql.execution.streaming.MicroBatchExecution.constructNextBatch","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecution.scala","line":600},
+      {"anchor":"microbatch-start-offset","symbol":"org.apache.spark.sql.execution.streaming.MicroBatchExecution.getStartOffset","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecution.scala","line":573},
+      {"anchor":"admission-latest-offset","symbol":"org.apache.spark.sql.connector.read.streaming.SupportsAdmissionControl.latestOffset","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/read/streaming/SupportsAdmissionControl.java","line":55},
+      {"anchor":"read-limit","symbol":"org.apache.spark.sql.connector.read.streaming.ReadLimit","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/read/streaming/ReadLimit.java","line":33,"kind":"Interface"}
+    ],"transitions":[
+      ["microbatch-next","microbatch-start-offset"],
+      ["microbatch-next","admission-latest-offset"],
+      ["admission-latest-offset","read-limit"]
+    ],"witnesses":[
+      {"id":"spark-requests-bounded-latest-offset","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/MicroBatchExecution.scala","line_start":600,"line_end":621,"contains":["case (s: SupportsAdmissionControl, limit)","s.latestOffset(getStartOffset(execCtx, s), limit)","s.reportLatestOffset()"]}
+    ],"repos":["spark"]},
+    {"id":"delta-bounded-offset","assertion":"DeltaSource.latestOffset drives the previous (reservoirVersion,index) coordinate through rate-limited indexed file changes, chooses the last admitted IndexedFile, and builds the next DeltaSourceOffset from that file's version and index.","anchors":[
+      {"anchor":"delta-latest-offset","symbol":"org.apache.spark.sql.delta.sources.DeltaSource.latestOffset","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":978},
+      {"anchor":"delta-latest-offset-internal","symbol":"org.apache.spark.sql.delta.sources.DeltaSource.latestOffsetInternal","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":986},
+      {"anchor":"next-offset-from-previous","symbol":"org.apache.spark.sql.delta.sources.DeltaSourceBase.getNextOffsetFromPreviousOffset","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":449},
+      {"anchor":"rate-limited-file-changes","symbol":"org.apache.spark.sql.delta.sources.DeltaSourceBase.getFileChangesWithRateLimit","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":292},
+      {"anchor":"delta-file-changes","symbol":"org.apache.spark.sql.delta.sources.DeltaSource.getFileChanges","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":804},
+      {"anchor":"index-files","symbol":"org.apache.spark.sql.delta.sources.DeltaSource.filterAndGetIndexedFiles","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":1020},
+      {"anchor":"indexed-file","symbol":"org.apache.spark.sql.delta.sources.IndexedFile","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":72,"kind":"Class"},
+      {"anchor":"admission-control","symbol":"org.apache.spark.sql.delta.sources.DeltaSource.DeltaSourceAdmissionBase.admit","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":1315},
+      {"anchor":"last-indexed-file","symbol":"org.apache.spark.sql.delta.sources.DeltaSource.iteratorLast","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":1551,"kind":"Method"},
+      {"anchor":"build-source-offset","symbol":"org.apache.spark.sql.delta.sources.DeltaSourceBase.buildOffsetFromIndexedFile","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":488},
+      {"anchor":"delta-source-offset","symbol":"org.apache.spark.sql.delta.sources.DeltaSourceOffset","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSourceOffset.scala","line":55,"kind":"Class"}
+    ],"transitions":[
+      ["delta-latest-offset","delta-latest-offset-internal"],
+      ["delta-latest-offset-internal","next-offset-from-previous"],
+      ["next-offset-from-previous","rate-limited-file-changes"],
+      ["rate-limited-file-changes","delta-file-changes"],
+      ["delta-file-changes","index-files"],
+      ["index-files","indexed-file"],
+      ["rate-limited-file-changes","admission-control"],
+      ["next-offset-from-previous","last-indexed-file"],
+      ["next-offset-from-previous","build-source-offset"],
+      ["build-source-offset","delta-source-offset"]
+    ],"witnesses":[
+      {"id":"delta-admits-a-bounded-prefix","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line_start":292,"line_end":319,"contains":["getFileChanges(fromVersion, fromIndex, isInitialSnapshot)","takeWhile","admissionControl.admit(_)"]},
+      {"id":"delta-assigns-in-commit-positions","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line_start":1020,"line_end":1046,"contains":["var index = -1L","index += 1","IndexedFile(version, index, add)"]},
+      {"id":"delta-builds-offset-from-last-admitted-file","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line_start":449,"line_end":517,"contains":["getFileChangesWithRateLimit","DeltaSource.iteratorLast(changes)","indexedFile.version","indexedFile.index","Some(DeltaSourceOffset("]}
+    ],"repos":["delta"]}
+  ]},
+  {"id":66,"claims":[
+    {"id":"indexed-position","assertion":"DeltaSource.filterAndGetIndexedFiles assigns each data-changing file an index within its commit; buildOffsetFromIndexedFile reads that IndexedFile coordinate and writes the same version and index into DeltaSourceOffset.","anchors":[
+      {"anchor":"index-files","symbol":"org.apache.spark.sql.delta.sources.DeltaSource.filterAndGetIndexedFiles","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":1020},
+      {"anchor":"indexed-file","symbol":"org.apache.spark.sql.delta.sources.IndexedFile","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":72,"kind":"Class"},
+      {"anchor":"build-source-offset","symbol":"org.apache.spark.sql.delta.sources.DeltaSourceBase.buildOffsetFromIndexedFile","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":488},
+      {"anchor":"delta-source-offset","symbol":"org.apache.spark.sql.delta.sources.DeltaSourceOffset","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSourceOffset.scala","line":55,"kind":"Class"}
+    ],"transitions":[
+      ["index-files","indexed-file"],
+      ["build-source-offset","indexed-file"],
+      ["build-source-offset","delta-source-offset"]
+    ],"witnesses":[
+      {"id":"files-receive-monotonic-in-commit-indices","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line_start":1020,"line_end":1046,"contains":["var index = -1L","index += 1","IndexedFile(version, index, add)"]},
+      {"id":"indexed-coordinate-becomes-source-offset","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line_start":488,"line_end":517,"contains":["val (v, i) = (indexedFile.version, indexedFile.index)","Some(DeltaSourceOffset(","tableId, v, i"]}
+    ],"repos":["delta"]},
+    {"id":"monotonic-batches","assertion":"Each next-offset calculation filters out coordinates at or before (fromVersion,fromIndex), rate-limits the remainder, selects its last file, builds the next offset, and validates that neither version nor index moved backward; DeltaSourceOffset comparison is lexicographic in the same pair.","anchors":[
+      {"anchor":"delta-latest-offset-internal","symbol":"org.apache.spark.sql.delta.sources.DeltaSource.latestOffsetInternal","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":986},
+      {"anchor":"next-offset-from-previous","symbol":"org.apache.spark.sql.delta.sources.DeltaSourceBase.getNextOffsetFromPreviousOffset","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":449},
+      {"anchor":"rate-limited-file-changes","symbol":"org.apache.spark.sql.delta.sources.DeltaSourceBase.getFileChangesWithRateLimit","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":292},
+      {"anchor":"delta-file-changes","symbol":"org.apache.spark.sql.delta.sources.DeltaSource.getFileChanges","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":804},
+      {"anchor":"index-files","symbol":"org.apache.spark.sql.delta.sources.DeltaSource.filterAndGetIndexedFiles","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":1020},
+      {"anchor":"last-indexed-file","symbol":"org.apache.spark.sql.delta.sources.DeltaSource.iteratorLast","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":1551,"kind":"Method"},
+      {"anchor":"build-source-offset","symbol":"org.apache.spark.sql.delta.sources.DeltaSourceBase.buildOffsetFromIndexedFile","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line":488},
+      {"anchor":"validate-offsets","symbol":"org.apache.spark.sql.delta.sources.DeltaSourceOffset.validateOffsets","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSourceOffset.scala","line":165},
+      {"anchor":"delta-source-offset","symbol":"org.apache.spark.sql.delta.sources.DeltaSourceOffset","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSourceOffset.scala","line":55,"kind":"Class"},
+      {"anchor":"compare-offsets","symbol":"org.apache.spark.sql.delta.sources.DeltaSourceOffset.compare","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSourceOffset.scala","line":75}
+    ],"transitions":[
+      ["delta-latest-offset-internal","next-offset-from-previous"],
+      ["next-offset-from-previous","rate-limited-file-changes"],
+      ["rate-limited-file-changes","delta-file-changes"],
+      ["delta-file-changes","index-files"],
+      ["next-offset-from-previous","last-indexed-file"],
+      ["next-offset-from-previous","build-source-offset"],
+      ["delta-latest-offset-internal","validate-offsets"],
+      ["validate-offsets","delta-source-offset"],
+      ["delta-source-offset","compare-offsets"]
+    ],"witnesses":[
+      {"id":"already-emitted-file-coordinates-are-filtered","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line_start":804,"line_end":858,"contains":["file.version > fromVersion || file.index > fromIndex"]},
+      {"id":"next-offset-is-built-and-validated","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSource.scala","line_start":986,"line_end":1006,"contains":["getNextOffsetFromPreviousOffset","DeltaSourceOffset.validateOffsets"]},
+      {"id":"offset-order-is-version-then-index","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSourceOffset.scala","line_start":55,"line_end":80,"contains":["Comparable[DeltaSourceOffset]","Ordering[(Long, Long)]","(reservoirVersion, index)","(otherOffset.reservoirVersion, otherOffset.index)"]},
+      {"id":"validation-refuses-backward-index","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSourceOffset.scala","line_start":165,"line_end":183,"contains":["previousOffset.reservoirVersion == currentOffset.reservoirVersion","previousOffset.index > currentOffset.index","'index' moved back"]}
+    ],"repos":["delta"]}
+  ]},
+  {"id":67,"claims":[
+    {"id":"stable-query-id","assertion":"StreamExecution persists StreamMetadata in the checkpoint, derives its stable id from that metadata, and runStream publishes that id under QUERY_ID_KEY; DeltaSink.queryId reads the same key.","anchors":[
+      {"anchor":"stream-metadata","symbol":"org.apache.spark.sql.execution.streaming.StreamExecution.streamMetadata","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/StreamExecution.scala","line":155},
+      {"anchor":"stream-id","symbol":"org.apache.spark.sql.execution.streaming.StreamExecution.id","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/StreamExecution.scala","line":175},
+      {"anchor":"publish-query-id","symbol":"org.apache.spark.sql.execution.streaming.StreamExecution.runStream","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/StreamExecution.scala","line":287},
+      {"anchor":"query-id-key","symbol":"org.apache.spark.sql.execution.streaming.StreamExecution.QUERY_ID_KEY","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/StreamExecution.scala","line":717},
+      {"anchor":"sink-query-id","symbol":"org.apache.spark.sql.delta.sources.DeltaSink.queryId","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSink.scala","line":66}
+    ],"transitions":[
+      ["stream-id","stream-metadata"],
+      ["publish-query-id","stream-id"],
+      ["publish-query-id","query-id-key"],
+      ["sink-query-id","query-id-key"]
+    ],"witnesses":[
+      {"id":"checkpoint-stream-metadata","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/StreamExecution.scala","line_start":155,"line_end":176,"contains":["checkpointFile(\"metadata\")","StreamMetadata.read","UUID.randomUUID.toString","StreamMetadata.write","UUID.fromString(streamMetadata.id)"]},
+      {"id":"spark-publishes-stable-query-id","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/StreamExecution.scala","line_start":287,"line_end":295,"contains":["setLocalProperty(StreamExecution.QUERY_ID_KEY, id.toString)"]},
+      {"id":"delta-reads-spark-query-id","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSink.scala","line_start":64,"line_end":67,"contains":["StreamExecution.QUERY_ID_KEY"]}
+    ],"repos":["spark","delta"]},
+    {"id":"replay-check","assertion":"DeltaSink.addBatchWithStatusImpl reads txn.txnVersion(queryId) and returns before writing when the committed version is at least batchId.","anchors":[
+      {"anchor":"sink-add-batch","symbol":"org.apache.spark.sql.delta.sources.DeltaSink.addBatch","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSink.scala","line":104},
+      {"anchor":"sink-add-batch-with-status","symbol":"org.apache.spark.sql.delta.sources.DeltaSink.addBatchWithStatusImpl","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSink.scala","line":109},
+      {"anchor":"transaction-version","symbol":"org.apache.spark.sql.delta.OptimisticTransactionImpl.txnVersion","file":"spark/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala","line":1151},
+      {"anchor":"sink-query-id","symbol":"org.apache.spark.sql.delta.sources.DeltaSink.queryId","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSink.scala","line":66}
+    ],"transitions":[
+      ["sink-add-batch","sink-add-batch-with-status"],
+      ["sink-add-batch-with-status","transaction-version"],
+      ["sink-add-batch-with-status","sink-query-id"]
+    ],"witnesses":[
+      {"id":"batch-entry-reaches-status-aware-implementation","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSink.scala","line_start":104,"line_end":112,"contains":["addBatchWithStatusImpl(batchId, data)"]},
+      {"id":"already-committed-guard","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSink.scala","line_start":138,"line_end":142,"contains":["txn.txnVersion(queryId)","currentVersion >= batchId","return false"]}
+    ],"repos":["delta"]},
+    {"id":"transaction-record","assertion":"DeltaSink.PendingTxn.commit creates SetTransaction with queryId and batchId and includes it in the OptimisticTransaction commit.","anchors":[
+      {"anchor":"sink-add-batch-with-status","symbol":"org.apache.spark.sql.delta.sources.DeltaSink.addBatchWithStatusImpl","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSink.scala","line":109},
+      {"anchor":"pending-commit","symbol":"org.apache.spark.sql.delta.sources.DeltaSink.PendingTxn.commit","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSink.scala","line":78},
+      {"anchor":"set-transaction","symbol":"org.apache.spark.sql.delta.actions.SetTransaction","file":"spark/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala","line":562,"kind":"Class"},
+      {"anchor":"sink-query-id","symbol":"org.apache.spark.sql.delta.sources.DeltaSink.queryId","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSink.scala","line":66},
+      {"anchor":"pending-batch-id","symbol":"org.apache.spark.sql.delta.sources.DeltaSink.PendingTxn.batchId","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSink.scala","line":73},
+      {"anchor":"transaction-commit","symbol":"org.apache.spark.sql.delta.OptimisticTransactionImpl.commit","file":"spark/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala","line":1319}
+    ],"transitions":[
+      ["sink-add-batch-with-status","pending-commit"],
+      ["pending-commit","set-transaction"],
+      ["pending-commit","sink-query-id"],
+      ["pending-commit","pending-batch-id"],
+      ["pending-commit","transaction-commit"]
+    ],"witnesses":[
+      {"id":"pending-transaction-record-is-committed","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSink.scala","line_start":78,"line_end":92,"contains":["SetTransaction(appId = queryId, version = batchId",".commit(actions = setTxn ++ newFiles ++ deletedFiles"]},
+      {"id":"batch-implementation-constructs-and-commits-pending-transaction","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSink.scala","line_start":160,"line_end":166,"contains":["PendingTxn(batchId, txn, info, newFiles, deletedFiles)","pendingTxn.commit()"]}
+    ],"repos":["delta"]}
+  ]},
+  {"id":84,"claims":[
+    {"id":"metadata-validation","assertion":"OptimisticTransaction metadata validation detects generated columns, resolves each StructField's generation expression through the Delta metadata key, and validates the parsed expression before accepting the metadata update.","anchors":[
+      {"anchor":"metadata-update","symbol":"org.apache.spark.sql.delta.OptimisticTransactionImpl.updateMetadataInternal","file":"spark/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala","line":551},
+      {"anchor":"metadata-assertion","symbol":"org.apache.spark.sql.delta.OptimisticTransactionImpl.assertMetadata","file":"spark/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala","line":889},
+      {"anchor":"has-generated-columns","symbol":"org.apache.spark.sql.delta.GeneratedColumn.hasGeneratedColumns","file":"spark/src/main/scala/org/apache/spark/sql/delta/GeneratedColumn.scala","line":106},
+      {"anchor":"validate-generated-columns","symbol":"org.apache.spark.sql.delta.GeneratedColumn.validateGeneratedColumns","file":"spark/src/main/scala/org/apache/spark/sql/delta/GeneratedColumn.scala","line":208},
+      {"anchor":"generation-expression-field","symbol":"org.apache.spark.sql.delta.GeneratedColumn.getGenerationExpressionStr","file":"spark/src/main/scala/org/apache/spark/sql/delta/GeneratedColumn.scala","line":162},
+      {"anchor":"generation-expression-metadata","symbol":"org.apache.spark.sql.delta.GeneratedColumn.getGenerationExpressionStr","file":"spark/src/main/scala/org/apache/spark/sql/delta/GeneratedColumn.scala","line":142},
+      {"anchor":"generation-expression-key","symbol":"org.apache.spark.sql.delta.sources.DeltaSourceUtils.GENERATION_EXPRESSION_METADATA_KEY","file":"spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSourceUtils.scala","line":37}
+    ],"transitions":[
+      ["metadata-update","metadata-assertion"],
+      ["metadata-assertion","has-generated-columns"],
+      ["metadata-assertion","validate-generated-columns"],
+      ["validate-generated-columns","generation-expression-field"],
+      ["generation-expression-field","generation-expression-metadata"],
+      ["generation-expression-metadata","generation-expression-key"]
+    ],"witnesses":[
+      {"id":"metadata-update-runs-generated-column-validation","file":"spark/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala","line_start":889,"line_end":922,"contains":["GeneratedColumn.hasGeneratedColumns(metadata.schema)","GeneratedColumn.validateGeneratedColumns(spark, metadata.schema)"]},
+      {"id":"validator-resolves-expression-from-field-metadata","file":"spark/src/main/scala/org/apache/spark/sql/delta/GeneratedColumn.scala","line_start":142,"line_end":166,"contains":["GENERATION_EXPRESSION_METADATA_KEY","getGenerationExpressionStr(field.metadata)"]},
+      {"id":"validator-analyzes-generation-expression","file":"spark/src/main/scala/org/apache/spark/sql/delta/GeneratedColumn.scala","line_start":208,"line_end":235,"contains":["schema.partition(isGeneratedColumn)","getGenerationExpressionStr(f)","parseGenerationExpression","validateColumnReferences"]}
+    ],"repos":["delta"]},
+    {"id":"protocol-gate","assertion":"For a new table, updateMetadataInternal derives Protocol.forNewTable from metadata; protocol derivation asks every automatically enabled metadata feature, and GeneratedColumnsTableFeature reports itself required when generated-column metadata is present, producing at least its legacy writer protocol requirement.","anchors":[
+      {"anchor":"metadata-update","symbol":"org.apache.spark.sql.delta.OptimisticTransactionImpl.updateMetadataInternal","file":"spark/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala","line":551},
+      {"anchor":"protocol-for-new-table","symbol":"org.apache.spark.sql.delta.actions.Protocol.forNewTable","file":"spark/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala","line":239},
+      {"anchor":"protocol-components-from-metadata","symbol":"org.apache.spark.sql.delta.actions.Protocol.minProtocolComponentsFromMetadata","file":"spark/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala","line":333},
+      {"anchor":"extract-auto-features","symbol":"org.apache.spark.sql.delta.actions.Protocol.extractAutomaticallyEnabledFeatures","file":"spark/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala","line":300},
+      {"anchor":"feature-metadata-requirement","symbol":"org.apache.spark.sql.delta.FeatureAutomaticallyEnabledByMetadata.metadataRequiresFeatureToBeEnabled","file":"spark/src/main/scala/org/apache/spark/sql/delta/TableFeature.scala","line":152},
+      {"anchor":"generated-feature-requirement","symbol":"org.apache.spark.sql.delta.GeneratedColumnsTableFeature.metadataRequiresFeatureToBeEnabled","file":"spark/src/main/scala/org/apache/spark/sql/delta/TableFeature.scala","line":549},
+      {"anchor":"generated-columns-feature","symbol":"org.apache.spark.sql.delta.GeneratedColumnsTableFeature","file":"spark/src/main/scala/org/apache/spark/sql/delta/TableFeature.scala","line":546,"kind":"Object"},
+      {"anchor":"has-generated-columns","symbol":"org.apache.spark.sql.delta.GeneratedColumn.hasGeneratedColumns","file":"spark/src/main/scala/org/apache/spark/sql/delta/GeneratedColumn.scala","line":106}
+    ],"transitions":[
+      ["metadata-update","protocol-for-new-table"],
+      ["protocol-for-new-table","protocol-components-from-metadata"],
+      ["protocol-components-from-metadata","extract-auto-features"],
+      ["extract-auto-features","feature-metadata-requirement"],
+      ["feature-metadata-requirement","generated-feature-requirement"],
+      ["generated-columns-feature","generated-feature-requirement"],
+      ["generated-feature-requirement","has-generated-columns"]
+    ],"witnesses":[
+      {"id":"new-table-protocol-is-derived-from-metadata","file":"spark/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala","line_start":601,"line_end":610,"contains":["canAssignAnyNewProtocol","Protocol.forNewTable(spark, Some(newMetadataTmp))"]},
+      {"id":"protocol-collects-metadata-required-features","file":"spark/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala","line_start":239,"line_end":272,"contains":["minProtocolComponentsFromMetadata(spark, metadata)"]},
+      {"id":"feature-extraction-consults-metadata","file":"spark/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala","line_start":300,"line_end":349,"contains":["metadataRequiresFeatureToBeEnabled(protocol, metadata, spark)","extractAutomaticallyEnabledFeatures"]},
+      {"id":"generated-columns-require-writer-feature","file":"spark/src/main/scala/org/apache/spark/sql/delta/TableFeature.scala","line_start":546,"line_end":556,"contains":["minWriterVersion = 4","GeneratedColumn.hasGeneratedColumns(metadata.schema)"]}
+    ],"repos":["delta"]}
+  ]},
+  {"id":87,"claims":[
+    {"id":"spark-capability","assertion":"Spark's create/replace strategy validates identity columns against TableCatalog.capabilities and requires SUPPORTS_CREATE_TABLE_WITH_IDENTITY_COLUMNS. DeltaCatalog does not advertise this itself: it inherits DelegatingCatalogExtension, whose capabilities method forwards to the configured delegate catalog.","anchors":[
+      {"anchor":"create-table-strategy","symbol":"org.apache.spark.sql.execution.datasources.v2.DataSourceV2Strategy.apply","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/DataSourceV2Strategy.scala","line":111},
+      {"anchor":"validate-identity-column","symbol":"org.apache.spark.sql.catalyst.util.IdentityColumn.validateIdentityColumn","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/IdentityColumn.scala","line":36},
+      {"anchor":"catalog-capabilities","symbol":"org.apache.spark.sql.connector.catalog.TableCatalog.capabilities","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/TableCatalog.java","line":93},
+      {"anchor":"identity-create-capability","symbol":"org.apache.spark.sql.connector.catalog.TableCatalogCapability.SUPPORTS_CREATE_TABLE_WITH_IDENTITY_COLUMNS","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/TableCatalogCapability.java","line":80},
+      {"anchor":"delegating-capabilities","symbol":"org.apache.spark.sql.connector.catalog.DelegatingCatalogExtension.capabilities","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/DelegatingCatalogExtension.java","line":57},
+      {"anchor":"delegating-catalog","symbol":"org.apache.spark.sql.connector.catalog.DelegatingCatalogExtension","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/DelegatingCatalogExtension.java","line":39,"kind":"Class"},
+      {"anchor":"delta-catalog","symbol":"org.apache.spark.sql.delta.catalog.DeltaCatalog","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaCatalog.scala","line":69,"kind":"Class"}
+    ],"transitions":[
+      ["create-table-strategy","validate-identity-column"],
+      ["validate-identity-column","catalog-capabilities"],
+      ["validate-identity-column","identity-create-capability"],
+      ["catalog-capabilities","delegating-capabilities"],
+      ["delegating-catalog","delegating-capabilities"],
+      ["delta-catalog","delegating-catalog"]
+    ],"witnesses":[
+      {"id":"spark-requires-create-identity-capability","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/IdentityColumn.scala","line_start":36,"line_end":53,"contains":[".capabilities()","SUPPORTS_CREATE_TABLE_WITH_IDENTITY_COLUMNS","unsupportedTableOperationError"]},
+      {"id":"spark-strategy-runs-identity-validation","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/DataSourceV2Strategy.scala","line_start":187,"line_end":223,"contains":["IdentityColumn.validateIdentityColumn"]},
+      {"id":"delegating-catalog-forwards-capabilities","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/DelegatingCatalogExtension.java","line_start":39,"line_end":61,"contains":["protected CatalogPlugin delegate","return asTableCatalog().capabilities()"]},
+      {"id":"delta-catalog-inherits-delegation","file":"spark/src/main/scala/org/apache/spark/sql/delta/catalog/DeltaCatalog.scala","line_start":69,"line_end":75,"contains":["class DeltaCatalog","extends DelegatingCatalogExtension"]}
+    ],"repos":["spark","delta"]},
+    {"id":"delta-protocol","assertion":"Delta applies a separate table-format gate: new metadata derives its protocol through Protocol.forNewTable, while existing metadata is retained only when satisfiesIdentityColumnProtocol recognizes IdentityColumnsTableFeature or the compatible legacy writer protocol; that feature is automatically required by identity-column metadata.","anchors":[
+      {"anchor":"metadata-update","symbol":"org.apache.spark.sql.delta.OptimisticTransactionImpl.updateMetadataInternal","file":"spark/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala","line":551},
+      {"anchor":"protocol-for-new-table","symbol":"org.apache.spark.sql.delta.actions.Protocol.forNewTable","file":"spark/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala","line":239},
+      {"anchor":"satisfies-identity-protocol","symbol":"org.apache.spark.sql.delta.ColumnWithDefaultExprUtils.satisfiesIdentityColumnProtocol","file":"spark/src/main/scala/org/apache/spark/sql/delta/ColumnWithDefaultExprUtils.scala","line":65},
+      {"anchor":"identity-columns-feature","symbol":"org.apache.spark.sql.delta.IdentityColumnsTableFeature","file":"spark/src/main/scala/org/apache/spark/sql/delta/TableFeature.scala","line":593,"kind":"Object"},
+      {"anchor":"identity-feature-requirement","symbol":"org.apache.spark.sql.delta.IdentityColumnsTableFeature.metadataRequiresFeatureToBeEnabled","file":"spark/src/main/scala/org/apache/spark/sql/delta/TableFeature.scala","line":596},
+      {"anchor":"has-identity-column","symbol":"org.apache.spark.sql.delta.ColumnWithDefaultExprUtils.hasIdentityColumn","file":"spark/src/main/scala/org/apache/spark/sql/delta/ColumnWithDefaultExprUtils.scala","line":62}
+    ],"transitions":[
+      ["metadata-update","protocol-for-new-table"],
+      ["metadata-update","satisfies-identity-protocol"],
+      ["satisfies-identity-protocol","identity-columns-feature"],
+      ["identity-columns-feature","identity-feature-requirement"],
+      ["identity-feature-requirement","has-identity-column"]
+    ],"witnesses":[
+      {"id":"identity-feature-can-be-disabled-before-protocol","file":"spark/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala","line_start":565,"line_end":572,"contains":["DELTA_IDENTITY_COLUMN_ENABLED","hasIdentityColumn(newMetadataTmp.schema)","unsupportedWriterTableFeaturesInTableException"]},
+      {"id":"new-and-existing-metadata-use-protocol-gates","file":"spark/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala","line_start":601,"line_end":676,"contains":["Protocol.forNewTable(spark, Some(newMetadataTmp))","satisfiesIdentityColumnProtocol(protocolBeforeUpdate)"]},
+      {"id":"identity-protocol-compatibility","file":"spark/src/main/scala/org/apache/spark/sql/delta/ColumnWithDefaultExprUtils.scala","line_start":62,"line_end":70,"contains":["isFeatureSupported(IdentityColumnsTableFeature)","protocol.minWriterVersion == 6","identityColumns"]},
+      {"id":"identity-metadata-enables-feature","file":"spark/src/main/scala/org/apache/spark/sql/delta/TableFeature.scala","line_start":593,"line_end":603,"contains":["minWriterVersion = 6","hasIdentityColumn(metadata.schema)"]}
+    ],"repos":["delta"]}
+  ]},
+  {"id":88,"claims":[
+    {"id":"parser-metadata","assertion":"Spark parses GENERATED ALWAYS versus BY DEFAULT into IdentityColumnSpec.allowExplicitInsert, carries the spec through ColumnDefinition, and serializes that boolean into the V1 StructField identity metadata. This stage records policy; it does not enforce Delta writes.","anchors":[
+      {"anchor":"spark-create-schema","symbol":"org.apache.spark.sql.catalyst.parser.AstBuilder.createSchema","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AstBuilder.scala","line":3891},
+      {"anchor":"spark-column-definition-list","symbol":"org.apache.spark.sql.catalyst.parser.AstBuilder.visitColDefinitionList","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AstBuilder.scala","line":3899},
+      {"anchor":"spark-column-definition","symbol":"org.apache.spark.sql.catalyst.parser.AstBuilder.visitColDefinition","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AstBuilder.scala","line":3907},
+      {"anchor":"spark-identity-parser","symbol":"org.apache.spark.sql.catalyst.parser.DataTypeAstBuilder.visitIdentityColumn","file":"sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/DataTypeAstBuilder.scala","line":245},
+      {"anchor":"spark-identity-spec","symbol":"org.apache.spark.sql.connector.catalog.IdentityColumnSpec","file":"sql/api/src/main/java/org/apache/spark/sql/connector/catalog/IdentityColumnSpec.java","line":27,"kind":"Class"},
+      {"anchor":"spark-v1-column","symbol":"org.apache.spark.sql.catalyst.plans.logical.ColumnDefinition.toV1Column","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/ColumnDefinition.scala","line":69},
+      {"anchor":"spark-encode-identity","symbol":"org.apache.spark.sql.catalyst.plans.logical.ColumnDefinition.encodeIdentityColumnSpec","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/ColumnDefinition.scala","line":91},
+      {"anchor":"spark-allow-explicit-insert","symbol":"org.apache.spark.sql.connector.catalog.IdentityColumnSpec.isAllowExplicitInsert","file":"sql/api/src/main/java/org/apache/spark/sql/connector/catalog/IdentityColumnSpec.java","line":61}
+    ],"transitions":[
+      ["spark-create-schema","spark-column-definition-list"],
+      ["spark-column-definition-list","spark-column-definition"],
+      ["spark-column-definition","spark-identity-parser"],
+      ["spark-identity-parser","spark-identity-spec"],
+      ["spark-create-schema","spark-v1-column"],
+      ["spark-v1-column","spark-encode-identity"],
+      ["spark-encode-identity","spark-allow-explicit-insert"]
+    ],"witnesses":[
+      {"id":"parser-distinguishes-always-from-by-default","file":"sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/DataTypeAstBuilder.scala","line_start":245,"line_end":260,"contains":["GENERATED ALWAYS AS IDENTITY","GENERATED BY DEFAULT AS IDENTITY","val allowExplicitInsert","new IdentityColumnSpec(start, step, allowExplicitInsert)"]},
+      {"id":"table-schema-carries-identity-spec","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AstBuilder.scala","line_start":3889,"line_end":3970,"contains":["flatMap(visitColDefinitionList)","columns.map(_.toV1Column)","visitIdentityColumn(ctx, dataType)"]},
+      {"id":"spark-serializes-explicit-insert-policy","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/ColumnDefinition.scala","line_start":69,"line_end":101,"contains":["encodeIdentityColumnSpec(metadataBuilder)","IDENTITY_INFO_ALLOW_EXPLICIT_INSERT","spec.isAllowExplicitInsert"]}
+    ],"repos":["spark"]},
+    {"id":"delta-enforcement","assertion":"WriteIntoDelta invokes Delta's explicit-identity guard before writing. The guard selects identity fields whose metadata disallows explicit inserts, compares them with supplied output columns, and raises Delta's GENERATED ALWAYS explicit-insert error on a match.","anchors":[
+      {"anchor":"delta-write","symbol":"org.apache.spark.sql.delta.commands.WriteIntoDelta.writeAndReturnCommitData","file":"spark/src/main/scala/org/apache/spark/sql/delta/commands/WriteIntoDelta.scala","line":121},
+      {"anchor":"delta-block-explicit-insert","symbol":"org.apache.spark.sql.delta.IdentityColumn.blockExplicitIdentityColumnInsert","file":"spark/src/main/scala/org/apache/spark/sql/delta/IdentityColumn.scala","line":320},
+      {"anchor":"delta-is-identity-column","symbol":"org.apache.spark.sql.delta.ColumnWithDefaultExprUtils.isIdentityColumn","file":"spark/src/main/scala/org/apache/spark/sql/delta/ColumnWithDefaultExprUtils.scala","line":49},
+      {"anchor":"delta-allow-explicit-insert","symbol":"org.apache.spark.sql.delta.IdentityColumn.allowExplicitInsert","file":"spark/src/main/scala/org/apache/spark/sql/delta/IdentityColumn.scala","line":70},
+      {"anchor":"delta-block-identity-column","symbol":"org.apache.spark.sql.delta.IdentityColumn.blockIdentityColumn","file":"spark/src/main/scala/org/apache/spark/sql/delta/IdentityColumn.scala","line":464},
+      {"anchor":"delta-explicit-insert-error","symbol":"org.apache.spark.sql.delta.DeltaErrorsBase.identityColumnExplicitInsertNotSupported","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaErrors.scala","line":2657}
+    ],"transitions":[
+      ["delta-write","delta-block-explicit-insert"],
+      ["delta-block-explicit-insert","delta-is-identity-column"],
+      ["delta-block-explicit-insert","delta-allow-explicit-insert"],
+      ["delta-block-explicit-insert","delta-block-identity-column"],
+      ["delta-block-identity-column","delta-explicit-insert-error"]
+    ],"witnesses":[
+      {"id":"delta-write-invokes-identity-guard","file":"spark/src/main/scala/org/apache/spark/sql/delta/commands/WriteIntoDelta.scala","line_start":155,"line_end":168,"contains":["blockExplicitIdentityColumnInsert","txn.metadata.schema","data.queryExecution.analyzed"]},
+      {"id":"delta-selects-generated-always-identities","file":"spark/src/main/scala/org/apache/spark/sql/delta/IdentityColumn.scala","line_start":320,"line_end":342,"contains":["isIdentityColumn(f)","!IdentityColumn.allowExplicitInsert(f)","blockIdentityColumn"]},
+      {"id":"delta-raises-explicit-insert-error","file":"spark/src/main/scala/org/apache/spark/sql/delta/IdentityColumn.scala","line_start":464,"line_end":481,"contains":["columnNamesToBlock.exists","identityColumnExplicitInsertNotSupported(colName)"]}
+    ],"repos":["delta"]}
+  ]},
+  {"id":107,"claims":[
+    {"id":"delta-casts-first","assertion":"DeltaAnalysis has the first and final say over the written data-output types: it projects each INSERT attribute through addCastToColumn, aliases it to the target name, and normally casts it to the target type. Only enabled type widening with schema evolution deliberately keeps the query type and widens the table instead. This analyzed projection reaches Spark write preparation first.","anchors":[
+      {"anchor":"delta-analysis","symbol":"org.apache.spark.sql.delta.DeltaAnalysis","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaAnalysis.scala","line":80,"kind":"Class"},
+      {"anchor":"delta-analysis-apply","symbol":"org.apache.spark.sql.delta.DeltaAnalysis.apply","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaAnalysis.scala","line":85,"kind":"Method"},
+      {"anchor":"resolve-insert-by-ordinal","symbol":"org.apache.spark.sql.delta.DeltaAnalysis.resolveQueryColumnsByOrdinal","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaAnalysis.scala","line":911,"kind":"Method"},
+      {"anchor":"add-cast-to-column","symbol":"org.apache.spark.sql.delta.DeltaAnalysis.addCastToColumn","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaAnalysis.scala","line":967,"kind":"Method"},
+      {"anchor":"get-cast-function","symbol":"org.apache.spark.sql.delta.DeltaAnalysis.getCastFunction","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaAnalysis.scala","line":1102,"kind":"Method"}
+    ],"transitions":[
+      ["delta-analysis","delta-analysis-apply"],
+      ["delta-analysis-apply","resolve-insert-by-ordinal"],
+      ["resolve-insert-by-ordinal","add-cast-to-column"],
+      ["add-cast-to-column","get-cast-function"]
+    ],"witnesses":[
+      {"id":"delta-analysis-rewrites-inserts-before-write-preparation","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaAnalysis.scala","line_start":85,"line_end":103,"contains":["case a @ AppendDelta","resolveQueryColumnsByOrdinal","resolveQueryColumnsByName","a.copy(query = projection)"]},
+      {"id":"delta-projects-target-named-target-typed-output","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaAnalysis.scala","line_start":911,"line_end":994,"contains":["addCastToColumn(attr, targetAttr","getCastFunction(attr, targetAttr.dataType, targetAttr.name)","Alias(expr, targetAttr.name)"]},
+      {"id":"delta-explicitly-chooses-widen-or-downcast","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaAnalysis.scala","line_start":996,"line_end":1015,"contains":["table schema is updated","values are downcasted on write","TypeWideningMode.TypeEvolution"]}
+    ],"repos":["delta"]},
+    {"id":"spark-preparation","assertion":"V2Writes later passes the already analyzed query to DistributionAndOrderingUtils. That utility wraps it with required repartitioning and sorting and resolves coercion in those new expressions, but it does not replace Delta's data-output projection. The order matters because Spark binds distribution and ordering against the types Delta already chose.","anchors":[
+      {"anchor":"v2-writes","symbol":"org.apache.spark.sql.execution.datasources.v2.V2Writes","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/V2Writes.scala","line":42,"kind":"Object"},
+      {"anchor":"v2-writes-apply","symbol":"org.apache.spark.sql.execution.datasources.v2.V2Writes.apply","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/V2Writes.scala","line":46,"kind":"Method"},
+      {"anchor":"prepare-query","symbol":"org.apache.spark.sql.execution.datasources.v2.DistributionAndOrderingUtils.prepareQuery","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/DistributionAndOrderingUtils.scala","line":34,"kind":"Method"},
+      {"anchor":"requires-distribution-and-ordering","symbol":"org.apache.spark.sql.connector.write.RequiresDistributionAndOrdering","file":"sql/catalyst/src/main/java/org/apache/spark/sql/connector/write/RequiresDistributionAndOrdering.java","line":31,"kind":"Interface"},
+      {"anchor":"type-coercion-executor","symbol":"org.apache.spark.sql.execution.datasources.v2.DistributionAndOrderingUtils.TypeCoercionExecutor","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/DistributionAndOrderingUtils.scala","line":92,"kind":"Object"}
+    ],"transitions":[
+      ["v2-writes","v2-writes-apply"],
+      ["v2-writes-apply","prepare-query"],
+      ["prepare-query","requires-distribution-and-ordering"],
+      ["prepare-query","type-coercion-executor"]
+    ],"witnesses":[
+      {"id":"v2-write-prepares-the-existing-query","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/V2Writes.scala","line_start":46,"line_end":52,"contains":["case a @ AppendData","DistributionAndOrderingUtils.prepareQuery(write, query","a.copy(write = Some(write), query = newQuery)"]},
+      {"id":"spark-wraps-query-and-coerces-the-new-plan","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/DistributionAndOrderingUtils.scala","line_start":34,"line_end":96,"contains":["case write: RequiresDistributionAndOrdering","RepartitionByExpression(distribution, query","Sort(","TypeCoercionExecutor.execute(queryWithDistributionAndOrdering)","case _ =>"]}
+    ],"repos":["spark"]}
+  ]},
+  {"id":147,"claims":[
+    {"id":"plan-filter","assertion":"ScanWithDeletionVectors adds a hidden byte field, then the plan layer actually evaluates the drop by applying Spark's logical Filter to keep only rows whose shared deleted-row byte equals RowIndexFilter.KEEP_ROW_VALUE (zero). A final Project removes the hidden field.","anchors":[
+      {"anchor":"scan-with-deletion-vectors","symbol":"org.apache.spark.sql.delta.ScanWithDeletionVectors","file":"spark/src/main/scala/org/apache/spark/sql/delta/PreprocessTableWithDVs.scala","line":60,"kind":"Object"},
+      {"anchor":"dv-enabled-scan","symbol":"org.apache.spark.sql.delta.ScanWithDeletionVectors.dvEnabledScanFor","file":"spark/src/main/scala/org/apache/spark/sql/delta/PreprocessTableWithDVs.scala","line":69,"kind":"Method"},
+      {"anchor":"add-skip-row-scan","symbol":"org.apache.spark.sql.delta.ScanWithDeletionVectors.createScanWithSkipRowColumn","file":"spark/src/main/scala/org/apache/spark/sql/delta/PreprocessTableWithDVs.scala","line":125,"kind":"Method"},
+      {"anchor":"deleted-row-field","symbol":"org.apache.spark.sql.delta.DeltaParquetFileFormat.IS_ROW_DELETED_STRUCT_FIELD","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaParquetFileFormat.scala","line":551,"kind":"Method"},
+      {"anchor":"create-row-filter","symbol":"org.apache.spark.sql.delta.ScanWithDeletionVectors.createRowIndexFilterNode","file":"spark/src/main/scala/org/apache/spark/sql/delta/PreprocessTableWithDVs.scala","line":176,"kind":"Method"},
+      {"anchor":"deleted-row-column-name","symbol":"org.apache.spark.sql.delta.DeltaParquetFileFormat.IS_ROW_DELETED_COLUMN_NAME","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaParquetFileFormat.scala","line":550,"kind":"Method"},
+      {"anchor":"keep-row-value","symbol":"org.apache.spark.sql.delta.RowIndexFilter.KEEP_ROW_VALUE","file":"spark/src/main/java/org/apache/spark/sql/delta/RowIndexFilter.java","line":64,"kind":"StaticField"},
+      {"anchor":"logical-filter","symbol":"org.apache.spark.sql.catalyst.plans.logical.Filter","file":"sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/basicLogicalOperators.scala","line":333,"kind":"Class"}
+    ],"transitions":[
+      ["scan-with-deletion-vectors","dv-enabled-scan"],
+      ["dv-enabled-scan","add-skip-row-scan"],
+      ["add-skip-row-scan","deleted-row-field"],
+      ["dv-enabled-scan","create-row-filter"],
+      ["create-row-filter","deleted-row-column-name"],
+      ["create-row-filter","keep-row-value"],
+      ["create-row-filter","logical-filter"]
+    ],"witnesses":[
+      {"id":"plan-adds-filter-and-removes-helper-column","file":"spark/src/main/scala/org/apache/spark/sql/delta/PreprocessTableWithDVs.scala","line_start":90,"line_end":104,"contains":["createScanWithSkipRowColumn","createRowIndexFilterNode","Some(Project(planOutput, rowIndexFilter))"]},
+      {"id":"scan-adds-shared-hidden-byte-field","file":"spark/src/main/scala/org/apache/spark/sql/delta/PreprocessTableWithDVs.scala","line_start":134,"line_end":173,"contains":["val skipRowField = IS_ROW_DELETED_STRUCT_FIELD","AttributeReference(skipRowField.name, skipRowField.dataType)","dataSchema.add(skipRowField)"]},
+      {"id":"logical-filter-keeps-zero-valued-rows","file":"spark/src/main/scala/org/apache/spark/sql/delta/PreprocessTableWithDVs.scala","line_start":176,"line_end":182,"contains":["IS_ROW_DELETED_COLUMN_NAME","Filter(EqualTo(skipRowColumnRef, Literal(RowIndexFilter.KEEP_ROW_VALUE)), newScan)"]}
+    ],"repos":["delta","spark"]},
+    {"id":"reader-population","assertion":"DeltaParquetFileFormat recognizes the same hidden column name, selects DropMarkedRowsFilter, loads the file's deletion vector, and invokes RowIndexFilter to materialize its byte values. RowIndexMarkingFilters probes bitmap membership; it supplies the bytes but the plan Filter evaluates which rows are dropped.","anchors":[
+      {"anchor":"delta-reader-build","symbol":"org.apache.spark.sql.delta.DeltaParquetFileFormat.buildReaderWithPartitionValues","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaParquetFileFormat.scala","line":161,"kind":"Method"},
+      {"anchor":"deleted-row-column-name","symbol":"org.apache.spark.sql.delta.DeltaParquetFileFormat.IS_ROW_DELETED_COLUMN_NAME","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaParquetFileFormat.scala","line":550,"kind":"Method"},
+      {"anchor":"metadata-iterator","symbol":"org.apache.spark.sql.delta.DeltaParquetFileFormat.iteratorWithAdditionalMetadataColumns","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaParquetFileFormat.scala","line":339,"kind":"Method"},
+      {"anchor":"drop-marked-builder","symbol":"org.apache.spark.sql.delta.deletionvectors.DropMarkedRowsFilter","file":"spark/src/main/scala/org/apache/spark/sql/delta/deletionvectors/RowIndexMarkingFilters.scala","line":111,"kind":"Object"},
+      {"anchor":"load-row-filter","symbol":"org.apache.spark.sql.delta.deletionvectors.RowIndexMarkingFiltersBuilder.createInstance","file":"spark/src/main/scala/org/apache/spark/sql/delta/deletionvectors/RowIndexMarkingFilters.scala","line":79,"kind":"Method"},
+      {"anchor":"row-filter-interface","symbol":"org.apache.spark.sql.delta.RowIndexFilter.materializeIntoVectorWithRowIndex","file":"spark/src/main/java/org/apache/spark/sql/delta/RowIndexFilter.java","line":47,"kind":"AbstractMethod"},
+      {"anchor":"row-filter-implementation","symbol":"org.apache.spark.sql.delta.deletionvectors.RowIndexMarkingFilters.materializeIntoVectorWithRowIndex","file":"spark/src/main/scala/org/apache/spark/sql/delta/deletionvectors/RowIndexMarkingFilters.scala","line":55,"kind":"Method"},
+      {"anchor":"bitmap-membership","symbol":"org.apache.spark.sql.delta.deletionvectors.RowIndexMarkingFilters.isContainedInBitmap","file":"spark/src/main/scala/org/apache/spark/sql/delta/deletionvectors/RowIndexMarkingFilters.scala","line":36,"kind":"Method"},
+      {"anchor":"bitmap-contains","symbol":"org.apache.spark.sql.delta.deletionvectors.RoaringBitmapArray.contains","file":"spark/src/main/scala/org/apache/spark/sql/delta/deletionvectors/RoaringBitmapArray.scala","line":152,"kind":"Method"}
+    ],"transitions":[
+      ["delta-reader-build","deleted-row-column-name"],
+      ["delta-reader-build","metadata-iterator"],
+      ["metadata-iterator","drop-marked-builder"],
+      ["metadata-iterator","load-row-filter"],
+      ["metadata-iterator","row-filter-interface"],
+      ["row-filter-interface","row-filter-implementation"],
+      ["row-filter-implementation","bitmap-membership"],
+      ["bitmap-membership","bitmap-contains"]
+    ],"witnesses":[
+      {"id":"reader-finds-shared-column-and-delegates-metadata","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaParquetFileFormat.scala","line_start":185,"line_end":230,"contains":["findColumn(IS_ROW_DELETED_COLUMN_NAME)","iteratorWithAdditionalMetadataColumns","isRowDeletedColumn"]},
+      {"id":"reader-selects-and-loads-drop-marked-filter","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaParquetFileFormat.scala","line_start":350,"line_end":374,"contains":["case RowIndexFilterType.IF_CONTAINED => DropMarkedRowsFilter","rowIndexFilter.createInstance","DeletionVectorDescriptor.deserializeFromBase64"]},
+      {"id":"reader-materializes-membership-byte","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaParquetFileFormat.scala","line_start":400,"line_end":410,"contains":["materializeIntoVectorWithRowIndex","batch.column(rowIndexColumnOpt.get.index)","materializeIntoVector(rowIndex, rowIndex + size"]},
+      {"id":"implementation-probes-bitmap-for-each-row-index","file":"spark/src/main/scala/org/apache/spark/sql/delta/deletionvectors/RowIndexMarkingFilters.scala","line_start":32,"line_end":64,"contains":["bitmap.contains(rowIndex)","rowIndexColumn.getLong(rowNumber)","isContainedInBitmap(rowIndex)","batch.putByte(rowNumber, isContained)"]}
+    ],"repos":["delta"]}
+  ]},
+  {"id":156,"claims":[
+    {"id":"dv-production","assertion":"Delta DML attaches Spark's exact Parquet file-row index to every matched row, groups those positions by file, and builds a deletion-vector bitmap. BitmapAggregator.update adds each non-null Long position to RoaringBitmapArray, so the stored marks use the same positional coordinate system as the reader.","anchors":[
+      {"anchor":"find-touched-files","symbol":"org.apache.spark.sql.delta.commands.DMLWithDeletionVectorsHelper.findTouchedFiles","file":"spark/src/main/scala/org/apache/spark/sql/delta/commands/DMLWithDeletionVectorsHelper.scala","line":132,"kind":"Method"},
+      {"anchor":"build-row-index-sets","symbol":"org.apache.spark.sql.delta.commands.DeletionVectorBitmapGenerator.buildRowIndexSetsForFilesMatchingCondition","file":"spark/src/main/scala/org/apache/spark/sql/delta/commands/DMLWithDeletionVectorsHelper.scala","line":379,"kind":"Method"},
+      {"anchor":"parquet-row-index","symbol":"org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat.ROW_INDEX","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/parquet/ParquetFileFormat.scala","line":370,"kind":"Method"},
+      {"anchor":"bitmap-row-index-column","symbol":"org.apache.spark.sql.delta.commands.DeletionVectorBitmapGenerator.ROW_INDEX_COL","file":"spark/src/main/scala/org/apache/spark/sql/delta/commands/DMLWithDeletionVectorsHelper.scala","line":304,"kind":"Method"},
+      {"anchor":"build-deletion-vectors","symbol":"org.apache.spark.sql.delta.commands.DeletionVectorBitmapGenerator.buildDeletionVectors","file":"spark/src/main/scala/org/apache/spark/sql/delta/commands/DMLWithDeletionVectorsHelper.scala","line":370,"kind":"Method"},
+      {"anchor":"compute-bitmap-result","symbol":"org.apache.spark.sql.delta.commands.DeletionVectorBitmapGenerator.DeletionVectorSet.computeResult","file":"spark/src/main/scala/org/apache/spark/sql/delta/commands/DMLWithDeletionVectorsHelper.scala","line":321,"kind":"Method"},
+      {"anchor":"bitmap-aggregate-columns","symbol":"org.apache.spark.sql.delta.commands.DeletionVectorBitmapGenerator.DeletionVectorSet.aggColumns","file":"spark/src/main/scala/org/apache/spark/sql/delta/commands/DMLWithDeletionVectorsHelper.scala","line":333,"kind":"Method"},
+      {"anchor":"create-bitmap-aggregator","symbol":"org.apache.spark.sql.delta.commands.DeletionVectorBitmapGenerator.DeletionVectorSet.createBitmapSetAggregator","file":"spark/src/main/scala/org/apache/spark/sql/delta/commands/DMLWithDeletionVectorsHelper.scala","line":338,"kind":"Method"},
+      {"anchor":"bitmap-aggregator","symbol":"org.apache.spark.sql.catalyst.expressions.aggregation.BitmapAggregator","file":"spark/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregation/BitmapAggregator.scala","line":35,"kind":"Class"},
+      {"anchor":"bitmap-aggregator-update","symbol":"org.apache.spark.sql.catalyst.expressions.aggregation.BitmapAggregator.update","file":"spark/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregation/BitmapAggregator.scala","line":50,"kind":"Method"},
+      {"anchor":"bitmap-add","symbol":"org.apache.spark.sql.delta.deletionvectors.RoaringBitmapArray.add","file":"spark/src/main/scala/org/apache/spark/sql/delta/deletionvectors/RoaringBitmapArray.scala","line":55,"kind":"Method"}
+    ],"transitions":[
+      ["find-touched-files","build-row-index-sets"],
+      ["build-row-index-sets","parquet-row-index"],
+      ["build-row-index-sets","bitmap-row-index-column"],
+      ["build-row-index-sets","build-deletion-vectors"],
+      ["build-deletion-vectors","compute-bitmap-result"],
+      ["compute-bitmap-result","bitmap-aggregate-columns"],
+      ["bitmap-aggregate-columns","create-bitmap-aggregator"],
+      ["create-bitmap-aggregator","bitmap-aggregator"],
+      ["bitmap-aggregator","bitmap-aggregator-update"],
+      ["bitmap-aggregator-update","bitmap-add"]
+    ],"witnesses":[
+      {"id":"dml-selects-parquet-row-position","file":"spark/src/main/scala/org/apache/spark/sql/delta/commands/DMLWithDeletionVectorsHelper.scala","line_start":379,"line_end":430,"contains":["ParquetFileFormat.ROW_INDEX","withColumn(ROW_INDEX_COL, rowIndexColumn)","DeletionVectorBitmapGenerator.buildDeletionVectors"]},
+      {"id":"positions-are-grouped-and-aggregated-per-file","file":"spark/src/main/scala/org/apache/spark/sql/delta/commands/DMLWithDeletionVectorsHelper.scala","line_start":321,"line_end":340,"contains":["groupBy(col(FILE_NAME_COL), col(FILE_DV_ID_COL))","agg(aggColumns.head","createBitmapSetAggregator(col(ROW_INDEX_COL))","new BitmapAggregator"]},
+      {"id":"bitmap-aggregator-adds-long-position","file":"spark/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregation/BitmapAggregator.scala","line_start":48,"line_end":56,"contains":["new RoaringBitmapArray()","buffer.add(value.asInstanceOf[Long])"]}
+    ],"repos":["delta","spark"]},
+    {"id":"row-index-alignment","assertion":"Spark's Parquet reader derives file-relative row positions from each page store's row-index offset, including page-skipping selections, and writes those positions into a row-index vector. Delta passes that exact vector to RowIndexFilter; RowIndexMarkingFilters probes each value against the deletion-vector bitmap, aligning marks with the physical rows produced.","anchors":[
+      {"anchor":"delta-reader-build","symbol":"org.apache.spark.sql.delta.DeltaParquetFileFormat.buildReaderWithPartitionValues","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaParquetFileFormat.scala","line":161,"kind":"Method"},
+      {"anchor":"spark-parquet-reader-build","symbol":"org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat.buildReaderWithPartitionValues","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/parquet/ParquetFileFormat.scala","line":123,"kind":"Method"},
+      {"anchor":"metadata-iterator","symbol":"org.apache.spark.sql.delta.DeltaParquetFileFormat.iteratorWithAdditionalMetadataColumns","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaParquetFileFormat.scala","line":339,"kind":"Method"},
+      {"anchor":"vectorized-parquet-reader","symbol":"org.apache.spark.sql.execution.datasources.parquet.VectorizedParquetRecordReader","file":"sql/core/src/main/java/org/apache/spark/sql/execution/datasources/parquet/VectorizedParquetRecordReader.java","line":65,"kind":"Class"},
+      {"anchor":"row-index-generator-field","symbol":"org.apache.spark.sql.execution.datasources.parquet.VectorizedParquetRecordReader.rowIndexGenerator","file":"sql/core/src/main/java/org/apache/spark/sql/execution/datasources/parquet/VectorizedParquetRecordReader.java","line":143,"kind":"Field"},
+      {"anchor":"row-index-generator","symbol":"org.apache.spark.sql.execution.datasources.parquet.ParquetRowIndexUtil.RowIndexGenerator","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/parquet/ParquetRowIndexUtil.scala","line":36,"kind":"Class"},
+      {"anchor":"init-row-index-from-pages","symbol":"org.apache.spark.sql.execution.datasources.parquet.ParquetRowIndexUtil.RowIndexGenerator.initFromPageReadStore","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/parquet/ParquetRowIndexUtil.scala","line":40,"kind":"Method"},
+      {"anchor":"populate-row-index","symbol":"org.apache.spark.sql.execution.datasources.parquet.ParquetRowIndexUtil.RowIndexGenerator.populateRowIndex","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/parquet/ParquetRowIndexUtil.scala","line":61,"kind":"Method"},
+      {"anchor":"row-filter-interface","symbol":"org.apache.spark.sql.delta.RowIndexFilter.materializeIntoVectorWithRowIndex","file":"spark/src/main/java/org/apache/spark/sql/delta/RowIndexFilter.java","line":47,"kind":"AbstractMethod"},
+      {"anchor":"row-filter-implementation","symbol":"org.apache.spark.sql.delta.deletionvectors.RowIndexMarkingFilters.materializeIntoVectorWithRowIndex","file":"spark/src/main/scala/org/apache/spark/sql/delta/deletionvectors/RowIndexMarkingFilters.scala","line":55,"kind":"Method"},
+      {"anchor":"bitmap-membership","symbol":"org.apache.spark.sql.delta.deletionvectors.RowIndexMarkingFilters.isContainedInBitmap","file":"spark/src/main/scala/org/apache/spark/sql/delta/deletionvectors/RowIndexMarkingFilters.scala","line":36,"kind":"Method"},
+      {"anchor":"bitmap-contains","symbol":"org.apache.spark.sql.delta.deletionvectors.RoaringBitmapArray.contains","file":"spark/src/main/scala/org/apache/spark/sql/delta/deletionvectors/RoaringBitmapArray.scala","line":152,"kind":"Method"}
+    ],"transitions":[
+      ["delta-reader-build","spark-parquet-reader-build"],
+      ["delta-reader-build","metadata-iterator"],
+      ["spark-parquet-reader-build","vectorized-parquet-reader"],
+      ["vectorized-parquet-reader","row-index-generator-field"],
+      ["row-index-generator-field","row-index-generator"],
+      ["row-index-generator","init-row-index-from-pages"],
+      ["row-index-generator","populate-row-index"],
+      ["metadata-iterator","row-filter-interface"],
+      ["row-filter-interface","row-filter-implementation"],
+      ["row-filter-implementation","bitmap-membership"],
+      ["bitmap-membership","bitmap-contains"]
+    ],"witnesses":[
+      {"id":"delta-delegates-parquet-read-and-wraps-metadata","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaParquetFileFormat.scala","line_start":161,"line_end":230,"contains":["super.buildReaderWithPartitionValues","ParquetFileFormat.ROW_INDEX_TEMPORARY_COLUMN_NAME","iteratorWithAdditionalMetadataColumns"]},
+      {"id":"vectorized-reader-populates-file-row-index","file":"sql/core/src/main/java/org/apache/spark/sql/execution/datasources/parquet/VectorizedParquetRecordReader.java","line_start":290,"line_end":350,"contains":["ParquetRowIndexUtil.createGeneratorIfNeeded(sparkSchema)","If needed, compute row indexes within a file","rowIndexGenerator.populateRowIndex(columnVectors, num)"]},
+      {"id":"generator-preserves-page-skipping-file-offsets","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/parquet/ParquetRowIndexUtil.scala","line_start":40,"line_end":64,"contains":["pages.getRowIndexOffset","pages.getRowIndexes","idx + startingRowIdx","columnVector.putLong(i, rowIndexIterator.next())"]},
+      {"id":"delta-probes-the-exact-generated-index-vector","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaParquetFileFormat.scala","line_start":400,"line_end":410,"contains":["materializeIntoVectorWithRowIndex","batch.column(rowIndexColumnOpt.get.index)"]},
+      {"id":"row-filter-tests-each-vector-position","file":"spark/src/main/scala/org/apache/spark/sql/delta/deletionvectors/RowIndexMarkingFilters.scala","line_start":55,"line_end":62,"contains":["rowIndexColumn.getLong(rowNumber)","isContainedInBitmap(rowIndex)","batch.putByte(rowNumber, isContained)"]}
+    ],"repos":["spark","delta"]}
+  ]},
+  {"id":187,"claims":[
+    {"id":"fork-capability","assertion":"The stock writer always removes partition attributes from its data schema. Delta's fork adds the single missing capability: under WRITE_PARTITION_COLUMNS it appends partitionColumns to outputDataColumns and passes them to both prepareWrite and WriteJobDescription. TransactionalWrite enables this for Iceberg compatibility, which could not be configured on the stock writer.","anchors":[
+      {"anchor":"transactional-write-files","symbol":"org.apache.spark.sql.delta.files.TransactionalWrite.writeFiles","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line":386,"kind":"Method"},
+      {"anchor":"delta-file-writer","symbol":"org.apache.spark.sql.delta.files.DeltaFileFormatWriter.write","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line":86,"kind":"Method"},
+      {"anchor":"write-partition-columns-option","symbol":"org.apache.spark.sql.delta.DeltaOptions.WRITE_PARTITION_COLUMNS","file":"spark/src/main/scala/org/apache/spark/sql/delta/DeltaOptions.scala","line":305,"kind":"Method"},
+      {"anchor":"delta-writer-owner","symbol":"org.apache.spark.sql.delta.files.DeltaFileFormatWriter","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line":58,"kind":"Object"}
+    ],"transitions":[
+      ["transactional-write-files","delta-file-writer"],
+      ["transactional-write-files","write-partition-columns-option"],
+      ["delta-writer-owner","delta-file-writer"]
+    ],"witnesses":[
+      {"id":"transactional-write-enables-capability-for-iceberg","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/TransactionalWrite.scala","line_start":456,"line_end":480,"contains":["Iceberg spec requires partition columns in data files","DeltaOptions.WRITE_PARTITION_COLUMNS -> writePartitionColumns.toString","DeltaFileFormatWriter.write","partitionColumns = partitioningColumns"]},
+      {"id":"fork-includes-partitions-in-data-output","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line_start":112,"line_end":143,"contains":["dataColumns ++ partitionColumns","outputDataColumns.toStructType","dataColumns = outputDataColumns","partitionColumns = partitionColumns"]},
+      {"id":"stock-writer-excludes-partitions-with-no-option","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/FileFormatWriter.scala","line_start":108,"line_end":130,"contains":["filterNot(partitionSet.contains)","prepareWrite(sparkSession, job, caseInsensitiveOptions, dataSchema)","dataColumns = dataColumns","partitionColumns = partitionColumns"]}
+    ],"repos":["delta","spark"]},
+    {"id":"writefiles-path","assertion":"The fork first discovers Spark's planned WriteFiles path with V1WritesUtils.getWriteFilesOpt. When present it invokes its planned executeWrite overload, which delegates to SparkPlan.executeWrite; dynamic dispatch reaches WriteFilesExec.doExecuteWrite. Otherwise the fork uses its copied ordinary RDD write overload.","anchors":[
+      {"anchor":"delta-file-writer","symbol":"org.apache.spark.sql.delta.files.DeltaFileFormatWriter.write","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line":86,"kind":"Method"},
+      {"anchor":"get-write-files","symbol":"org.apache.spark.sql.execution.datasources.V1WritesUtils.getWriteFilesOpt","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/V1Writes.scala","line":215,"kind":"Method"},
+      {"anchor":"delta-planned-execute","symbol":"org.apache.spark.sql.delta.files.DeltaFileFormatWriter.executeWrite","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line":327,"kind":"Method"},
+      {"anchor":"spark-execute-write","symbol":"org.apache.spark.sql.execution.SparkPlan.executeWrite","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/SparkPlan.scala","line":245,"kind":"Method"},
+      {"anchor":"spark-do-execute-write","symbol":"org.apache.spark.sql.execution.SparkPlan.doExecuteWrite","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/SparkPlan.scala","line":358,"kind":"Method"},
+      {"anchor":"write-files-do-execute","symbol":"org.apache.spark.sql.execution.datasources.WriteFilesExec.doExecuteWrite","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/WriteFiles.scala","line":79,"kind":"Method"},
+      {"anchor":"write-files-exec","symbol":"org.apache.spark.sql.execution.datasources.WriteFilesExec","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/WriteFiles.scala","line":72,"kind":"Class"}
+    ],"transitions":[
+      ["delta-file-writer","get-write-files"],
+      ["delta-file-writer","delta-planned-execute"],
+      ["delta-planned-execute","spark-execute-write"],
+      ["spark-execute-write","spark-do-execute-write"],
+      ["spark-do-execute-write","write-files-do-execute"],
+      ["write-files-exec","write-files-do-execute"]
+    ],"witnesses":[
+      {"id":"fork-selects-planned-or-ordinary-overload","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line_start":157,"line_end":219,"contains":["V1WritesUtils.getWriteFilesOpt(plan)","if (writeFilesOpt.isDefined)","executeWrite(sparkSession, plan, writeSpec, job)","} else {"]},
+      {"id":"planned-overload-delegates-to-spark-plan","file":"spark/src/main/scala/org/apache/spark/sql/delta/files/DeltaFileFormatWriter.scala","line_start":324,"line_end":340,"contains":["Write files using [[SparkPlan.executeWrite]]","planForWrites.executeWrite(writeFilesSpec)"]},
+      {"id":"spark-discovers-writefiles-exec","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/V1Writes.scala","line_start":215,"line_end":218,"contains":["Option[WriteFilesExecBase]","case w: WriteFilesExecBase => w"]},
+      {"id":"spark-plan-dispatches-to-concrete-writefiles-exec","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/SparkPlan.scala","line_start":240,"line_end":250,"contains":["Concrete implementations of SparkPlan should override `doExecuteWrite`","def executeWrite","doExecuteWrite(writeFilesSpec)"]},
+      {"id":"writefiles-exec-reuses-stock-task-writer","file":"sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/WriteFiles.scala","line_start":72,"line_end":100,"contains":["case class WriteFilesExec","override protected def doExecuteWrite","FileFormatWriter.executeTask"]}
+    ],"repos":["delta","spark"]}
+  ]}
+]

@@ -8,22 +8,10 @@ to nine answers that quoted no code whatsoever, and scored answers with a fully
 traced chain 9.83 against 9.50 for answers with no evidence at all: fluent prose
 with citations nearby reads as demonstration.
 
-An answer is COMPLETE by either route:
-
-  FULL       every required symbol (fixed in advance by chain_requirements.json)
-             carries a quote that matches its file at the cited line;
-  ENDPOINTS  the first and last symbols carry such quotes, and every mechanism
-             in between is named -- the transition articulated rather than
-             jumped.
-
-Both routes need at least two verified snippets, and a cross-repo chain needs
-its two endpoint quotes in DIFFERENT repositories, or a chain spanning delta and
-spark is satisfied by two quotes from one file.
-
-The endpoint route concedes that intermediate mechanisms may be recalled. That
-is safe only because the line numbers are checked: recall reproduces a path and
-a symbol name, but not the line a symbol occupies at a pinned revision. A quote
-that does not sit at its cited line is not evidence, however verbatim its text.
+An answer is COMPLETE only when every required mechanism, fixed in advance in
+causal order, carries a verbatim quote from a file that the arm opened. Every
+substantive quoted line is checked at the exact cited location. Endpoint-only
+evidence is incomplete: it cannot distinguish a derived middle from recall.
 
 An answer is ADMISSIBLE when it is complete, and additionally
 
@@ -59,13 +47,16 @@ REPO = HERE.parent.parent
 REQS = HERE / 'chain_requirements.json'
 KEYFILE = HERE / 'questions_debcrumb_25.json'
 SYMBOL = re.compile(r'\b[A-Z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]{2,}\b')
-CITE = re.compile(r'([A-Za-z_][\w+-]*\.(?:scala|java|py|g4))\s*:\s*(\d+)(?:\s*-\s*(\d+))?')
+CITE = re.compile(
+    r'(/corpus/(?:[\w.+-]+/)*[A-Za-z_][\w+.-]*\.(?:scala|java|py|g4))'
+    r'\s*:\s*(\d+)(?:\s*-\s*(\d+))?')
 FENCE = re.compile(r'```[a-zA-Z0-9]*\n(.*?)```', re.S)
 ANNOT = re.compile(r'//\s*:?\d*\s*<--.*$|//\s*:\d+\s*$')
 # A fence may open with the path it was taken from, and may prefix each line
 # with that line's number. Both are line claims and both are checked.
 PATHHDR = re.compile(
-    r'^\s*/?(?:[\w.+-]+/)*([A-Za-z_][\w+-]*\.(?:scala|java|py|g4))(?::(\d+))?\s*$')
+    r'^\s*(/corpus/(?:[\w.+-]+/)*[A-Za-z_][\w+.-]*\.(?:scala|java|py|g4))'
+    r'(?::(\d+))?\s*$')
 LEADNUM = re.compile(r'^\s*(\d{1,5})[:|\s]\s*(\S.*)$')
 # Candidate joining artifacts: dotted config/table-property style constants.
 LITERAL = re.compile(r'\b(?:delta|spark)\.[a-zA-Z][a-zA-Z0-9.]{4,60}\b')
@@ -96,7 +87,7 @@ def resolve(fname, idx, read_paths):
         if pref:
             return pref
     return paths
-def fence_claim(raw: str):
+def fence_claim(raw: str, *, min_chars: int = 15):
     """(filename, line, [(inline_no, stripped, as_written)]) parsed from a fence.
 
     Answers state where a quote came from in three ways: a path header opening
@@ -117,65 +108,80 @@ def fence_claim(raw: str):
             hdr_line = int(m.group(2)) if m.group(2) else None
             lines.pop(0)
     keep = []
-    for x in lines:
+    for relative, x in enumerate(lines):
         m = LEADNUM.match(x)
         n, body = (int(m.group(1)), m.group(2)) if m else (None, x)
         written = norm(x)
         # A source line may legitimately begin with a digit, so the unstripped
         # form is kept alongside and either may satisfy the match.
-        if len(written) > 15 and not written.startswith(('...', '//')):
-            keep.append((n, norm(body), written))
+        if len(written) > min_chars and not written.startswith(('...', '//')):
+            keep.append((n, norm(body), written, relative))
     return fname, hdr_line, keep
-def verified_quotes(rec, idx, corpus, cache, tol):
-    """Quotes whose first code line sits where the answer says it does."""
+def _local_path(corpus: Path, claimed: str) -> Path:
+    return corpus / claimed.removeprefix('/corpus/')
+
+
+def provenance_ok(rec: dict, corpus: Path) -> bool:
+    """Every recorded source file has a hash matching the scoring corpus.
+
+    Historical tool logs include directory paths from Glob in ``files_read``.
+    They are discovery events, not source files and cannot be hashed. A quoted
+    path is separately required to occur in ``file_hashes`` by
+    :func:`verified_quotes`, so an unhashed source can never become evidence.
+    """
+    hashes = rec.get('file_hashes') or {}
+    if not hashes:
+        return False
+    return all(
+        (p := _local_path(corpus, path)).is_file()
+        and hashlib.sha256(p.read_bytes()).hexdigest()[:16] == hashes[path]
+        for path in hashes
+    )
+
+
+def verified_quotes(rec, idx, corpus, cache, tol=0, *, min_chars: int = 15):
+    """Code blocks whose full contents match an exact, opened path and line."""
     text = rec.get('answer') or ''
     cites = [(m.start(), m.group(1), int(m.group(2)), int(m.group(3) or m.group(2)))
              for m in CITE.finditer(text)]
-    read = {Path(p).name for p in (rec.get('files_read') or [])}
-    read_paths = [p[len('/corpus/'):] if p.startswith('/corpus/') else p.lstrip('/')
-                  for p in (rec.get('files_read') or [])]
+    read = set(rec.get('files_read') or [])
+    hashed = set((rec.get('file_hashes') or {}))
     out = []
     for fm in FENCE.finditer(text):
-        hdr_name, hdr_line, keep = fence_claim(fm.group(1))
+        hdr_name, hdr_line, keep = fence_claim(fm.group(1), min_chars = min_chars)
         if not keep:
             continue
         near = sorted(cites, key=lambda c: abs(c[0] - fm.start()))
-        near = [c for c in near if c[1] in read] or near
-        fname = hdr_name or (near[0][1] if near else None)
-        if not fname:
+        near = [c for c in near if c[1] in read]
+        claimed = hdr_name or (near[0][1] if near else None)
+        if not claimed or claimed not in read or claimed not in hashed:
             continue
-        paths = resolve(fname, idx, read_paths)
-        if not paths:
+        p = _local_path(corpus, claimed)
+        if not p.is_file():
             continue
-        p = paths[0]
         if p not in cache:
             cache[p] = [norm(x) for x in p.read_text(errors='ignore').splitlines()]
         body = cache[p]
-        inline, stripped, written = keep[0]
-        claims = []
-        if inline is not None:
-            claims.append((inline, inline, stripped))
-        if hdr_line is not None:
-            claims.append((hdr_line, hdr_line, stripped))
-        if near:
-            claims.append((near[0][2], near[0][3], written))
-        for lo, hi, want in claims:
-            window = range(max(0, lo - 1 - tol), min(len(body), hi + tol))
-            if any(body[n] == want for n in window):
-                out.append({'file': p, 'repo': repo_of(p, corpus), 'line': lo,
-                            'text': ' '.join(t for _, t, _ in keep)})
+        start = hdr_line or (near[0][2] if near else None)
+        if start is None:
+            continue
+        matched = True
+        for inline, stripped, written, relative in keep:
+            line = inline if inline is not None else start + relative
+            want = stripped if inline is not None else written
+            if line < 1 or line > len(body) or body[line - 1] != want:
+                matched = False
                 break
+        if matched:
+            out.append({'file': p, 'repo': repo_of(p, corpus), 'line': start,
+                        'text': ' '.join(t for _, t, _, _ in keep)})
     return out
 def completeness(rec, req, quotes):
     """Does the answer show how the first mechanism reaches the last one?
 
-    Two shapes qualify. FULL quotes every hop. ENDPOINTS quotes the two ends and
-    names each mechanism in between, so a multi-hop chain is articulated rather
-    than jumped. Both need >=2 verified snippets -- one quote plus recitation is
-    the shape this exists to reject -- and a cross-repo chain needs its endpoint
-    quotes in different repositories.
+    Every required mechanism must occur in verified source. Prose mentions do
+    not count because they can be recalled and decorated with endpoint quotes.
     """
-    text = rec.get('answer') or ''
     syms = [r['symbol'] for r in req['required']]
     blob = ' '.join(q['text'] for q in quotes)
     stems = {q['file'].stem for q in quotes}
@@ -183,23 +189,11 @@ def completeness(rec, req, quotes):
     def quoted(s):
         return s in blob or s in stems
 
-    ends = [syms[0], syms[-1]]
-    missing_middle = [s for s in syms[1:-1] if s not in text]
-    endpoint_repos = sorted({q['repo'] for q in quotes
-                             if any(e in q['text'] or e == q['file'].stem
-                                    for e in ends)})
-    enough = len(quotes) >= 2
-    # Spanning is required of the ENDPOINT route only. Where every hop is
-    # quoted, the corpus-wide repo check below already proves the crossing, and
-    # a chain whose ends happen to share a repo is still fully evidenced.
-    spans = len(req['repos_spanned']) < 2 or len(endpoint_repos) >= 2
-
-    full = enough and all(quoted(s) for s in syms)
-    endpoints = enough and all(quoted(e) for e in ends) and not missing_middle \
-        and spans
-    return {'complete_full': full, 'complete_endpoints': endpoints,
-            'complete': full or endpoints, 'missing_middle': missing_middle,
-            'endpoint_repos': endpoint_repos}
+    missing = [s for s in syms if not quoted(s)]
+    full = len(quotes) >= len(syms) and not missing
+    return {'complete_full': full, 'complete_endpoints': False,
+            'complete': full, 'missing_middle': missing,
+            'endpoint_repos': []}
 def score_answer(rec, req, idx, corpus, cache, tol):
     quotes = verified_quotes(rec, idx, corpus, cache, tol)
     blob = ' '.join(q['text'] for q in quotes)
@@ -228,7 +222,8 @@ def score_answer(rec, req, idx, corpus, cache, tol):
                       for l in per_repo[a] & per_repo[b]})
 
     comp = completeness(rec, req, quotes)
-    admissible = (bool(hops) and comp['complete']
+    provenance = provenance_ok(rec, corpus)
+    admissible = (bool(hops) and provenance and comp['complete']
                   and (not cross_needed or len(repos) >= 2)
                   and (not literal_needed or bool(joiners)))
     return {'id': req['id'], 'family': req.get('family'), 'hops': hops,
@@ -236,7 +231,7 @@ def score_answer(rec, req, idx, corpus, cache, tol):
             'missing': missing, 'chain_score': chain, 'repos': repos,
             'cross_repo_required': cross_needed,
             'literal_required': literal_needed, 'joining_literals': joiners,
-            **comp, 'admissible': admissible}
+            **comp, 'provenance_ok': provenance, 'admissible': admissible}
 
 
 def search_order(rec: dict, q: dict) -> dict:
@@ -271,8 +266,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--answers', required=True)
     ap.add_argument('--corpus', default=str(REPO / 'spool-corpus'))
-    ap.add_argument('--tol', type=int, default=3,
-                    help='lines of slack on the cited start line (default 3)')
+    ap.add_argument('--tol', type=int, default=0,
+                    help='deprecated; exact line matching is always enforced')
     ap.add_argument('--grades', default=None,
                     help='jsonl of LLM correctness grades to gate on this result')
     ap.add_argument('--out', default=None)
@@ -295,10 +290,12 @@ def main() -> int:
     if checked:
         print(f'hash provenance: {checked} files checked, {mismatched} mismatched')
         if mismatched:
-            print('  WARNING: the local corpus is not byte-identical to what the '
-                  'container read; verification below is unreliable.')
+            print('ERROR: the local corpus is not byte-identical to what the '
+                  'container read; refusing to score.')
+            return 2
     else:
-        print('hash provenance: none recorded (pre-instrumentation run)')
+        print('ERROR: no hash provenance recorded; refusing to score.')
+        return 2
 
     qs = {q['id']: q for q in json.loads(KEYFILE.read_text())}
     rows = [score_answer(answers[i], r, idx, corpus, cache, args.tol)
@@ -311,8 +308,7 @@ def main() -> int:
           f'{"join":>5} {"shape":>9} {"admiss":>7} {"1st-key":>8}  derivation')
     for r in sorted(rows, key=lambda r: -(r['chain_score'] or 0)):
         fk = r['first_key_hit']
-        shape = ('full' if r['complete_full']
-                 else 'endpoints' if r['complete_endpoints'] else '-')
+        shape = 'full' if r['complete_full'] else '-'
         print(f'{r["id"]:>5} {r["hops"]:>5} {r["evidenced"]:>5} '
               f'{(r["chain_score"] or 0):>6.0%} {len(r["repos"]):>5} '
               f'{len(r["joining_literals"]):>5} {shape:>9} '
@@ -323,16 +319,14 @@ def main() -> int:
     adm = [r for r in rows if r['admissible']]
     cs = [r['chain_score'] for r in rows if r['chain_score'] is not None]
     nfull = sum(1 for r in rows if r['complete_full'])
-    nend = sum(1 for r in rows if r['complete_endpoints'] and not r['complete_full'])
-    print(f'\n  ADMISSIBLE: {len(adm)}/{len(rows)}  '
-          f'(full chain {nfull}, endpoints+articulated {nend})')
+    print(f'\n  ADMISSIBLE: {len(adm)}/{len(rows)}  (full chain {nfull})')
     print(f'  chain_score: mean {sum(cs)/len(cs):.0%}  median {st.median(cs):.0%}')
     print(f'  answers with zero verified quotes: '
           f'{sum(1 for r in rows if r["verified_quotes"] == 0)}/{len(rows)}')
     print(f'  answers with only one verified quote: '
           f'{sum(1 for r in rows if r["verified_quotes"] == 1)}/{len(rows)}')
-    jumped = sum(1 for r in rows if r['verified_quotes'] >= 2 and r['missing_middle'])
-    print(f'  read the ends but never named the middle: {jumped}/{len(rows)}')
+    incomplete = sum(1 for r in rows if r['missing_middle'])
+    print(f'  missing required source evidence: {incomplete}/{len(rows)}')
     af = sum(1 for r in rows if r['answer_first'])
     print(f'  ANSWER-FIRST (key symbol sought in the first two calls): '
           f'{af}/{len(rows)}')

@@ -115,3 +115,43 @@ def test_multiline_claim_witness_range_is_hash_accounted(tmp_path):
                 2, 4, "claim_witness",
                 "    version = read()\n    if version >= batch:\n        return False")]
     assert result.excerpts[0].sha256 == digest
+def test_definition_doc_header_travels_as_its_own_excerpt(tmp_path):
+    """The comment block above a definition is part of what a reviewer reads.
+
+    SCIP extents start at the definition line, so the header — annotation
+    lines included — materializes as a ``doc_header`` excerpt with exact
+    coordinates. A definition with plain code above contributes none, and a
+    repeated definition contributes one.
+    """
+    root = tmp_path / 'source'
+    root.mkdir()
+    lines = (
+        'import base',
+        '',
+        '/**',
+        ' * Delegates all calls to the built-in session catalog directly.',
+        ' */',
+        '@Evolving',
+        'class Delegate {',
+        '  int f() { return 1; }',
+        '}',
+        'plain()',
+        'def bare(): pass',
+    )
+    (root / 'm.py').write_text("\n".join(lines) + "\n")
+
+    result = materialize_citations(
+        [_citation(line_start=7, line_end=9),
+         _citation(line_start=7, line_end=9),
+         _citation(line_start=11, line_end=11)],
+        {'src1': root},
+        extra_ranges=(('src1', 'm.py', 7, 9, 'definition_body'),))
+
+    headers = [item for item in result.excerpts if item.kind == 'doc_header']
+    assert [(item.line_start, item.line_end) for item in headers] == [(3, 6)]
+    assert headers[0].content == "\n".join((
+        '/**',
+        ' * Delegates all calls to the built-in session catalog directly.',
+        ' */',
+        '@Evolving'))
+    assert result.gaps == ()
