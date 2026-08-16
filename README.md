@@ -4,229 +4,77 @@
 
 # Ariadne
 
-A source-code knowledge base for LLM agents. Ariadne generates, indexes, and serves documentation about your codebase — code explanations, structural catalogs, cross-cutting themes — so any MCP-enabled agent (Claude Code, custom agents, anything speaking the Model Context Protocol) can answer questions about your code without rediscovering it.
+A compiler-grounded knowledge base for LLM agents. Ariadne indexes a codebase, generates concise documentation, and serves source-backed results over MCP so an agent can navigate code without rediscovering its structure on every question.
 
-> **License: [Apache 2.0](LICENSE).** Free to use, modify, and redistribute — including commercially — under the terms of the Apache License 2.0.
+> **License: [Apache 2.0](LICENSE).** Free to use, modify, and redistribute, including commercially.
 
 ## Why Ariadne?
 
-When an LLM agent works with a codebase it greps and reads files to understand it — slowly, burning context, rediscovering the same patterns every session, and never seeing the cross-cutting concerns (auth, retries, error handling) that span many files. Ariadne documents your codebase **once**, with an LLM, into a queryable knowledge base — so when an agent opens a file it already knows what the file does, what depends on it, and which theme it belongs to. Keeping that current costs only the files that actually changed.
+Normal code search starts from strings and files. Ariadne also uses [SCIP](docs/scip-cross-source.md): compiler-derived identities, definitions, call sites, ownership, and cross-language relationships. It combines that structure with generated documentation and semantic search, then keeps changed files current rather than rebuilding the whole corpus.
 
-### Why not just GraphRAG?
+## A reviewed compiler-aware comparison
 
-Ariadne *is* a graph-RAG — a structural graph, [Leiden](https://en.wikipedia.org/wiki/Leiden_algorithm) communities, community summaries (its *themes*) — but it builds the graph with a **compiler, not an LLM**. GraphRAG-family tools spend the bulk of indexing cost on LLM entity/relationship extraction, and re-pay it whenever the corpus changes. Ariadne extracts the graph deterministically with [SCIP](docs/scip-cross-source.md) — no LLM, no per-token cost — so the structural layer is near-free to build *and* to keep current; only the prose docs and the summaries of *changed* clusters ever cost LLM. (This holds for code and other SCIP-indexable corpora; for arbitrary prose, a graph-RAG's LLM extraction still earns its keep.)
+The public comparison uses twelve difficult, target-pinned questions about Spark 4.0.0 and Delta 4.0.0. Ariadne receives compiler-derived relationships and source evidence; the bare LLM receives ordinary source reads and text search. A completed question must satisfy every required source-backed claim.
 
-## Does it actually help? A compiler-aware comparison
+<p align="center">
+  <img src="evaluation/chain-benchmark/compiler-aware-completion.svg"
+       alt="Compiler-aware completion: Ariadne 8 of 12 questions; bare LLM 2 of 12"
+       width="620">
+</p>
 
-The public comparison tests a focused panel of twelve difficult questions about
-Spark 4.0.0 and Delta 4.0.0. Ariadne uses compiler-derived code identities and
-relationships plus source evidence; the bare arm uses ordinary source reads and
-text search. Every completed answer must meet the panel's target-aligned
-definition, relation, witness, provenance, and explanatory-prose requirements.
+| Reviewed measure | Ariadne | Bare LLM |
+| --- | ---: | ---: |
+| Completed questions | **8 / 12** | **2 / 12** |
+| Symbols | 112 / 121 (93%) | 0 / 121 (0%)¹ |
+| Definitions | 109 / 122 (89%) | 74 / 122 (61%) |
+| Relation sites | 88 / 97 (91%) | 26 / 97 (27%) |
+| Witness fragments | 159 / 187 (85%) | 114 / 187 (61%) |
 
-**Result: Ariadne completed 8/12 questions; the bare arm completed 2/12.** Both
-systems were incomplete on the remaining four questions. This is evidence about
-this reviewed panel, not a claim of general model superiority.
-
-The public artifacts let readers inspect the questions, reviewed claims,
-outcomes, selected Ariadne evidence, and source locations. The offline verifier
-checks the published panel against a minimal pinned source root; it does not
-rerun either model. The bare arm's source-evidence rescore derives from a private
-saved run, as the report explains.
+¹ The bare run did not emit canonical symbol IDs, so its symbol figure is a format-limited lower bound. These results apply to this reviewed panel only.
 
 - [Comparison report](evaluation/chain-benchmark/COMPILER_AWARE_COMPARISON.md)
 - [Public panel record](evaluation/chain-benchmark/compiler-aware-comparison-record.json)
-- [Ariadne proof manifest](evaluation/chain-benchmark/compiler-aware-ariadne-proof-manifest.json)
-- [Compressed recorded replay fixture](evaluation/chain-benchmark/compiler-aware-recorded-replay.json.gz)
-- [Offline verification command](evaluation/chain-benchmark/verify_compiler_aware_comparison.py)
-- [Minimal DBR 17.3 source-root builder](evaluation/chain-benchmark/build_compiler_aware_source_root.py)
-- [Question-completion chart](evaluation/chain-benchmark/compiler-aware-completion.svg)
-- [Evidence-recall chart](evaluation/chain-benchmark/compiler-aware-evidence-recall.svg)
+- [Offline verifier](evaluation/chain-benchmark/verify_compiler_aware_comparison.py)
+- [Minimal target source-root builder](evaluation/chain-benchmark/build_compiler_aware_source_root.py)
 
-## Features
+## What it provides
 
-**What your agents get**
+- **Compiler-grounded navigation.** Exact symbol lookup, callers/callees, ownership, impact analysis, and cross-source relationships for supported languages.
+- **Generated, searchable documentation.** Explanations, architecture notes, Q&A, gotchas, diagrams, and Leiden-discovered themes.
+- **MCP access.** A single SQLite-backed library for Claude Code and other MCP-enabled agents, scoped to the codebase and its declared dependencies.
+- **Predictable spend.** `dry-run` estimates generation cost before any paid work; git-aware sync refreshes only changed files.
+- **Version-pinned spools.** Optional knowledge packs ground questions in a target system's own source, such as a Databricks runtime.
 
-- **Five complementary doc types per file.** An `explanation` (what the code does), an `architecture` note (how it's built and who depends on it), `qa` pairs, `gotcha`s (the traps that bite you), and a `diagram` — curated per language, so a JSON file never gets an architecture essay it can't support.
-- **Automatic theme discovery — with a coherence gate.** Leiden community detection over a hybrid structural-plus-semantic graph finds clusters of code that share a concern — authentication, caching, retries — even when they're scattered across dozens of files, and writes each up as its own theme doc. At scale the failure mode is junk clusters (a vendored JS bundle, a wall of generated stubs), so every cluster is LLM-judged for coherence and the incoherent ones are flagged and hidden by default. `ariadne themes stats` reports the coherent/incoherent split on your own corpus — the number is measured, not asserted. This is what raw `grep` can never give an agent.
-- **Compiler-precise cross-source intelligence.** For Python, JS/TS, Scala/Java, and Go, Ariadne builds a real [SCIP](docs/scip-cross-source.md) call graph — not regex heuristics — and joins it *across repos and languages*. Ask for a symbol's `callers`/`callees`, compute the `impact_radius` of a change *before* you make it, `trace-flow` a request from an HTTP route through several services, or surface dead code with zero references anywhere.
-- **Served over MCP.** The whole library lives in one queryable SQLite store exposed to any MCP agent (Claude Code, custom agents), automatically scoped to the source it's working in plus that source's dependencies — so results never bleed across unrelated codebases.
-- **Portable — author once, consume anywhere.** `export` packs the whole library into a single git-committable zip (or a markdown tree with `--no-archive`); `import` rebuilds a fully searchable database from it on any machine, re-embedding locally — so the model that *authors* the docs and the one that *serves* them can differ (a local model works fine; embeddings speak the OpenAI wire protocol, so `OPENAI_BASE_URL` can point at any compatible endpoint — Ollama, vLLM, LM Studio — not just OpenAI). Re-import is a **delta**: documents whose content hasn't changed are skipped, so syncing a team's knowledge base only costs the docs that actually moved. See [docs/import-export.md](docs/import-export.md).
-- **Ask from Slack (optional).** A read-only Slack bot puts the knowledge base in your team's chat — @mention it, DM it, or run `/ariadne`, and Claude (via the Agent SDK) answers from Ariadne's docs. It runs in Socket Mode (an outbound WebSocket, no public URL to expose). See [docs/slack-bridge-deployment.md](docs/slack-bridge-deployment.md).
-- **Environment spools (opt-in).** Install a prebuilt, version-pinned knowledge pack for a runtime (Databricks first) and ask cross-environment questions — *"how would my code run on Databricks?"* — answered from the environment's **own pinned corpus** fused with your repo, never from training-data guesswork: answers cite the runtime pin, per-component versions, `@Since`/deprecation facts, and each corpus SHA + license. Packs are build-once, distribute-many — installing costs no cloning, no indexing, no LLM spend. See [docs/building-a-databricks-spool.md](docs/building-a-databricks-spool.md).
-
-**Effortless setup**
-
-- **Zero-config language detection.** Point `discover` at a repo and it walks the tree, identifies every language, and writes the indexer plan straight into `ariadne.yaml` for you. Add a new language later and `sync` notices it and updates the config itself — no manual wiring.
-- **Automatic dependency detection.** Ariadne reads your Python imports with an offline AST scan — **no LLM, no cost** — and proposes which other sources this one depends on, so searches automatically pull in the right neighboring docs.
-
-**Spend with your eyes open**
-
-- **A cost evaluator before you spend a cent.** `dry-run` projects the exact LLM cost of documenting your codebase — cache and batch discounts already factored in — by running only the *free* phases, with zero API calls. No surprise bills.
-- **An interactive cost explorer.** `dry-run -i` opens a full-screen, ncdu-style file browser ranked by generation cost: drill in, see the dollars and a bar on every file, and exclude vendored or generated noise with a single keystroke while the grand total **re-prices live**. Toggle which doc types to generate and watch the price move. Apply, and your excludes persist to `ariadne.yaml` for every future run.
-- **Batch or live generation.** Generate live for immediate results, or pass `--batch` to route through Anthropic's Message Batches API for roughly **half the cost** when you're not in a hurry.
-- **Cheap to keep fresh.** The structural graph (SCIP + Leiden) is built by a compiler, not an LLM, so it costs no tokens to rebuild; and a git-aware sync re-documents only the files whose content actually changed. Upkeep costs just the touched docs — not the GraphRAG-style wholesale LLM re-extraction other tools force on every change.
-
-## How it works
-
-Ariadne runs a one-time pipeline over your source tree, then keeps the result current as the code changes. Each stage adds a layer that agents can query:
-
-1. **Catalog the structure.** It walks the tree and extracts a structural index of every public class, function, method, and module-level value — using **SCIP** (compiler-precise symbols and call graphs, not heuristics) for Python, JS/TS (and Vue), Scala, Java, and Go, and **ast-grep** for HTML and the common config and documentation formats (JSON, YAML, Markdown, HOCON, CSS). This layer alone gives exact symbol lookup and cross-file relationships, and it uses no LLM, so it's cheap to build and refresh.
-
-2. **Document each file.** For every file, an LLM (Claude or OpenAI) writes the doc types you ask for — an `explanation` of what the code does, an `architecture` note on how it's put together, `qa` pairs, `gotcha`s, and a `diagram`. Every document is validated (closed code blocks, required sections) and retried on failure, so the library stays well-formed.
-
-3. **Connect the dots.** Ariadne builds a hybrid graph from imports, call sites, and embedding similarity, then runs Leiden community detection to find clusters of code that share a concern — authentication, retries, error handling — even when they're scattered across many files, and summarizes each cluster as its own *theme* document. Each cluster is LLM-judged for coherence first, so scale yields themes an agent can trust rather than noise (`ariadne themes stats` shows the split). It also walks that graph to inject a "Related Documents" section into every doc.
-
-4. **Store and serve.** Everything — the catalog, the per-file docs, the themes, and any findings you save — lives in a single SQLite library with embeddings for semantic search, exposed to agents over an MCP server. Deterministic IDs make every step idempotent, so re-runs never duplicate work.
-
-5. **Keep it fresh.** A git-aware sync re-documents only the files whose content actually changed (tracked per file by content hash plus which doc types already succeeded), so ongoing upkeep costs just the touched files instead of a full re-index.
-
-See [docs/architecture.md](docs/architecture.md) for the internals.
-
-## Spools: a version-pinned consultant for your target system
-
-A **spool** is an opt-in knowledge pack that turns Ariadne into a consultant for a system
-your code must conform to — built once from that system's *own pinned sources* (corpus
-SHAs recorded, licenses verified, code SCIP-indexed, docs/themes/embeddings pre-generated),
-then installed anywhere with no cloning, no indexing, and no LLM spend.
-
-What makes it a consultant rather than a search index: answers about *your* code rank your
-code first, with the target's knowledge as a clearly-labeled lens — and questions the
-target owns flip the sides. Either way, every answer cites its ground truth: the runtime
-pin, per-component versions, `@Since`/deprecation facts extracted from the corpus, and each
-repo's SHA and license. When the ground truth isn't in the pack, the consultant says so —
-it never quietly falls back to training-data guesswork about your versions.
-
-- **Environment consultants** (shipped recipes): **Databricks** — Spark, Delta, and the
-  SDK pinned to a runtime edition, for questions like *"how would this pipeline behave on
-  DBR 17.3?"* — and **OpenTofu**, grounded in the MPL-licensed engine's Go source (and
-  named for its actual corpus).
-- **The recipe is the extension point.** The same mechanism — pinned corpus, trust tiers,
-  interaction surfaces, a per-role harm profile — is designed to serve other consultant
-  roles: **regulatory** (a regulation at a pinned amendment state), **compliance** (which
-  requirements of a standard's version your artifacts can be checked against — and which
-  need evidence no tool should pretend to have), **security** (a framework's security
-  model at your pinned version), and **internal platforms** — the strongest case of all,
-  since your in-house SDK is the one thing an LLM's training data has never seen.
-
-Build and install walkthrough: [docs/building-a-databricks-spool.md](docs/building-a-databricks-spool.md).
-
-## Installation
+## Quick start
 
 ```bash
 git clone https://github.com/AvivAvital2/ariadne.git
 cd ariadne
 uv sync
-```
 
-**Prerequisites:** Python 3.12+, and API keys for two jobs —
-
-- **Embeddings — always OpenAI** (`text-embedding-3-large`): `OPENAI_API_KEY` is **always** required.
-- **Generation — Anthropic *or* OpenAI**, chosen by `provider:` in `ariadne.yaml` (inferred from the model: `claude-*` → anthropic, `gpt-*` → openai).
-
-So generating with Claude needs both keys; generating with OpenAI needs only `OPENAI_API_KEY`. Put them in your shell or a `.env` in the Ariadne directory (auto-loaded).
-
-| Language | Catalog | Explanation | Architecture | QA | Gotcha | Diagram |
-|---|---|---|---|---|---|---|
-| Python · JS/TS · Scala · Java · Go | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| HTML | ✅ | ✅ | ✅ | — | — | — |
-| JSON / YAML / Markdown | ✅ | ✅ | — | — | — | — |
-
-Python, JS/TS, Scala/Java, and Go are indexed with SCIP — a one-time step that just needs the matching indexer installed (`scip-python`, `scip-typescript`, `scip-java`, `scip-go`); multi-language sources also need a `scip merge`-capable binary. `discover` wires the config up for you — see [docs/scip-cross-source.md](docs/scip-cross-source.md).
-
-## Getting started
-
-> **One-time setup** — register your code so the commands below have a source to point at:
-> ```bash
-> uv run ariadne source add myproject --path /path/to/myproject/src
-> ```
-> This bootstraps `ariadne.yaml` and is idempotent (re-run to change flags like `--depends-on a,b` or `--exclude-dirs build,dist`). See [docs/configuration.md](docs/configuration.md).
-
-### 1. See what it'll cost — and trim it — interactively
-
-```bash
+# Register a source, inspect projected cost, then build the library.
+uv run ariadne source add myproject --path /path/to/myproject/src
 uv run ariadne dry-run -i --source myproject
-```
-
-`dry-run` runs only the **free** phases and projects the LLM cost; `-i` opens a full-screen **explorer** over that estimate so you can shape it *before* spending anything:
-
-- A tree of every directory and file, ranked by generation cost, with bars and a per-file `$`.
-- **Navigate:** `↑/↓` move · `→` open a dir / `←` back · `Enter`/`Space` expand.
-- **`x`** excludes (or re-keeps) the highlighted file or directory — drop expensive noise like vendored or generated dirs. On apply this writes `exclude_dirs`/`exclude` to `ariadne.yaml`, so it sticks for every future run.
-- **Doc-type panel (left):** check/uncheck the doc types to generate — the whole tree **re-prices live**, so you see exactly what each type adds.
-- **`t`** switches color theme (remembered), **`a`** applies & writes the excludes, **`q`** cancels.
-
-No TTY (CI/pipes)? It prints a static, ranked per-directory cost table instead. Plain `ariadne dry-run` (no `-i`) just prints the estimate.
-
-### 2. Onboard — generate the whole library
-
-```bash
 uv run ariadne onboard --source myproject
 ```
 
-This is the one command that does everything: discover → index → catalog-sync → catalog-describe → generate → themes. It runs the **free phases and shows a cost preview first** — and offers the same interactive explorer from step 1 so you can trim excludes inline — then **prompts before it spends anything**, continuing into the paid phases without re-running the free work. So you can even skip step 1 and let `onboard` walk you through it.
-
-Flags: `--approve` (skip the prompt, for CI), `--live`/`--batch` (skip the dispatch-mode prompt; `--batch` uses Anthropic's Message Batches API, ~50% off). Prefer driving the phases yourself? `uv run ariadne generate` → `uv run ariadne export` → `uv run ariadne list`.
-
-### 3. Integrate with Claude Code
+Generation needs `OPENAI_API_KEY` for embeddings and either Anthropic or OpenAI for documentation generation. `onboard` previews cost and asks before paid work. For MCP integration with Claude Code:
 
 ```bash
 cd /path/to/your-project
 uv run --directory /path/to/ariadne ariadne init --source myproject
 ```
 
-This writes a `.claude/settings.json` session hook and a `CLAUDE.md` telling Claude to check Ariadne first, and can register the MCP server (`--global`). Full walkthrough: [docs/new-project-onboarding.md](docs/new-project-onboarding.md) · advanced options & MCP: [docs/claude-code-integration.md](docs/claude-code-integration.md).
+## Learn more
 
-## Commands
-
-Common ones (full reference: [docs/commands.md](docs/commands.md)):
-
-| Command | What it does |
-|---|---|
-| `ariadne source add/list/remove` | Manage sources in `ariadne.yaml` |
-| `ariadne dry-run [-i]` | Estimate cost; `-i` opens the interactive explorer |
-| `ariadne onboard` | Full pipeline with a cost preview + prompt |
-| `ariadne generate` / `export` / `import` | Generate docs · export to a zip (or markdown tree) · rebuild the DB elsewhere (delta) |
-| `ariadne search "query"` | Semantic search across the docs |
-| `ariadne sync` / `check` | Re-document only the changed files (delta) · find stale docs |
-| `ariadne themes list/stats` | List discovered themes · coherence-rate readout (how many clusters passed the gate) |
-| `ariadne mcp` | Start the MCP server (stdio) |
-
-## Configuration
-
-Minimal `ariadne.yaml`:
-
-```yaml
-default_source: myproject
-sources:
-  myproject: /path/to/myproject/src
-docs_base: ./docs
-defaults:
-  provider: anthropic        # or 'openai' (inferred from the model if omitted)
-  model: claude-opus-4-8
-```
-
-Full reference — source fields, dependency detection, the exclusion policy — in [docs/configuration.md](docs/configuration.md). Exported docs land under `docs/{source}/` (`manifest.yaml`, `explanations/`, `architecture/`, `findings/`, …).
-
-## Documentation
-
-**Using Ariadne from an LLM agent?** It's primarily an MCP server — point your agent at the Ariadne MCP tools and have it search the knowledge base before grepping. Start with [docs/claude-code-integration.md](docs/claude-code-integration.md) and the tool reference in [docs/mcp-tools.md](docs/mcp-tools.md).
-
-| Guide | Covers |
-|---|---|
-| [new-project-onboarding.md](docs/new-project-onboarding.md) | End-to-end first-run walkthrough |
-| [claude-code-integration.md](docs/claude-code-integration.md) | Hooks, MCP setup, branch filtering, usage feedback |
-| [mcp-tools.md](docs/mcp-tools.md) | Full MCP tool catalog for agents |
-| [commands.md](docs/commands.md) | Complete CLI command & flag reference |
-| [configuration.md](docs/configuration.md) | `ariadne.yaml` fields, dependency detection, exclusion policy |
-| [directory-scoping.md](docs/directory-scoping.md) | Subdirectory sources & directory-scoped dependencies |
-| [scip-cross-source.md](docs/scip-cross-source.md) | SCIP indexing & cross-source / cross-language intelligence |
-| [workflows.md](docs/workflows.md) | Keeping docs fresh, git-sync, hooks, branch docs, findings |
-| [import-export.md](docs/import-export.md) | Export/import round-trip; author once, consume anywhere (incl. local LLMs) |
-| [building-a-databricks-spool.md](docs/building-a-databricks-spool.md) | Environment spools: build, install, and enable a runtime knowledge pack |
-| [architecture.md](docs/architecture.md) | How it works, subsystems, usage tracking |
-| [slack-bridge-deployment.md](docs/slack-bridge-deployment.md) | Read-only Slack → Ariadne bridge |
+- [First-run walkthrough](docs/new-project-onboarding.md)
+- [Configuration](docs/configuration.md)
+- [CLI command reference](docs/commands.md)
+- [MCP tools](docs/mcp-tools.md)
+- [SCIP and cross-source indexing](docs/scip-cross-source.md)
+- [Architecture](docs/architecture.md)
+- [Environment spools](docs/building-a-databricks-spool.md)
 
 ## License
 
-[Apache License 2.0](LICENSE) — free to use, modify, and redistribute, including for commercial use.
+[Apache License 2.0](LICENSE)
