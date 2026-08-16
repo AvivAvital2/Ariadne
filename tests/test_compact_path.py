@@ -432,3 +432,47 @@ class TestBoundaryTrace:
         assert all(
             set(entry) == {"entry", "terminal", "reason"}
             for entry in dropped)
+
+
+class TestSharedQuestionVector:
+    def test_provided_vector_skips_the_compact_embed(self, service):
+        vector = np.ones(8, dtype=np.float32)
+        with service.library._conn_provider.acquire() as connection:
+            init_clews_schema(connection)
+            connection.execute(
+                "INSERT INTO clews (id, source_name, entry_symbol, "
+                "steps, route, files, strategy, question, embedding) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                ("c2", SOURCE, "pkg.Deep.helper", json.dumps([]),
+                 json.dumps(["pkg.Deep.helper"]),
+                 json.dumps(["core/deep.scala"]), "test",
+                 "How does the writer flush rows?", vector.tobytes()))
+            connection.commit()
+        service.embedding_service = FakeEmbedding(vector)
+        chat = RecordingChat({
+            "scip-obligation-plan": "C1: prove the flush path",
+            "scip-route-family-select": _first_family_reply,
+            "completion": "The helper flushes.",
+        })
+        diagnostics: dict = {}
+        asyncio.run(service._ask_compact(
+            "How does the writer flush rows?", source=SOURCE, notes=(),
+            diagnostics=diagnostics, ask_chat=chat,
+            trace=lambda *args, **kwargs: None, phase_timings={},
+            question_vector=vector))
+
+        compact = diagnostics["compact"]
+        assert compact["embedding_calls"] == 0
+        assert service.embedding_service.calls == 0
+        assert compact["clew_matches"] >= 1
+    def test_dispatch_shares_the_vector_and_owns_no_notes(self):
+        module_source = inspect.getsource(service_analysis)
+        assert module_source.count("ask_pipeline") == 1
+        gate = module_source.index("ask_pipeline")
+        dispatch = module_source[gate:gate + 600]
+        assert "_ask_compact(" in dispatch
+        assert "notes=()" in dispatch
+        assert "question_vector=_question_vector" in dispatch
+        assert "notes=notes" not in dispatch
+        assert gate < module_source.index(
+            "_catalog_docs = catalog_positioning_documents")

@@ -521,6 +521,99 @@ def lexical_clew_matches(conn: "Connection", question: str, *,
         scored.append(ClewMatch(clew=clew, similarity=score))
     scored.sort(key=lambda match: (-match.similarity, match.clew.id))
     return scored[:top_k]
+
+
+def scoped_clew_candidate_ids(
+        conn: "Connection", lexical_matches: list[ClewMatch],
+        structural_matches: list[ClewMatch], *, source_name: str,
+        lexical_limit: int = 1024, structural_limit: int = 128,
+) -> tuple[str, ...]:
+    """Bound vector reads to question text plus positioned SCIP routes."""
+    selected: list[str] = []
+    for match in lexical_matches:
+        if match.similarity <= 0.0:
+            continue
+        if match.clew.id not in selected:
+            selected.append(match.clew.id)
+        if len(selected) >= max(lexical_limit, 0):
+            break
+
+    entries: list[str] = []
+    for match in structural_matches:
+        for name in (match.clew.entry_symbol, *match.clew.route):
+            if name and name not in entries:
+                entries.append(name)
+            if len(entries) >= max(structural_limit, 0):
+                break
+        if len(entries) >= max(structural_limit, 0):
+            break
+
+    neighbor_capacity = max(structural_limit - len(entries), 0)
+    has_scip_graph = bool(conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='scip_symbols'"
+    ).fetchone())
+    if neighbor_capacity and entries and has_scip_graph:
+        root_ids: set[str] = set()
+        for start in range(0, len(entries), 300):
+            chunk = entries[start:start + 300]
+            marks = ",".join("?" * len(chunk))
+            root_ids.update(row[0] for row in conn.execute(
+                "SELECT canonical_id FROM scip_symbols WHERE source_name=? "
+                f"AND qualified_name IN ({marks}) AND canonical_id NOT GLOB ?",
+                [source_name, *chunk, "local *"]))
+        neighbor_ranks: dict[str, int] = {}
+        ordered_roots = sorted(root_ids)
+        for start in range(0, len(ordered_roots), 300):
+            chunk = ordered_roots[start:start + 300]
+            marks = ",".join("?" * len(chunk))
+            edge_limit = max(neighbor_capacity * 8, neighbor_capacity)
+            for caller, callee, _file, _line in conn.execute(
+                    "SELECT caller_canonical_id,callee_canonical_id,file,line "
+                    "FROM scip_edges WHERE edge_type IN ('call','type_ref','implements') "
+                    f"AND (caller_canonical_id IN ({marks}) OR callee_canonical_id IN ({marks})) "
+                    "ORDER BY file,line,caller_canonical_id,callee_canonical_id LIMIT ?",
+                    [*chunk, *chunk, edge_limit]):
+                if callee in root_ids and caller not in root_ids:
+                    neighbor_ranks.setdefault(caller, 0)
+                if caller in root_ids and callee not in root_ids:
+                    neighbor_ranks.setdefault(callee, 1)
+        neighbor_rows: dict[str, str] = {}
+        neighbor_ids = sorted(neighbor_ranks,
+                              key=lambda canonical: (neighbor_ranks[canonical], canonical))
+        for start in range(0, len(neighbor_ids), 300):
+            chunk = neighbor_ids[start:start + 300]
+            marks = ",".join("?" * len(chunk))
+            for canonical, qualified, file in conn.execute(
+                    "SELECT canonical_id,qualified_name,file FROM scip_symbols "
+                    f"WHERE source_name=? AND canonical_id IN ({marks}) "
+                    "AND canonical_id NOT GLOB ?",
+                    [source_name, *chunk, "local *"]):
+                normalized = "/" + str(file).lower().strip("/")
+                if not any(part in normalized for part in (
+                        "/test/", "/tests/", "/benchmark/", "/benchmarks/",
+                        "/target/", "/generated/")):
+                    neighbor_rows[canonical] = qualified
+        for canonical in neighbor_ids:
+            qualified = neighbor_rows.get(canonical)
+            if qualified and qualified not in entries:
+                entries.append(qualified)
+            if len(entries) >= max(structural_limit, 0):
+                break
+
+    ids_by_entry: dict[str, list[str]] = {}
+    for start in range(0, len(entries), 300):
+        chunk = entries[start:start + 300]
+        marks = ",".join("?" * len(chunk))
+        for clew_id, entry_symbol in conn.execute(
+                "SELECT id,entry_symbol FROM clews WHERE source_name=? "
+                f"AND entry_symbol IN ({marks}) ORDER BY entry_symbol,id",
+                [source_name, *chunk]):
+            ids_by_entry.setdefault(str(entry_symbol), []).append(str(clew_id))
+    for entry in entries:
+        for clew_id in ids_by_entry.get(entry, ()):
+            if clew_id not in selected:
+                selected.append(clew_id)
+    return tuple(selected)
 def pseudo_semantic_clew_matches(conn: "Connection", question: str, *,
                                  source_name: str, top_k: int = 12,
                                  seed_k: int = 32) -> list[ClewMatch]:

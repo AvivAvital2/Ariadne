@@ -2148,4 +2148,79 @@ def test_obligation_reference_closure_labels_incoming_calls_as_called_by(conn):
                     if citation.qualified_name == "pkg.Caller.invokeTarget")
     assert incoming.parent_qualified_name == "pkg.Target.execute"
     assert incoming.relation == "called_by"
+def test_nested_execution_enclosure_bridge_recovers_constructor_and_outer_entry(conn):
+    from library.structural_assembly import nested_execution_enclosure_bridges
+
+    outer = "pkg.Executor"
+    nested = "pkg.Executor.BatchIterator"
+    selected = "nested-emit"
+    constructor = "nested-init"
+    worker = "outer-process"
+    entry = "outer-execute"
+    noise = "other-process"
+    _symbol(conn, "outer-owner", file="pkg/executor.py", line_start=1,
+            qn=outer, parent="pkg")
+    _symbol(conn, "nested-owner", file="pkg/executor.py", line_start=5,
+            qn=nested, parent=outer)
+    _edge(conn, "outer-owner", "nested-owner", line=5,
+          file="pkg/executor.py", edge_type="contains")
+    _symbol(conn, selected, file="pkg/executor.py", line_start=40,
+            qn="pkg.Executor.BatchIterator.emit", parent=nested)
+    _symbol(conn, constructor, file="pkg/executor.py", line_start=30,
+            qn="pkg.Executor.BatchIterator.<init>", parent=nested)
+    _symbol(conn, worker, file="pkg/executor.py", line_start=20,
+            qn="pkg.Executor.process", parent=outer)
+    _symbol(conn, entry, file="pkg/executor.py", line_start=10,
+            qn="pkg.Executor.execute", parent=outer)
+    _symbol(conn, noise, file="other/worker.py", line_start=10,
+            qn="pkg.Other.process", parent="pkg.Other")
+    _edge(conn, worker, constructor, line=24, file="pkg/executor.py")
+    _edge(conn, entry, worker, line=14, file="pkg/executor.py")
+    _edge(conn, noise, constructor, line=12, file="other/worker.py")
+    conn.commit()
+
+    citations = nested_execution_enclosure_bridges(
+        conn, ("pkg.Executor.BatchIterator.emit",), source="src1")
+
+    assert [(citation.qualified_name, citation.parent_qualified_name,
+             citation.relation, citation.stop_reason) for citation in citations] == [
+        ("pkg.Executor.process", "pkg.Executor.BatchIterator.<init>",
+         "called_by", "selected_nested_constructor_caller"),
+        ("pkg.Executor.execute", "pkg.Executor.process",
+         "called_by", "selected_nested_execution_entry"),
+    ]
+def test_nested_execution_enclosure_bridge_requires_a_direct_constructor_call(conn):
+    from library.structural_assembly import nested_execution_enclosure_bridges
+
+    _symbol(conn, "selected", file="pkg/worker.py", line_start=30,
+            qn="pkg.Worker.Nested.emit", parent="pkg.Worker.Nested")
+    _symbol(conn, "caller", file="pkg/worker.py", line_start=10,
+            qn="pkg.Worker.execute", parent="pkg.Worker")
+    conn.commit()
+
+    assert nested_execution_enclosure_bridges(
+        conn, ("pkg.Worker.Nested.emit",), source="src1") == ()
+def test_nested_execution_enclosure_bridge_requires_compiler_ownership(conn):
+    from library.structural_assembly import nested_execution_enclosure_bridges
+
+    outer = "pkg.Worker"
+    nested = "pkg.Worker.Nested"
+    _symbol(conn, "outer-owner", file="pkg/worker.py", line_start=1,
+            qn=outer, parent="pkg")
+    _symbol(conn, "nested-owner", file="pkg/worker.py", line_start=5,
+            qn=nested, parent=outer)
+    _symbol(conn, "selected", file="pkg/worker.py", line_start=30,
+            qn="pkg.Worker.Nested.emit", parent=nested)
+    _symbol(conn, "constructor", file="pkg/worker.py", line_start=20,
+            qn="pkg.Worker.Nested.<init>", parent=nested)
+    _symbol(conn, "worker", file="pkg/worker.py", line_start=10,
+            qn="pkg.Worker.process", parent=outer)
+    _symbol(conn, "entry", file="pkg/worker.py", line_start=7,
+            qn="pkg.Worker.execute", parent=outer)
+    _edge(conn, "worker", "constructor", line=12, file="pkg/worker.py")
+    _edge(conn, "entry", "worker", line=8, file="pkg/worker.py")
+    conn.commit()
+
+    assert nested_execution_enclosure_bridges(
+        conn, ("pkg.Worker.Nested.emit",), source="src1") == ()
 

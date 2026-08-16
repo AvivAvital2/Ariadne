@@ -635,6 +635,95 @@ def qualified_caller_fanout(
             per_root=child_per_caller, depth=2,
             recursive_per_root=4, max_recursive_total=24))
     return tuple(citations)
+def nested_execution_enclosure_bridges(
+        conn: "Connection", roots, *, source: str) -> tuple[StructuralCitation, ...]:
+    """Bridge a selected nested member to one proven enclosing execution path.
+
+    A selected method of a nested iterator or executor can explain row-level work while
+    omitting the outer method that constructs that executor.  This adds a bridge only
+    when SCIP proves the exact two-call handoff:
+
+        outer entry -> outer worker -> nested constructor
+
+    Both calls must be in the same immediate owner and source file.  Ambiguous or
+    cross-owner construction remains absent rather than guessed.
+    """
+    names = tuple(dict.fromkeys(str(root) for root in roots if root))
+    if not names:
+        return ()
+    selected = []
+    for chunk in _chunks(list(names)):
+        marks = ",".join("?" * len(chunk))
+        for row in conn.execute(
+                f"SELECT qualified_name,file,parent_qualified_name FROM scip_symbols "
+                f"WHERE source_name=? AND qualified_name IN ({marks}) "
+                "AND canonical_id NOT GLOB ? ORDER BY qualified_name,canonical_id",
+                [source, *chunk, "local *"]):
+            name, file, nested_owner = (str(row[0]), str(row[1]), str(row[2] or ""))
+            if nested_owner and not _nonproduction_path(file):
+                selected.append((name, file, nested_owner))
+
+    citations = []
+    seen = set()
+    for _name, root_file, nested_owner in selected:
+        owner_rows = list(conn.execute("SELECT nested.parent_qualified_name FROM scip_symbols AS nested WHERE nested.source_name=? AND nested.qualified_name=? AND nested.file=? AND nested.canonical_id NOT GLOB ? AND EXISTS (SELECT 1 FROM scip_symbols AS outer JOIN scip_edges AS ownership ON ownership.caller_canonical_id=outer.canonical_id AND ownership.callee_canonical_id=nested.canonical_id AND ownership.edge_type='contains' WHERE outer.source_name=nested.source_name AND outer.qualified_name=nested.parent_qualified_name) ORDER BY nested.canonical_id", (source, nested_owner, root_file, 'local *')))
+        outer_owners = {str(row[0] or "") for row in owner_rows if row[0]}
+        if len(outer_owners) != 1:
+            continue
+        outer_owner = next(iter(outer_owners))
+        constructor_name = f"{nested_owner}.<init>"
+        workers = list(conn.execute(
+            "SELECT DISTINCT worker.qualified_name,worker.file,worker.line_start,"
+            "worker.line_end,constructor.qualified_name,edge.file,edge.line "
+            "FROM scip_symbols AS constructor "
+            "JOIN scip_edges AS edge ON edge.callee_canonical_id=constructor.canonical_id "
+            "AND edge.edge_type='call' "
+            "JOIN scip_symbols AS worker ON worker.canonical_id=edge.caller_canonical_id "
+            "WHERE constructor.source_name=? AND constructor.qualified_name=? "
+            "AND constructor.file=? AND worker.source_name=? "
+            "AND worker.parent_qualified_name=? AND worker.file=? "
+            "AND constructor.canonical_id NOT GLOB ? AND worker.canonical_id NOT GLOB ? "
+            "ORDER BY worker.qualified_name,edge.file,edge.line,worker.canonical_id",
+            (source, constructor_name, root_file, source, outer_owner, root_file,
+             "local *", "local *")))
+        if len(workers) != 1:
+            continue
+        worker_name, worker_file, worker_start, worker_end, constructor, worker_site_file, worker_site_line = workers[0]
+        entries = list(conn.execute(
+            "SELECT DISTINCT entry.qualified_name,entry.file,entry.line_start,entry.line_end,"
+            "edge.file,edge.line "
+            "FROM scip_symbols AS worker "
+            "JOIN scip_edges AS edge ON edge.callee_canonical_id=worker.canonical_id "
+            "AND edge.edge_type='call' "
+            "JOIN scip_symbols AS entry ON entry.canonical_id=edge.caller_canonical_id "
+            "WHERE worker.source_name=? AND worker.qualified_name=? AND worker.file=? "
+            "AND entry.source_name=? AND entry.parent_qualified_name=? AND entry.file=? "
+            "AND worker.canonical_id NOT GLOB ? AND entry.canonical_id NOT GLOB ? "
+            "ORDER BY entry.qualified_name,edge.file,edge.line,entry.canonical_id",
+            (source, worker_name, worker_file, source, outer_owner, root_file,
+             "local *", "local *")))
+        if len(entries) != 1:
+            continue
+        entry_name, entry_file, entry_start, entry_end, entry_site_file, entry_site_line = entries[0]
+        bridge_rows = (
+            (str(worker_name), str(worker_file), int(worker_start), int(worker_end),
+             str(constructor), str(worker_site_file), int(worker_site_line),
+             "selected_nested_constructor_caller"),
+            (str(entry_name), str(entry_file), int(entry_start), int(entry_end),
+             str(worker_name), str(entry_site_file), int(entry_site_line),
+             "selected_nested_execution_entry"),
+        )
+        for qualified, file, start, end, parent, site_file, site_line, reason in bridge_rows:
+            key = (qualified, parent, site_file, site_line)
+            if key in seen:
+                continue
+            seen.add(key)
+            citations.append(StructuralCitation(
+                qualified_name=qualified, file=file, line_start=start,
+                line_end=end, source_name=source, relation="called_by", hop=0,
+                call_site_file=site_file, call_site_line=site_line,
+                stop_reason=reason, parent_qualified_name=parent))
+    return tuple(citations)
 def qualified_reverse_reference_fanout(
         conn: "Connection", roots, *, source: str, question: str = "",
         per_root: int = 2, owner_per_root: int = 1,

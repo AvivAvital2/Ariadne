@@ -130,17 +130,24 @@ class EmbeddingService:
 
     async def __aexit__(self, *_: object) -> None:
         await self.close()
-
     async def embed(self, text: str) -> NDArray[np.float32]:
         """Generate an embedding for a single text.
 
-        Args:
-            text: The text to embed.
-
-        Returns:
-            A numpy array of shape (dimensions,) containing the embedding.
-        """
+    Identical texts within one service lifetime resolve to one
+    provider call: the ask-path stages (document search, catalog
+    positioning, clew recall, compact dispatch) all embed the same
+    question, and only the first may spend.
+    """
+        memo = getattr(self, "_embed_memo", None)
+        if memo is None:
+            memo = self._embed_memo = {}
+        cached = memo.get(text)
+        if cached is not None:
+            return cached
         embeddings = await self.embed_batch([text])
+        memo[text] = embeddings[0]
+        if len(memo) > 32:
+            memo.pop(next(iter(memo)))
         return embeddings[0]
 
     async def embed_batch(self, texts: list[str]) -> list[NDArray[np.float32]]:

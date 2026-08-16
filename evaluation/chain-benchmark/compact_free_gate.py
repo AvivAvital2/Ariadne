@@ -386,6 +386,10 @@ def main() -> int:
     parser.add_argument("--model", default="claude-opus-4-8")
     parser.add_argument("--question-vectors", default=str(
         HERE / "question-embeddings.npz"))
+    parser.add_argument("--cohorts", default=str(
+        HERE / "anchor-cohorts-baseline.json"), help=(
+        "frozen per-anchor first-loss cohorts; progression is reported "
+        "against these and anchors are never re-bucketed"))
     parser.add_argument("--deep", action="store_true", help=(
         "record the full compact boundary trace and join reviewed "
         "anchors into per-anchor lifecycle rows"))
@@ -408,12 +412,16 @@ def main() -> int:
         """The cached live question vector; embed() spends nothing here.
 
         The paid run embeds the question once instead — that single call
-        is counted in the projected cost below."""
+        is counted in the projected cost below. Recorded texts prove the
+        ask path only ever embeds one unique string (the memo on the
+        real EmbeddingService turns repeats into one provider call)."""
 
         def __init__(self, vector):
             self.vector = vector
+            self.texts: list = []
 
         async def embed(self, text):
+            self.texts.append(text)
             return self.vector
     gold = json.loads(Path(args.gold).read_text())
     price = json.loads(Path(args.price_config).read_text())[
@@ -434,9 +442,10 @@ def main() -> int:
         trace = load_trace(trace_dir, question_id)
         question = str(trace["question"])
         source = str(trace["source"])
-        service._embedding_service = _CachedEmbedding(
+        fake_embedding = _CachedEmbedding(
             np.asarray(question_vectors[f"q{question_id}"],
                        dtype=np.float32))
+        service._embedding_service = fake_embedding
         plan_reply = recorded_reply(trace, "scip-obligation-plan")
         identities = [identity
                       for claim in gold_question.get("claims", ())
@@ -455,30 +464,87 @@ def main() -> int:
         diagnostics: dict = {}
         chat = GateChat(plan_reply, select_fn)
 
-        async def _drive():
-            return await service._ask_compact(
-                question, source=source, notes=(),
-                diagnostics=diagnostics, ask_chat=chat,
-                trace=lambda *args, **kwargs: None, phase_timings={},
-                deep_trace=bool(args.deep))
-
         # The selector callback needs the recorded cards; they are
-        # written into diagnostics before the selector call fires.
-        cover_note["cards"] = []
+        # written into diagnostics before the selector call fires. In
+        # public-ask mode the compact diagnostics dict is discovered
+        # through the interceptor's holder.
+        compact_holder: dict = {}
 
         class _CardsProxy:
+            """Live view of the CURRENT run's diagnostics: the selector
+            callback fires mid-run, so the holder is pointed at each
+            run's diagnostics dict before that run starts."""
+
+            def _compact(self):
+                live = compact_holder.get("diagnostics") or {}
+                return live.get("compact") or {}
+
             def __getitem__(self, index):
-                return diagnostics["compact"]["cards"][index]
+                return self._compact()["cards"][index]
 
             def __iter__(self):
-                return iter(diagnostics["compact"].get("cards", ()))
+                return iter(self._compact().get("cards", ()))
 
             def __len__(self):
-                return len(diagnostics["compact"].get("cards", ()))
+                return len(self._compact().get("cards", ()))
 
         cover_note["cards"] = _CardsProxy()
-        response = asyncio.run(_drive())
-        compact = diagnostics.get("compact", {})
+
+        # PUBLIC PATH: the question runs through service.ask() with the
+        # recorded production flag; provider calls are intercepted at
+        # llm.chat_complete, so any hidden cascade call would surface
+        # as an unexpected phase.
+        import llm as llm_module
+
+        import ariadne_mcp.service_analysis as service_analysis_module
+
+        service.config._config["ask_pipeline"] = "compact"
+        original_chat_complete = llm_module.chat_complete
+        original_compact = service_analysis_module._ask_compact
+
+        async def intercepted_chat(messages, **kwargs):
+            return await chat(messages=messages, **kwargs)
+
+        async def traced_compact(self, *call_args, **call_kwargs):
+            call_kwargs.setdefault("deep_trace", bool(args.deep))
+            if isinstance(call_kwargs.get("diagnostics"), dict):
+                compact_holder["diagnostics"] = call_kwargs[
+                    "diagnostics"]
+            result = await original_compact(
+                self, *call_args, **call_kwargs)
+            compact_holder["compact"] = (
+                call_kwargs.get("diagnostics") or {}).get("compact")
+            return result
+
+        llm_module.chat_complete = intercepted_chat
+        type(service)._ask_compact = traced_compact
+        try:
+            response = asyncio.run(service.ask(
+                question, source=source))
+        finally:
+            llm_module.chat_complete = original_chat_complete
+            type(service)._ask_compact = original_compact
+            service.config._config.pop("ask_pipeline", None)
+        compact = (compact_holder.get("compact")
+                   or response.graph_diagnostics.get("compact") or {})
+
+        # Equivalence: the direct compact invocation must expose the
+        # same candidate surface the public path exposed.
+        direct_diagnostics: dict = {}
+        direct_chat = GateChat(plan_reply, select_fn)
+        compact_holder["diagnostics"] = direct_diagnostics
+        asyncio.run(original_compact(
+            service, question, source=source, notes=(),
+            diagnostics=direct_diagnostics, ask_chat=direct_chat,
+            trace=lambda *a, **k: None, phase_timings={},
+            deep_trace=bool(args.deep),
+            question_vector=np.asarray(
+                question_vectors[f"q{question_id}"], dtype=np.float32)))
+        direct_compact = direct_diagnostics.get("compact", {})
+        equivalent_surface = (
+            direct_compact.get("cards") == compact.get("cards")
+            and direct_chat.prompts.get("scip-route-family-select")
+            == chat.prompts.get("scip-route-family-select"))
 
         claims, surface = grade_question(gold_question, compact, chat)
         selector_tokens = tokens(
@@ -546,6 +612,10 @@ def main() -> int:
 
         checks = {
             "compact_invoked": compact.get("pipeline") == "compact",
+            "public_ask_used": True,
+            "single_question_embedding":
+                len(set(fake_embedding.texts)) <= 1,
+            "direct_public_equivalent": equivalent_surface,
             "phases_pinned": chat.phases == PINNED_PHASES,
             "no_forbidden_phase": not FORBIDDEN_PHASES.intersection(
                 chat.phases),
@@ -666,6 +736,60 @@ def main() -> int:
         print("baseline reproduction:", {
             key: value["passed"]
             for key, value in report["baseline_reproduction"].items()})
+
+    if args.deep:
+        frozen = json.loads(Path(args.cohorts).read_text())
+        stage_position = {stage: index for index, stage
+                          in enumerate(LIFECYCLE_STAGES)}
+        stage_position["through"] = len(LIFECYCLE_STAGES)
+
+        def anchor_key(question_id, row):
+            return (int(question_id), str(row["anchor"]),
+                    str(row["qualified_name"]))
+
+        current = {}
+        for question_id, rows in lifecycles_by_question.items():
+            for row in rows:
+                key = anchor_key(question_id, row)
+                stage = row["first_loss"] or "through"
+                current.setdefault(key, []).append(stage)
+        frozen_keys: dict = {}
+        for row in frozen["anchors"]:
+            key = (int(row["question"]), str(row["anchor"]),
+                   str(row["qualified_name"]))
+            frozen_keys.setdefault(key, []).append(
+                row["original_first_loss"])
+        if {k: len(v) for k, v in frozen_keys.items()} != {
+                k: len(v) for k, v in current.items()}:
+            raise SystemExit(
+                "cohort keys drifted from the frozen baseline — "
+                "anchors must never be re-bucketed")
+        progression: dict = {}
+        for key, originals in frozen_keys.items():
+            for original, now in zip(sorted(originals),
+                                     sorted(current[key])):
+                bucket = progression.setdefault(original, {
+                    "advanced": 0, "blocked": 0, "regressed": 0,
+                    "advanced_anchors": [], "regressed_anchors": []})
+                delta = (stage_position[now]
+                         - stage_position[original])
+                if delta > 0:
+                    bucket["advanced"] += 1
+                    bucket["advanced_anchors"].append(
+                        f"q{key[0]}:{key[1]}->{now}")
+                elif delta < 0:
+                    bucket["regressed"] += 1
+                    bucket["regressed_anchors"].append(
+                        f"q{key[0]}:{key[1]}->{now}")
+                else:
+                    bucket["blocked"] += 1
+        report["cohort_progression"] = {
+            "frozen_from": frozen.get("frozen_from_commit"),
+            "cohorts": progression}
+        print("cohort progression:", {
+            cohort: {k: v for k, v in bucket.items()
+                     if isinstance(v, int)}
+            for cohort, bucket in sorted(progression.items())})
 
     claim_records = [
         claim for record in report["questions"]

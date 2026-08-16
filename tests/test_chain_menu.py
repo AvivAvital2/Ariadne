@@ -2133,3 +2133,49 @@ def test_module_menu_preserves_ownership_relation_wording():
 
     assert "-contains->" in rendered
     assert "-calls->" not in rendered
+def test_hydrate_nested_execution_enclosure_retains_only_proven_bridge_bodies(library, monkeypatch):
+    from library.chain_bundle import ChainBundle
+    from library.chain_menu import (
+        Selection, _occurrence_key, hydrate_nested_execution_enclosure)
+    from library.structural_assembly import StructuralCitation
+
+    selected = _hop("pkg.Engine.Nested.emit", file="engine.py", line=30)
+    base_selection = Selection(
+        symbols=[selected.citation.qualified_name], route_ids=("R1",),
+        section_ids=("S1",), occurrence_keys=(_occurrence_key(selected),))
+    worker_citation = StructuralCitation(
+        qualified_name="pkg.Engine.process", file="engine.py",
+        line_start=20, line_end=28, source_name=SOURCE, relation="called_by",
+        hop=0, call_site_file="engine.py", call_site_line=24,
+        stop_reason="selected_nested_constructor_caller",
+        parent_qualified_name="pkg.Engine.Nested.<init>")
+    entry_citation = StructuralCitation(
+        qualified_name="pkg.Engine.execute", file="engine.py",
+        line_start=10, line_end=18, source_name=SOURCE, relation="called_by",
+        hop=0, call_site_file="engine.py", call_site_line=14,
+        stop_reason="selected_nested_execution_entry",
+        parent_qualified_name="pkg.Engine.process")
+    worker_hop = selected.__class__(
+        citation=worker_citation, document_id=None, title=None, evidence=None)
+    entry_hop = selected.__class__(
+        citation=entry_citation, document_id=None, title=None, evidence=None)
+    monkeypatch.setattr(
+        "library.structural_assembly.nested_execution_enclosure_bridges",
+        lambda _conn, roots, **kwargs: (
+            worker_citation, entry_citation) if tuple(roots) == (
+                "pkg.Engine.Nested.emit",) else ())
+    monkeypatch.setattr(
+        "library.chain_bundle.curate_bundle",
+        lambda *_args, **_kwargs: ChainBundle(
+            hops=(worker_hop, entry_hop), source_gaps=()))
+
+    merged, selection, required_bodies = hydrate_nested_execution_enclosure(
+        library, (selected,), base_selection, source=SOURCE)
+
+    assert [hop.citation.qualified_name for hop in merged] == [
+        "pkg.Engine.Nested.emit", "pkg.Engine.process", "pkg.Engine.execute"]
+    assert selection.route_ids == ("R1",)
+    assert selection.section_ids == ("S1",)
+    assert selection.symbols == [
+        "pkg.Engine.Nested.emit", "pkg.Engine.process", "pkg.Engine.execute"]
+    assert required_bodies == ("pkg.Engine.process", "pkg.Engine.execute")

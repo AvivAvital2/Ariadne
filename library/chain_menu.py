@@ -643,7 +643,8 @@ def reference_paths_to_bridges(references, bridges):
             pairs.add(pair)
             retained.append(citation)
     return tuple(retained)
-def hydrate_selected_hops(library, hops, selection: Selection, *,
+def hydrate_selected_hops(library, hops, selection: Selection,
+                          materialize_context_bodies: bool = True, *,
                           source: str, source_root: str | None,
                           definition_body_symbols=None,
                           definition_body_query=None,
@@ -741,6 +742,16 @@ def hydrate_selected_hops(library, hops, selection: Selection, *,
                   for citation in reverse_references),
                 *(citation.qualified_name
                   for citation in reverse_consumer_references))))
+            if not materialize_context_bodies:
+                # The exact-route path deliberately sends only model-selected
+                # definition bodies (plus compiler-proven implementations and
+                # branch siblings).  Reference closure still supplies cited
+                # hops, but must not silently turn into extra body material.
+                materialized_body_symbols = tuple(dict.fromkeys((
+                    *body_symbols,
+                    *implementation_symbols,
+                    *branch_body_symbols,
+                )))
             discovered = (
                 *dependencies, *implementation_dependencies,
                 *branch_citations, *references, *reverse_references,
@@ -758,10 +769,56 @@ def hydrate_selected_hops(library, hops, selection: Selection, *,
         definition_body_symbols=materialized_body_symbols,
         definition_body_query=definition_body_query)
     return tuple(bundle.hops), tuple(bundle.source_gaps)
+def hydrate_nested_execution_enclosure(
+        library, hydrated_hops, selection: Selection, *, source: str):
+    """Retain an exact outer execution handoff for a selected nested member.
+
+    This is additive: it keeps the model-selected route and adds no evidence unless
+    :func:`nested_execution_enclosure_bridges` proves a unique constructor handoff
+    and outer entry in SCIP.  The returned body symbols are the two new bridge
+    definitions; callers must request only those bodies, not a whole owner.
+    """
+    roots = tuple(dict.fromkeys(str(name) for name in selection.symbols if name))
+    if not roots:
+        return tuple(hydrated_hops), selection, ()
+    connection_provider = getattr(library, "_conn_provider", None)
+    if connection_provider is None:
+        return tuple(hydrated_hops), selection, ()
+    from library.chain_bundle import curate_bundle
+    from library.structural_assembly import nested_execution_enclosure_bridges
+
+    with connection_provider.acquire() as conn:
+        citations = nested_execution_enclosure_bridges(
+            conn, roots, source=source)
+    if not citations:
+        return tuple(hydrated_hops), selection, ()
+    bundle = curate_bundle(
+        library, citations, source=source, materialize_source=False,
+        fetch_documents=False)
+    merged = list(hydrated_hops)
+    positions = {
+        _occurrence_key(hop): index for index, hop in enumerate(merged)}
+    retained_occurrences = list(selection.occurrence_keys)
+    for hop in bundle.hops:
+        key = _occurrence_key(hop)
+        if key not in positions:
+            positions[key] = len(merged)
+            merged.append(hop)
+        if key not in retained_occurrences:
+            retained_occurrences.append(key)
+    bridge_symbols = tuple(dict.fromkeys(
+        citation.qualified_name for citation in citations))
+    retained = Selection(
+        symbols=list(dict.fromkeys((*selection.symbols, *bridge_symbols))),
+        sections=list(selection.sections), unknown=selection.unknown,
+        route_ids=selection.route_ids, section_ids=selection.section_ids,
+        occurrence_keys=tuple(retained_occurrences))
+    return tuple(merged), retained, bridge_symbols
 
 
 def complete_selection_with_body_dependencies(
-        selection: Selection, hydrated_hops, body_symbols, *,
+        selection: Selection, hydrated_hops, body_symbols,
+        retain_reference_context: bool = True, *,
         max_per_body: int = 4) -> Selection:
     # Retain selected-body dependencies, one dispatch layer, and proven owners.
     selected_bodies = tuple(dict.fromkeys(body_symbols or ()))
@@ -779,11 +836,13 @@ def complete_selection_with_body_dependencies(
         if (citation.stop_reason == "selected_route_fanout"
                 and citation.relation in ("calls", "implements")):
             by_calls.setdefault(citation.parent_qualified_name, []).append(hop)
-        elif (citation.stop_reason == "selected_reference"
+        elif (retain_reference_context
+              and citation.stop_reason == "selected_reference"
               and citation.relation == "references"):
             by_references.setdefault(
                 citation.parent_qualified_name, []).append(hop)
-        elif (citation.stop_reason == "selected_reference_caller"
+        elif (retain_reference_context
+              and citation.stop_reason == "selected_reference_caller"
               and citation.relation == "referenced_by"):
             by_reverse_reference_target.setdefault(
                 citation.parent_qualified_name, []).append(hop)
@@ -1779,7 +1838,8 @@ def resolve_obligation_route_selection(
 
 def retain_obligation_routes(
         menu: RouteMenu, selection: Selection, bindings, *, question: str,
-        obligations: str = "", max_per_obligation: int = 1) -> Selection:
+        obligations: str = "", max_per_obligation: int = 1,
+        require_target_overlap: bool = False) -> Selection:
     """Add a bounded connected route for uncovered obligation targets.
 
     Target binding is a safety net after explicit route selection: the
@@ -1820,6 +1880,8 @@ def retain_obligation_routes(
                 target_overlap = max((
                     len(query_tokens.intersection(_semantic_tokens(target)))
                     for target in hits), default=0)
+                if require_target_overlap and target_overlap == 0:
+                    continue
                 route_overlap = len(query_tokens.intersection(
                     set().union(*(_semantic_tokens(name) for name in route))))
                 ranked.append((

@@ -35,19 +35,19 @@ Carries no retrieved-document block. It used to append ``Documentation:\n{contex
     coordinates, so the model is told to lean on them.
     """
     return (
-        'Answer the question using the CALL CHAIN below. The chain is the only evidence '
+        'Answer the question using the COMPILER EVIDENCE GRAPH below. The graph is the only evidence '
         'you have. Each hop is a definition at the file and line shown, with a short '
         'description of what it does, followed by the site the index recorded there. '
         '"called at" is a call edge: that body invokes this definition. "referenced at" '
         'is a type reference: that body names this symbol, which is not evidence that it '
-        'runs, so do not describe a reference as a call. The file and line come from a '
+        'runs, so do not describe a reference as a call. "contained at" is an ownership edge and "implemented at" is an implementation edge; these are not evidence of invocation. The file and line come from a '
         'compiler-derived index and are exact; the descriptions are generated and may be '
         'imprecise, so lean on the structure and cite coordinates rather than repeating a '
         'description as fact. Walk the chain in order. For every decision or transformation, include short verbatim source excerpts that show the exact assignment, call, projection, condition, or return. Do not simplify or rewrite quoted source syntax. Cite file:line for every claim. If '
         'the chain does not show something, say so rather than inferring it. Never name a '
         'file:line that does not appear in the chain.\n\n'
         f'Question: {question}\n\n'
-        f'Call chain:\n{spine}'
+        f'Compiler evidence graph:\n{spine}'
         + (('\n\nWhere the chain forks too widely to show, and what the index knows '
             'about each:\n'
             + '\n'.join(f'- {note}' for note in notes)
@@ -58,6 +58,7 @@ Carries no retrieved-document block. It used to append ``Documentation:\n{contex
 #: Output tokens for the selection reply. It answers with numbers, so this is generous.
 MENU_MAX_TOKENS = 256
 CLEW_RECALL_POOL = 5000
+CLEW_EMBEDDING_CANDIDATE_POOL = 1024
 def _menu_prompt(question: str, menu: str, obligations: str = "") -> str:
     obligation_block = (("FIXED OBLIGATIONS\n" + obligations + "\n\n")
                         if obligations.strip() else "")
@@ -299,6 +300,71 @@ class AnalysisMixin:
         import os
 
         from ariadne_mcp.models import AskResponse
+        _scip_source = source or getattr(self.config, "default_source", None)
+        _precomputed_question_vector = None
+        _precomputed_clew_matches = []
+        _precomputed_clew_diagnostics = {"status": "not-run", "facets": []}
+        if _scip_source and self.embedding_service is not None:
+            _pre_search_clew_started = time.perf_counter()
+            _trace("pre_search_clew", "start")
+            from library.clews import (
+                lexical_clew_matches, nearest_clew_matches, scoped_clew_candidate_ids,
+                select_clew_matches,
+            )
+            from library.question_facets import extract_question_facets
+            _question_facets = extract_question_facets(question)
+            _precomputed_clew_diagnostics["facets"] = [
+                {"id": facet.id, "text": facet.exact_text, "kind": facet.kind,
+                 "roles": list(facet.roles)}
+                for facet in _question_facets
+            ]
+            with self.library._conn_provider.acquire() as _conn:
+                _has_precomputed_clews = _conn.execute(
+                    "SELECT 1 FROM clews WHERE source_name = ? "
+                    "AND embedding IS NOT NULL LIMIT 1",
+                    (_scip_source,),
+                ).fetchone() is not None
+            if _has_precomputed_clews:
+                try:
+                    _precomputed_question_vector = await self.embedding_service.embed(question)
+                except Exception as _precomputed_embedding_error:  # noqa: BLE001
+                    _precomputed_clew_diagnostics["error"] = str(
+                        _precomputed_embedding_error)[:300]
+                with self.library._conn_provider.acquire() as _conn:
+                    _precomputed_lexical = lexical_clew_matches(
+                        _conn, question, source_name=_scip_source,
+                        top_k=CLEW_EMBEDDING_CANDIDATE_POOL)
+                    _precomputed_ids = scoped_clew_candidate_ids(
+                        _conn, _precomputed_lexical, (), source_name=_scip_source,
+                        lexical_limit=CLEW_EMBEDDING_CANDIDATE_POOL)
+                    if _precomputed_question_vector is None:
+                        _precomputed_recalled = list(_precomputed_lexical)
+                        _precomputed_clew_diagnostics["stage"] = "lexical-clews"
+                    elif _precomputed_ids:
+                        import numpy as np
+                        _precomputed_recalled = nearest_clew_matches(
+                            _conn, np.asarray(_precomputed_question_vector, dtype=np.float32),
+                            source_name=_scip_source, top_k=CLEW_RECALL_POOL,
+                            min_similarity=-1.0, candidate_ids=_precomputed_ids)
+                        _precomputed_clew_diagnostics["stage"] = "nearest-scoped-clews"
+                    else:
+                        import numpy as np
+                        _precomputed_recalled = nearest_clew_matches(
+                            _conn, np.asarray(_precomputed_question_vector, dtype=np.float32),
+                            source_name=_scip_source, top_k=CLEW_RECALL_POOL,
+                            min_similarity=-1.0)
+                        _precomputed_clew_diagnostics["stage"] = "nearest-global-fallback"
+                _precomputed_selection = select_clew_matches(question, _precomputed_recalled)
+                _precomputed_clew_matches = _precomputed_selection.accepted
+                _precomputed_clew_diagnostics.update({
+                    "status": "selected",
+                    "recalled": len(_precomputed_recalled),
+                    "accepted": len(_precomputed_clew_matches),
+                    "rejected": len(_precomputed_selection.rejected),
+                    "embedding_candidates": len(_precomputed_ids),
+                })
+            _trace("pre_search_clew", "end",
+                   time.perf_counter() - _pre_search_clew_started)
         _search_started = time.perf_counter()
         _trace("search", "start")
 
@@ -348,7 +414,7 @@ class AnalysisMixin:
         _trace("chain_assembly", "start")
         _evidence = None
         _graph_diagnostics = {}
-        _question_vector = None
+        _question_vector = _precomputed_question_vector
         _coverage_plan = ""
         _citations: list = []
         _chain_files: list = []
@@ -370,6 +436,14 @@ class AnalysisMixin:
                         _question_vector = await self.embedding_service.embed(question)
                     except Exception as _embedding_error:  # noqa: BLE001 -- lexical fallback remains available
                         _logger.info("catalog positioning embedding skipped: %s", _embedding_error)
+                if str(self.config._config.get(
+                        "ask_pipeline", "cascade")) == "compact":
+                    return await self._ask_compact(
+                        question, source=_scip_source, notes=(),
+                        diagnostics=_graph_diagnostics,
+                        ask_chat=_ask_chat, trace=_trace,
+                        phase_timings=_phase_timings,
+                        question_vector=_question_vector)
                 _catalog_started = time.perf_counter()
                 _trace("catalog_positioning", "start")
                 _catalog_docs = []
@@ -399,12 +473,6 @@ class AnalysisMixin:
                 _clew_started = time.perf_counter()
                 _trace("clew_selection", "start")
                 _clew_matches: list = []
-                if str(self.config._config.get("ask_pipeline", "cascade")) == "compact":
-                    return await self._ask_compact(
-                        question, source=_scip_source, notes=notes,
-                        diagnostics=_graph_diagnostics,
-                        ask_chat=_ask_chat, trace=_trace,
-                        phase_timings=_phase_timings)
                 _obligation_route_targets = ()
                 _required_route_symbols = ()
                 _clew_diagnostics = {
@@ -430,7 +498,10 @@ class AnalysisMixin:
                                     _question_vector = None
                                     _coverage_plan = ""
                             with self.library._conn_provider.acquire() as _conn:
-                                if _question_vector is None:
+                                if _precomputed_clew_matches:
+                                    _clew_matches = list(_precomputed_clew_matches)
+                                    _clew_diagnostics.update(_precomputed_clew_diagnostics)
+                                elif _question_vector is None:
                                     _clew_diagnostics["stage"] = "lexical-clews"
                                     _clew_matches = lexical_clew_matches(
                                         _conn, question, source_name=_scip_source,
@@ -771,8 +842,10 @@ class AnalysisMixin:
                 except Exception as _route_embedding_error:
                     _logger.info("pre-scope route embedding skipped: %s", _route_embedding_error)
                 components = component_menu_for(graph, menu)
-                from library.chain_menu import guarded_component_scope, guarded_definition_body_selection, guarded_route_selection, obligation_definition_body_symbols, retain_obligation_target_occurrences
-                from library.selection_policy import signal_from_usage
+                from library.chain_menu import (
+                    retain_obligation_routes,
+                    retain_obligation_target_occurrences,
+                )
                 _obligation_route_targets = tuple(dict.fromkeys(
                     pair for match in _clew_matches
                     for pair in match.target_symbols))
@@ -810,16 +883,14 @@ class AnalysisMixin:
                     component_route_ids = resolve_component_selection(components, reply)
                     _post_walk["component_plan"] = str(reply or "").strip()[:1200]
                     _post_walk["component_routes"] = len(component_route_ids)
-                    menu, _component_decision = guarded_component_scope(
-                        menu, components, reply, _obligation_route_targets,
+                    _component_selection = retain_obligation_routes(
+                        menu, Selection(route_ids=tuple(component_route_ids)),
+                        _obligation_route_targets,
                         question=question, obligations=_coverage_plan,
-                        completion=signal_from_usage(
-                            _component_usage[-1] if _component_usage else None,
-                            max_tokens=MENU_MAX_TOKENS))
-                    _post_walk["component_decision"] = {
-                        "outcome": _component_decision["outcome"],
-                        "retained_route_ids": list(_component_decision["retained_route_ids"]),
-                        "dropped_route_ids": list(_component_decision["dropped_route_ids"])}
+                        require_target_overlap=True)
+                    component_route_ids = tuple(_component_selection.route_ids)
+                    if component_route_ids:
+                        menu = routes_for_modules(menu, component_route_ids)
                     if _selector_mode == "deterministic":
                         menu = scope_route_menu(menu, question, route_scores=_route_scores, required_symbols=_required_route_symbols)
                     route_scope_retained = len(menu.routes)
@@ -840,20 +911,32 @@ class AnalysisMixin:
                             ],
                             max_tokens=MENU_MAX_TOKENS, phase="scip-exact-route-select",
                             usage_sink=_route_usage)
-                    selection = guarded_route_selection(
-                        menu, route_reply, _obligation_route_targets, question=question,
-                        obligations=_coverage_plan,
-                        completion=signal_from_usage(
-                            _route_usage[-1] if _route_usage else None,
-                            max_tokens=MENU_MAX_TOKENS))
+                    selection = resolve_obligation_route_selection(menu, route_reply)
+                    selection = retain_obligation_routes(
+                        menu, selection, _obligation_route_targets,
+                        question=question, obligations=_coverage_plan,
+                        require_target_overlap=True)
                     _post_walk["exact_route_plan"] = str(route_reply or "").strip()[:1200]
                     if not selection.route_ids:
                         selection = all_route_selection(menu)
                     graph_selection = selection_for_graph_symbols(graph, selection.symbols, occurrence_keys = selection.occurrence_keys)
                     selection = merge_selections(selection, graph_selection)
-                    selection = retain_obligation_target_occurrences(
+                    _target_selection = retain_obligation_target_occurrences(
                         graph, selection, _obligation_route_targets)
+                    selection = merge_selections(selection, _target_selection)
                     selection = complete_route_selection(menu, selection, question)
+                    from library.chain_menu import hydrate_nested_execution_enclosure
+                    _execution_bridge_body_symbols = ()
+                    try:
+                        hops, selection, _execution_bridge_body_symbols = await asyncio.to_thread(
+                            hydrate_nested_execution_enclosure, self.library, tuple(hops), selection,
+                            source=_scip_source)
+                        if _execution_bridge_body_symbols:
+                            _post_walk["nested_execution_bridge_bodies"] = list(
+                                _execution_bridge_body_symbols)
+                    except Exception as _execution_bridge_error:
+                        _logger.info("nested execution enclosure skipped: %s",
+                                     _execution_bridge_error)
                     _section_scores = {}
                     try:
                         if _question_vector is None and self.embedding_service is not None:
@@ -900,39 +983,32 @@ class AnalysisMixin:
                                 ],
                                 max_tokens=128, phase="scip-body-select",
                                 usage_sink=_body_usage)
-                            _body_selection = guarded_definition_body_selection(
-                                _body_menu, _body_reply,
-                                completion=signal_from_usage(
-                                    _body_usage[-1] if _body_usage else None, max_tokens=128))
+                            _body_selection = resolve_definition_body_selection(
+                                _body_menu, _body_reply)
                             _post_walk["body_reply"] = str(_body_reply or "").strip()[:400]
                             if not _body_selection.symbols:
                                 _body_selection = all_definition_body_selection(_body_menu)
-                        _required_body_symbols = obligation_definition_body_symbols(
-                            _body_menu, _obligation_route_targets)
-                        _body_selection = complete_definition_body_selection(
-                            _body_menu, _body_selection,
-                            required_symbols=_required_body_symbols)
-                        from library.body_plan import derive_definition_body_plan
-                        _body_plan = derive_definition_body_plan(
-                            hops=hops,
-                            retained_symbols=tuple(selection.symbols),
-                            bindings=_obligation_route_targets)
+                        if _execution_bridge_body_symbols:
+                            _available_bridge_bodies = tuple(
+                                symbol for symbol in _execution_bridge_body_symbols
+                                if symbol in _body_menu.symbols.values())
+                            _body_selection = _body_selection.__class__(
+                                symbols=tuple(dict.fromkeys((
+                                    *_body_selection.symbols, *_available_bridge_bodies))),
+                                unknown=_body_selection.unknown)
                         selected_body_symbols = list(_body_selection.symbols)
-                        _post_walk["body_plan"] = {
-                            "required": len(_body_plan.required),
-                            "optional": len(_body_plan.optional),
-                            "selected": len(_body_plan.selected),
-                            "gaps": list(_body_plan.gaps),
-                            "cap_events": len(_body_plan.cap_events)}
                         _post_walk["selected_bodies"] = len(selected_body_symbols)
                         source_root = str(
                             self.config.get_all_source_paths().get(_scip_source) or "") or None
                         selected_hops, selected_source_gaps = hydrate_selected_hops(
                             self.library, hops, selection, source=_scip_source,
                             source_root=source_root,
-                            definition_body_symbols=tuple(selected_body_symbols), reference_query = question)
+                            definition_body_symbols=tuple(selected_body_symbols),
+                            reference_query=question,
+                            materialize_context_bodies=False)
                         selection = complete_selection_with_body_dependencies(
-                            selection, selected_hops, selected_body_symbols)
+                            selection, selected_hops, selected_body_symbols,
+                            retain_reference_context=False)
                         fetched = fetch_selected(self.library, selection, selected_hops)
                         from library.chain_story import build_story_ir
                         story_ir = build_story_ir(selected_hops, selection, fetched)
@@ -991,9 +1067,11 @@ class AnalysisMixin:
                         self.config.get_all_source_paths().get(_scip_source) or "") or None
                     selected_hops, selected_source_gaps = hydrate_selected_hops(
                         self.library, hops, selection, source=_scip_source,
-                        source_root=source_root, reference_query = question)
+                        source_root=source_root, reference_query=question,
+                        materialize_context_bodies=False)
                     selection = complete_selection_with_body_dependencies(
-                        selection, selected_hops, selected_body_symbols)
+                        selection, selected_hops, selected_body_symbols,
+                        retain_reference_context=False)
                     fetched = fetch_selected(self.library, selection, selected_hops)
                     from library.chain_story import build_story_ir
                     story_ir = build_story_ir(selected_hops, selection, fetched)
@@ -1984,7 +2062,7 @@ def _persist_audience_response(
 
 
 async def _ask_compact(self, question, *, source, notes,
-                       diagnostics, ask_chat, trace, phase_timings, deep_trace = ()):
+                       diagnostics, ask_chat, trace, phase_timings, deep_trace = (), question_vector = None):
     """The compact production path: exactly three model-call slots.
 
     question -> obligation plan -> deterministic family generation ->
@@ -2058,7 +2136,7 @@ async def _ask_compact(self, question, *, source, notes,
         self.library, question, sources=(source, f"spool:{source}"),
         limit=8, query_embedding=None, matrix_provider=lambda: None)
     clew_matches: list = []
-    _compact_question_vector = None
+    _compact_question_vector = question_vector
     compact["embedding_calls"] = 0
     _embedding_service = getattr(self, "embedding_service", None)
     if _embedding_service is not None:
@@ -2075,12 +2153,13 @@ async def _ask_compact(self, question, *, source, notes,
                 "AND embedding IS NOT NULL LIMIT 1",
                 (source,)).fetchone()
         if _has_embedded_clews:
-            try:
-                _compact_question_vector = await _embedding_service.embed(
-                    question)
-                compact["embedding_calls"] = 1
-            except Exception as _embedding_error:  # noqa: BLE001 -- lexical recall follows
-                compact["embedding_error"] = str(_embedding_error)[:200]
+            if _compact_question_vector is None:
+                try:
+                    _compact_question_vector = await _embedding_service.embed(
+                        question)
+                    compact["embedding_calls"] = 1
+                except Exception as _embedding_error:  # noqa: BLE001 -- lexical recall follows
+                    compact["embedding_error"] = str(_embedding_error)[:200]
             _source_root = str(self.config.get_all_source_paths().get(
                 source) or "") or None
             with self.library._conn_provider.acquire() as conn:
