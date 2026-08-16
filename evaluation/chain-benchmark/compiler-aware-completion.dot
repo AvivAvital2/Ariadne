@@ -1,0 +1,17 @@
+digraph compiler_aware_completion {
+  graph [bgcolor="white", pad="0.10", rankdir="LR", fontname="Arial", fontsize="18", labelloc="t",
+         label="Compiler-aware comparison — completion (12 questions)"];
+  node [shape=plain, fontname="Arial", fontsize="15"];
+
+  completion [label=<
+    <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="6">
+      <TR><TD WIDTH="118" ALIGN="LEFT"><B>Ariadne</B></TD><TD><TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2"><TR>
+        <TD BGCOLOR="#1b9e77" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#1b9e77" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#1b9e77" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#1b9e77" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#1b9e77" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#1b9e77" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#1b9e77" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#1b9e77" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#e5e7eb" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#e5e7eb" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#e5e7eb" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#e5e7eb" WIDTH="24" HEIGHT="24"></TD>
+      </TR></TABLE></TD><TD WIDTH="72" ALIGN="RIGHT"><B>8 / 12</B></TD></TR>
+      <TR><TD WIDTH="118" ALIGN="LEFT"><B>Bare model</B></TD><TD><TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2"><TR>
+        <TD BGCOLOR="#4c78a8" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#4c78a8" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#e5e7eb" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#e5e7eb" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#e5e7eb" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#e5e7eb" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#e5e7eb" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#e5e7eb" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#e5e7eb" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#e5e7eb" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#e5e7eb" WIDTH="24" HEIGHT="24"></TD><TD BGCOLOR="#e5e7eb" WIDTH="24" HEIGHT="24"></TD>
+      </TR></TABLE></TD><TD WIDTH="72" ALIGN="RIGHT"><B>2 / 12</B></TD></TR>
+      <TR><TD COLSPAN="3" ALIGN="LEFT"><FONT POINT-SIZE="12">One cube = one question. Green: Ariadne complete. Blue: bare complete. Gray: incomplete.</FONT></TD></TR>
+    </TABLE>
+  >];
+}
