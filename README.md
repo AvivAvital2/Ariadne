@@ -16,37 +16,23 @@ When an LLM agent works with a codebase it greps and reads files to understand i
 
 Ariadne *is* a graph-RAG — a structural graph, [Leiden](https://en.wikipedia.org/wiki/Leiden_algorithm) communities, community summaries (its *themes*) — but it builds the graph with a **compiler, not an LLM**. GraphRAG-family tools spend the bulk of indexing cost on LLM entity/relationship extraction, and re-pay it whenever the corpus changes. Ariadne extracts the graph deterministically with [SCIP](docs/scip-cross-source.md) — no LLM, no per-token cost — so the structural layer is near-free to build *and* to keep current; only the prose docs and the summaries of *changed* clusters ever cost LLM. (This holds for code and other SCIP-indexable corpora; for arbitrary prose, a graph-RAG's LLM extraction still earns its keep.)
 
-## Does it actually help? An honest head-to-head
+## Does it actually help? A compiler-aware comparison
 
-Ariadne is put head-to-head against a **real bare LLM** — the *same* model given only shell tools (`grep`, `cat`, `find`, and reasoning), which is exactly what an assistant does *without* Ariadne — on [`userhub`](evaluation/userhub-scip-vs-grep.md), a compact full-stack app (FastAPI + SQLAlchemy backend, React frontend) built so every answer has an *authoritative* ground truth. Both arms are **real agent runs**; each answer is judged against the known answer.
+The public comparison tests a focused panel of twelve difficult questions about
+Spark 4.0.0 and Delta 4.0.0. Ariadne uses compiler-derived code identities and
+relationships plus source evidence; the bare arm uses ordinary source reads and
+text search. Every completed answer must meet the panel's target-aligned
+definition, relation, witness, provenance, and explanatory-prose requirements.
 
-**The measured result: on a corpus this small, it's a tie — 8/8 vs 8/8.** A capable LLM with file access can simply *read* all 51 files and reason out every structural answer, so the index earns **no correctness advantage** when "read everything" is a complete strategy. (An earlier version of this battery reported "Ariadne 8, bare agent 1" — but that pitted Ariadne against a single canned `grep | wc -l` per question that never opened a file. Against a *real* reading agent the gap closes, so we changed the number rather than keep a flattering strawman.)
+**Result: Ariadne completed 8/12 questions; the bare arm completed 2/12.** Both
+systems were incomplete on the remaining four questions. This is evidence about
+this reviewed panel, not a claim of general model superiority.
 
-If not correctness here, what *is* the difference?
-
-| Dimension | Bare LLM (grep + read) | Ariadne |
-|---|---|---|
-| Correctness on `userhub` (51 files) | 8 / 8 | 8 / 8 — **tie** |
-| "All callers of `X`?" | reads, infers → "found 5, probably" | `callers` → the **exact 5**, as a guarantee |
-| "Is this symbol dead?" | "no hits I noticed" — not a proof | `callers` → **provably zero** references |
-| Cost of those 8 answers | 18 tool calls, ~56 K tokens, ~107 s | one indexed lookup each (**~0.15 ms**, warm) |
-| As the repo grows to 10 K+ files | must read more; context runs out | O(1) lookup — **flat** |
-
-Ariadne's edge is a **scale-and-guarantee bet**: one exact lookup regardless of repo size, versus an agent that re-reads and re-reasons every session and gets slower and less certain as the codebase outgrows a context window. **A 51-file corpus is too small to settle that bet** — hence the tie — which is exactly why the honest next step is a corpus where "just read the files" stops working.
-
-What the exercise *did* establish, concretely: (1) Ariadne's answers match authoritative ground truth on every question; (2) a deliberately **name-broken call chain** (where the trail can't be followed by matching names) still didn't defeat the reading agent on a small corpus — it chases aliases — but building it **surfaced a real bug** in Ariadne's data-lineage tier (a missed SQLAlchemy `session.get(Model, …)` receiver), now fixed. The one inherent tradeoff is staleness: a precomputed index can lag between builds where a live `grep` cannot — Ariadne *flags* the lag but is still behind. Full methodology, the real dual-agent transcript, and caveats: **[evaluation/userhub-scip-vs-grep.md](evaluation/userhub-scip-vs-grep.md)**.
-
-**Reproduce it — one command, no key.** The battery ships as a self-contained bundle: a source-scoped *offline* library (`ariadne export --self-contained` — the SCIP graph, docs, and embeddings in one file) plus a runner that judges every answer against the corpus ground truth.
-
-```bash
-./evaluation/userhub-battery/reproduce.sh   # all questions, both arms, judged against ground truth
-```
-
-Runs entirely offline from committed files — no onboarding, no re-index, no API key. See [evaluation/userhub-battery/](evaluation/userhub-battery/README.md).
-
-## Compiler-aware codebase comparison
-
-For a larger, target-pinned codebase, the focused comparison report contrasts Ariadne's compiler-derived code identities and relationships plus source evidence with a bare LLM using ordinary source reads and text search. It documents the user questions, required proof, complete-answer results, evidence recall, and the limits of the current bare evidence format.
+The public artifacts let readers inspect the questions, reviewed claims,
+outcomes, selected Ariadne evidence, and source locations. The offline verifier
+checks the published panel against a minimal pinned source root; it does not
+rerun either model. The bare arm's source-evidence rescore derives from a private
+saved run, as the report explains.
 
 - [Comparison report](evaluation/chain-benchmark/COMPILER_AWARE_COMPARISON.md)
 - [Public panel record](evaluation/chain-benchmark/compiler-aware-comparison-record.json)
@@ -122,12 +108,6 @@ it never quietly falls back to training-data guesswork about your versions.
   need evidence no tool should pretend to have), **security** (a framework's security
   model at your pinned version), and **internal platforms** — the strongest case of all,
   since your in-house SDK is the one thing an LLM's training data has never seen.
-
-Routing quality is measured, not asserted: a public retrieval battery ([evaluation/](evaluation/README.md))
-runs the production pipeline against the Databricks environment across three consumer
-archetypes — currently **11/12 participation** (speaking at the seam, silent on controls),
-**7/7 ground-truth-in-context**, **0 junk admissions** — offline-reproducible from committed
-query vectors, with the misses read honestly in [evaluation/RESULTS.md](evaluation/RESULTS.md).
 
 Build and install walkthrough: [docs/building-a-databricks-spool.md](docs/building-a-databricks-spool.md).
 
@@ -244,7 +224,6 @@ Full reference — source fields, dependency detection, the exclusion policy —
 | [workflows.md](docs/workflows.md) | Keeping docs fresh, git-sync, hooks, branch docs, findings |
 | [import-export.md](docs/import-export.md) | Export/import round-trip; author once, consume anywhere (incl. local LLMs) |
 | [building-a-databricks-spool.md](docs/building-a-databricks-spool.md) | Environment spools: build, install, and enable a runtime knowledge pack |
-| [evaluation/](evaluation/README.md) | Retrieval eval: archetype battery, ground-truth-in-context metric, results |
 | [architecture.md](docs/architecture.md) | How it works, subsystems, usage tracking |
 | [slack-bridge-deployment.md](docs/slack-bridge-deployment.md) | Read-only Slack → Ariadne bridge |
 

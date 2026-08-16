@@ -165,8 +165,8 @@ and `_subtype` are unexamined; the stub problem in 6.5 may originate there.
 were persisted, so the document-fetch, prose and theme halves of stages 2–3 are verified on
 fixtures alone.
 
-**6.12 The Python verification corpus is gone.** `userhub` was deleted, so the small
-end-to-end baseline used for the scip-python path no longer exists.
+**6.12 The Python verification corpus is gone.** The small end-to-end baseline used for
+the scip-python path no longer exists.
 
 ---
 

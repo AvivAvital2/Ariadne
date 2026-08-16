@@ -244,7 +244,7 @@ def test_a_definition_without_an_enclosing_range_still_gets_a_body_in_a_mixed_do
     handing every ``local N`` a synthetic body would let it beat the enclosing method on
     in-body calls. Reusing that gate for *extents* left a hole: in a document where some
     definitions carry ``enclosing_range`` and others do not, the others fell back to their
-    identifier line. Measured on userhub's real index: 221 of 360 named symbols stayed
+    identifier line. In a prior Python index, 221 of 360 named symbols stayed
     single-line, and **all 221 lacked an enclosing_range** — none was genuinely one line.
     """
     from docgen.scip_extractor import _ScipDoc, _ScipOccurrence, _ScipSymbol

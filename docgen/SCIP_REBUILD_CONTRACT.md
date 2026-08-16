@@ -18,7 +18,7 @@ the same behaviour.
 - `_floor_rank` — 2 importer(s): docgen/sql_query_views.py, tests/test_sql_assert_min_confidence.py
 - `build_reach_findings` — 1 importer(s): tests/test_scip_external_resolution.py
 - `classify_edge` — 2 importer(s): docgen/trace_flow.py, tests/test_scip_edge_typing.py
-- `compute_impact_radius` — 3 importer(s): cli/callers.py, evaluation/userhub-battery/run.py, tests/test_impact_radius_cross_language.py
+- `compute_impact_radius` — 2 importer(s): cli/callers.py, tests/test_impact_radius_cross_language.py
 - `load_source_from_manifest` — 4 importer(s): docgen/reverse_augment.py, docgen/scip_persist.py, tests/test_scip_cross_source.py, tests/test_scip_manifest_source_root.py
 - `shared_databases_from_config` — 2 importer(s): cli/callers.py, tests/test_cross_source_shared_db.py
 
