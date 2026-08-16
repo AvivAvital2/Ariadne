@@ -114,22 +114,18 @@ corpus with `ariadne themes stats`.
 ## Scope of this battery
 
 This development battery measures routing, participation, and whether known
-ground truth reached context. It does **not** measure answer quality or support
-a conclusion about model training saturation. The earlier bare-model A/B result
-is historical and is not a current Ariadne-versus-bare-LLM finding.
+ground truth reached context. It does not support a conclusion about model
+training saturation. The earlier bare-model A/B result is historical and is not
+a current Ariadne-versus-bare-LLM finding.
 
-For the reviewed answer-level comparison, including source-pinned claims,
-complete-chain requirements, and its stated limits, see the
+For the reviewed compiler-aware comparison and its stated limits, see the
 [compiler-aware comparison](chain-benchmark/COMPILER_AWARE_COMPARISON.md).
 
 ## Reading the numbers
 
-Participation and junk are the contract ("decisive at the seam, quiet
-away from it"); ground-truth-in-context is the value; neither is an
-answer-quality score. LLM-judged answer quality is deliberately out of
-scope for the offline battery — it would reintroduce a paid,
-non-deterministic judge into a harness whose job is to be free, offline,
-and diffable in CI.
+Participation and junk are the contract ("decisive at the seam, quiet away
+from it"). Ground-truth-in-context records whether the known material reached
+context. The offline battery remains free and diffable in CI.
 
 ## Impact-analysis accuracy (E5) — pilot, 2026-07-29
 
