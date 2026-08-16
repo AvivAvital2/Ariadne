@@ -2047,7 +2047,7 @@ def obligation_seeded_expansion(
         conn: "Connection", matches, *, source: str,
         question_seed_ids=(), catalog_seed_ids=(),
         depth: int = 2, forward_depth: int = 0, per_seed_limit: int = 8,
-        reserve_limit: int = 16) -> ObligationExpansion:
+        reserve_limit: int = 16, preference_tokens = ()) -> ObligationExpansion:
     """Bounded reverse entry discovery seeded by what obligations need.
 
     Seeds are the union of resolved obligation targets, clew-route
@@ -2062,6 +2062,20 @@ def obligation_seeded_expansion(
     to a bounded reserve and every cap event is recorded in ``reasons``.
     """
     seed_names: list = []
+    from library.clews import _lexical_tokens
+    preference = {str(token) for token in preference_tokens}
+    
+    def _preference_rank(qualified_name):
+        """Retention prefers endpoints named like the obligation asks.
+
+    A per-seed shortlist is a cap on citation; when it must drop
+    candidates, it drops the ones the question never mentions —
+    never an arbitrary file-order suffix that may hold the proof.
+    """
+        if not preference:
+            return 0
+        return -len(preference.intersection(
+            _lexical_tokens(str(qualified_name))))
     for match in matches:
         route = [str(name) for name in getattr(match.clew, "route", ())]
         endpoints = [name for name in (*route[:1], *route[-1:]) if name]
@@ -2143,6 +2157,8 @@ def obligation_seeded_expansion(
                 if location is None or _nonproduction_path(location[1]):
                     continue
                 candidates.append((file, line, caller, edge_type, location))
+            candidates.sort(key=lambda candidate: (
+                _preference_rank(candidate[4][0]), candidate[0], candidate[1]))
             kept = candidates[:max(int(per_seed_limit), 0)]
             spill = candidates[len(kept):]
             reserved_here = [
@@ -2225,6 +2241,8 @@ def obligation_seeded_expansion(
                 if location is None or _nonproduction_path(location[1]):
                     continue
                 candidates.append((file, line, callee, edge_type, location))
+            candidates.sort(key=lambda candidate: (
+                _preference_rank(candidate[4][0]), candidate[0], candidate[1]))
             kept = candidates[:max(int(per_seed_limit), 0)]
             spill = candidates[len(kept):]
             if spill:

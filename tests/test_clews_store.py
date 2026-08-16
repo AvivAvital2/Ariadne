@@ -1294,3 +1294,57 @@ def test_symbol_target_entry_bfs_does_not_treat_ownership_as_execution(conn):
         conn, [match], "which method executes target", source_name=SOURCE)
 
     assert menu.owner_entries.get("pkg.Owner.target") != "pkg.Owner.inspect"
+
+
+def _plain_match(*route):
+    clew = type("Clew", (), {
+        "id": "-".join(route), "route": route, "steps": (),
+        "question": "", "entry_symbol": route[0], "files": (),
+        "strategy": "synthetic"})()
+    return type("Match", (), {
+        "clew": clew, "target_symbols": (), "similarity": 0.0,
+        "structure_score": 0, "origin_rank": None})()
+
+
+class TestDeterministicRarityWeighting:
+    def test_rare_token_route_beats_common_token_ties(self):
+        from library.clews import deterministic_clew_matches
+
+        # "write" appears across three routes, "sink" in one; a raw
+        # overlap count ties the writer route with the sink route and
+        # alphabetical identity would pick the writer.
+        matches = [
+            _plain_match("pkg.BatchWriter.writeBatch"),
+            _plain_match("pkg.LogWriter.writeLog"),
+            _plain_match("pkg.FileWriter.writeFile"),
+            _plain_match("pkg.Sink.addBatch"),
+        ]
+
+        chosen = deterministic_clew_matches(
+            "how does the sink write each batch", matches, limit=1)
+
+        assert chosen[0].clew.route == ("pkg.Sink.addBatch",)
+
+
+class TestFullRankExposure:
+    def test_full_ranking_orders_every_match_without_a_shortlist(self):
+        from library.clews import (
+            deterministic_clew_matches,
+            rank_clew_matches,
+        )
+
+        matches = [
+            _plain_match("pkg.BatchWriter.writeBatch"),
+            _plain_match("pkg.LogWriter.writeLog"),
+            _plain_match("pkg.FileWriter.writeFile"),
+            _plain_match("pkg.Sink.addBatch"),
+        ]
+
+        ordered = rank_clew_matches(
+            "how does the sink write each batch", matches)
+
+        assert len(ordered) == len(matches)
+        assert ordered[0].clew.route == ("pkg.Sink.addBatch",)
+        shortlist = deterministic_clew_matches(
+            "how does the sink write each batch", matches, limit=1)
+        assert shortlist[0].clew.id == ordered[0].clew.id

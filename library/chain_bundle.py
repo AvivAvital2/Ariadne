@@ -82,7 +82,7 @@ def curate_bundle(
     source: str,
 source_root=None, materialize_source: bool = True,
 fetch_documents: bool = True, materialize_definition_bodies: bool = False,
-definition_body_symbols=None, definition_body_query = None) -> ChainBundle:
+definition_body_symbols=None, definition_body_query = None, required_body_extents = ()) -> ChainBundle:
     """Attach each hop's document to it. Coordinates always; a description when the hop
     is chain material and the catalog has one.
 
@@ -122,7 +122,7 @@ definition_body_symbols=None, definition_body_query = None) -> ChainBundle:
             source=source)
         _body_edge_owners = indexed_definition_edge_sites(library, definition_body_symbols if materialize_definition_bodies else (), source=source)
         source_materialization = materialize_citations(
-            citations, {source: source_root}, extra_ranges = (*frontier_edge_ranges(library, citations, source=source), *((source, file, line, "body_edge") for file, line in sorted(_body_edge_owners)), *definition_body_ranges(citations, enabled=materialize_definition_bodies, symbols=definition_body_symbols), *((source, file, line_start, line_end, "definition_body") for file, line_start, line_end in sorted(_sibling_extents))))
+            citations, {source: source_root}, extra_ranges = (*frontier_edge_ranges(library, citations, source=source), *((source, file, line, "body_edge") for file, line in sorted(_body_edge_owners)), *definition_body_ranges(citations, enabled=materialize_definition_bodies, symbols=definition_body_symbols), *((source, file, line_start, line_end, "definition_body") for file, line_start, line_end in sorted(_sibling_extents)), *((source, file, line_start, line_end, "definition_body") for _name, file, line_start, line_end in sorted(required_body_extents))))
         source_gaps = source_materialization.gaps
     source_by_coordinate = {}
     if source_materialization is not None:

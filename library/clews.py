@@ -1195,11 +1195,14 @@ def seeds_from_clews(clews: list[Clew]) -> list[str]:
             if path not in seen:
                 seen.append(path)
     return seen
-def deterministic_clew_matches(
-        question: str, matches: list[ClewMatch], *, limit: int = 8) -> list[ClewMatch]:
-    """Select clause-covering semantic and positioned SCIP routes without an LLM."""
-    if limit <= 0 or not matches:
-        return []
+def build_clew_ranker(question: str, matches: "list[ClewMatch]"):
+    """The deterministic rank machinery, shared by selection and the
+    compact boundary trace: returns ``(rank, clauses, tokens)`` where
+    ``rank(match, clause=None)`` yields an orderable tuple. Surfaces are
+    precomputed per clew id from ``matches``; stitched variants keep
+    their original clew id, so evolved routes still resolve."""
+    import math
+
     clauses = [set(_lexical_tokens(part)) for part in re.split(
         r"[?;:]|\b(?:and|but|while|whereas|versus|compared\s+with)\b",
         question or "", flags=re.I) if _lexical_tokens(part)]
@@ -1213,17 +1216,47 @@ def deterministic_clew_matches(
                                              *match.clew.steps, ""))))
 
     tokens = {match.clew.id: surface_tokens(match) for match in matches}
+    population = max(len(tokens), 1)
+    token_frequency: dict = {}
+    for surface in tokens.values():
+        for token in surface:
+            token_frequency[token] = token_frequency.get(token, 0) + 1
+
+    def weighted_overlap(focused, route_tokens):
+        return sum(
+            1.0 + math.log((population + 1)
+                           / (token_frequency.get(token, 0) + 1))
+            for token in focused.intersection(route_tokens))
 
     def rank(match: ClewMatch, clause: set[str] | None = None):
         route_tokens = tokens[match.clew.id]
         focused = clause if clause is not None else question_tokens
-        overlap = len(focused.intersection(route_tokens))
-        total = len(question_tokens.intersection(route_tokens))
+        overlap = weighted_overlap(focused, route_tokens)
+        total = weighted_overlap(question_tokens, route_tokens)
         structural_relevance = (overlap + 2 * match.structure_score
                                 if match.clew.strategy == "document-scip" else overlap)
         return (-structural_relevance, -overlap, -total,
                 0 if len(match.clew.route) > 1 else 1,
                 -match.similarity, len(match.clew.route), match.clew.id)
+
+    return rank, clauses, tokens
+
+
+def rank_clew_matches(
+        question: str, matches: "list[ClewMatch]") -> "list[ClewMatch]":
+    """Every match, in full deterministic rank order — no shortlist."""
+    if not matches:
+        return []
+    rank, _clauses, _tokens = build_clew_ranker(question, matches)
+    return sorted(matches, key=rank)
+
+
+def deterministic_clew_matches(
+        question: str, matches: list[ClewMatch], *, limit: int = 8) -> list[ClewMatch]:
+    """Select clause-covering semantic and positioned SCIP routes without an LLM."""
+    if limit <= 0 or not matches:
+        return []
+    rank, clauses, tokens = build_clew_ranker(question, matches)
 
     selected: list[ClewMatch] = []
     semantic = [match for match in matches

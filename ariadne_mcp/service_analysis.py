@@ -399,6 +399,12 @@ class AnalysisMixin:
                 _clew_started = time.perf_counter()
                 _trace("clew_selection", "start")
                 _clew_matches: list = []
+                if str(self.config._config.get("ask_pipeline", "cascade")) == "compact":
+                    return await self._ask_compact(
+                        question, source=_scip_source, notes=notes,
+                        diagnostics=_graph_diagnostics,
+                        ask_chat=_ask_chat, trace=_trace,
+                        phase_timings=_phase_timings)
                 _obligation_route_targets = ()
                 _required_route_symbols = ()
                 _clew_diagnostics = {
@@ -1975,3 +1981,315 @@ def _persist_audience_response(
         },
         source_name=derived_source,
     )
+
+
+async def _ask_compact(self, question, *, source, notes,
+                       diagnostics, ask_chat, trace, phase_timings, deep_trace = ()):
+    """The compact production path: exactly three model-call slots.
+
+    question -> obligation plan -> deterministic family generation ->
+    one route-family selector -> exact family expansion ->
+    materialization/ledger -> formulation -> deterministic finalization.
+    None of the legacy cascade selectors run here, and an unresolved
+    compact selection fails cheaply with the unresolved obligations
+    reported — never a silent fallback to the legacy path.
+    """
+    import re as _re
+    import time as _time
+
+    from library.chain_answer import (
+        ANSWER_MAX_TOKENS,
+        catalog_positioning_documents,
+        expand_bare_lines,
+    )
+    from library.chain_bundle import curate_bundle
+    from library.chain_story import (
+        build_story_ir,
+        render_formulation_spine,
+        render_unreferenced_story_evidence,
+        expand_story_placeholders,
+    )
+    from library.chain_menu import Selection, _occurrence_key
+    from library.question_facets import extract_question_facets
+    from library.route_families import (
+        build_route_family_cards,
+        expand_selected_families,
+        render_family_selector_prompt,
+        resolve_family_selection,
+    )
+    from library.selection_policy import signal_from_usage
+
+    compact: dict = {"pipeline": "compact"}
+    diagnostics["compact"] = compact
+
+    plan_reply = await ask_chat(
+        messages=[
+            {"role": "system",
+             "content": "You plan proof obligations. Reply with "
+                        "C<n>: <requirement> lines only."},
+            {"role": "user",
+             "content": "Create at most five fixed obligations that "
+                        "each require a distinct source-code chain to "
+                        "prove. Name exact code identifiers where the "
+                        "question names them.\n\nQuestion: " + question},
+        ],
+        max_tokens=384, phase="scip-obligation-plan")
+    obligation_lines = _re.findall(
+        r"(?m)^\s*C(\d{1,2})\s*:\s*(.+)$", plan_reply or "")
+    obligations = []
+    for number, text in obligation_lines[:5]:
+        identifiers = tuple(dict.fromkeys(
+            identifier
+            for facet in extract_question_facets(f"{question} {text}")
+            for identifier in facet.identifiers))
+        obligations.append({
+            "id": f"O{int(number)}", "text": text.strip(),
+            "symbols": list(identifiers)})
+    if not obligations:
+        compact["status"] = "no-obligations"
+        return self._compact_failure(
+            question, source, compact, "the obligation plan produced "
+            "no parseable obligations")
+    compact["obligations"] = [
+        {"id": row["id"], "symbols": row["symbols"]}
+        for row in obligations]
+
+    positioning = catalog_positioning_documents(
+        self.library, question, sources=(source, f"spool:{source}"),
+        limit=8, query_embedding=None, matrix_provider=lambda: None)
+    clew_matches: list = []
+    _compact_question_vector = None
+    compact["embedding_calls"] = 0
+    _embedding_service = getattr(self, "embedding_service", None)
+    if _embedding_service is not None:
+        import numpy as np
+        from library.clews import (
+            document_clew_matches,
+            lexical_clew_matches,
+            nearest_clew_matches,
+            select_clew_matches,
+        )
+        with self.library._conn_provider.acquire() as conn:
+            _has_embedded_clews = conn.execute(
+                "SELECT 1 FROM clews WHERE source_name = ? "
+                "AND embedding IS NOT NULL LIMIT 1",
+                (source,)).fetchone()
+        if _has_embedded_clews:
+            try:
+                _compact_question_vector = await _embedding_service.embed(
+                    question)
+                compact["embedding_calls"] = 1
+            except Exception as _embedding_error:  # noqa: BLE001 -- lexical recall follows
+                compact["embedding_error"] = str(_embedding_error)[:200]
+            _source_root = str(self.config.get_all_source_paths().get(
+                source) or "") or None
+            with self.library._conn_provider.acquire() as conn:
+                if _compact_question_vector is None:
+                    clew_matches = lexical_clew_matches(
+                        conn, question, source_name=source, top_k=5000)
+                else:
+                    clew_matches = nearest_clew_matches(
+                        conn, np.asarray(
+                            _compact_question_vector, dtype=np.float32),
+                        source_name=source, top_k=CLEW_RECALL_POOL,
+                        min_similarity=-1.0)
+                _clew_selection = select_clew_matches(question, clew_matches)
+                if deep_trace:
+                    compact.setdefault("trace", {})["pool_order"] = [
+                        match.clew.id for match in clew_matches]
+                    compact["trace"]["filter_rejected"] = [
+                        {"id": rejection.match.clew.id,
+                         "reason": rejection.reason}
+                        for rejection in _clew_selection.rejected]
+                clew_matches = _clew_selection.accepted
+                _document_matches = document_clew_matches(
+                    conn, list(positioning or ()), question,
+                    source_name=source, limit=48,
+                    source_root=_source_root)
+                _known_ids = {match.clew.id for match in clew_matches}
+                clew_matches.extend(
+                    match for match in _document_matches
+                    if match.clew.id not in _known_ids)
+            clew_matches = clew_matches[:CLEW_RECALL_POOL]
+    compact["clew_matches"] = len(clew_matches)
+    semantic_seed_ids = []
+    with self.library._conn_provider.acquire() as conn:
+        for document in positioning or ():
+            metadata = getattr(document, "metadata", None)
+            if isinstance(document, dict):
+                metadata = document.get("metadata")
+            if isinstance(metadata, str):
+                import json as _json
+                try:
+                    metadata = _json.loads(metadata)
+                except ValueError:
+                    metadata = None
+            name = metadata.get("qualified_name") if isinstance(
+                metadata, dict) else None
+            if not name:
+                continue
+            for row in conn.execute(
+                    "SELECT canonical_id FROM scip_symbols WHERE "
+                    "source_name = ? AND qualified_name = ? AND "
+                    "canonical_id NOT GLOB ? ORDER BY canonical_id",
+                    (source, str(name), "local *")):
+                semantic_seed_ids.append(row[0])
+        cards = build_route_family_cards(
+            conn, source=source, question=question,
+            obligations=obligations,
+            semantic_seed_ids=tuple(dict.fromkeys(semantic_seed_ids)),
+            clew_matches=tuple(clew_matches),
+            per_obligation_budget=16,
+            trace=(compact.setdefault("trace", {})
+                   if deep_trace else ()))
+        prompt = render_family_selector_prompt(cards, question=question)
+        compact["cards_total"] = len(cards.cards)
+        compact["selector_prompt_chars"] = len(prompt)
+        compact["selector_prompt_tokens"] = len(prompt) // 4
+        compact["overflow_by_obligation"] = dict(
+            cards.overflow_by_obligation)
+        if not cards.cards:
+            compact["status"] = "no-cards"
+            return self._compact_failure(
+                question, source, compact,
+                "no route-family cards resolved; unresolved obligations: "
+                + ",".join(row["id"] for row in obligations))
+        compact["semantic_seed_count"] = len(set(semantic_seed_ids))
+        compact["cards"] = [
+            {"card_id": card.card_id,
+             "obligation_id": card.obligation_id,
+             "module": card.module,
+             "entry": card.entry,
+             "terminal": card.terminal,
+             "relations": list(card.relation_sequence),
+             "origins": list(card.retrieval_origins),
+             "nodes": [
+                 [name, file, line_start, line_end]
+                 for name, _canonical, file, line_start, line_end
+                 in card.node_identities],
+             "bodies": len(card.required_body_refs)}
+            for card in cards.cards]
+        compact["reserve_by_obligation"] = {
+            key: list(value)
+            for key, value in cards.reserve_by_obligation.items()}
+        if len(cards.cards) > 64 or len(prompt) // 4 > 8000:
+            compact["status"] = "selector-budget-exceeded"
+            return self._compact_failure(
+                question, source, compact,
+                f"selector surface exceeded budget: "
+                f"{len(cards.cards)} cards, {len(prompt) // 4} tokens")
+
+        selector_usage: list = []
+        selector_reply = await ask_chat(
+            messages=[
+                {"role": "system",
+                 "content": "You select route families. Reply with one "
+                            "line per obligation: O<i>: F<id> F<id>."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=max(64, 24 * len(obligations)),
+            phase="scip-route-family-select",
+            usage_sink=selector_usage)
+        signal = signal_from_usage(
+            selector_usage[-1] if selector_usage else None,
+            max_tokens=max(64, 24 * len(obligations)))
+        selection = resolve_family_selection(
+            selector_reply, cards,
+            truncated=bool(signal.truncated or signal.malformed))
+        compact["selected_by_obligation"] = {
+            key: list(value) for key, value in
+            selection.selected_by_obligation.items()}
+        compact["unresolved_obligations"] = list(
+            selection.unresolved_obligations)
+        compact["unknown_ids"] = list(selection.unknown_ids)
+
+        expansion = expand_selected_families(
+            conn, cards, selection, source=source)
+    compact["expanded_cards"] = list(expansion.expanded_card_ids)
+    compact["expansion_gaps"] = list(expansion.gaps)
+    compact["route_nodes"] = len(expansion.citations)
+    compact["required_bodies"] = len(expansion.required_body_extents)
+    if not expansion.citations:
+        compact["status"] = "no-expansion"
+        return self._compact_failure(
+            question, source, compact,
+            "no retained family expanded to compiler evidence; "
+            "unresolved: " + ",".join(selection.unresolved_obligations))
+
+    source_root = str(
+        self.config.get_all_source_paths().get(source) or "") or None
+    bundle = curate_bundle(
+        self.library, list(expansion.citations), source=source,
+        source_root=source_root, materialize_source=True,
+        required_body_extents=list(expansion.required_body_extents))
+    hops = list(bundle.hops)
+    selection_for_story = Selection(
+        symbols=[hop.citation.qualified_name for hop in hops],
+        occurrence_keys=tuple(_occurrence_key(hop) for hop in hops))
+    from library.chain_menu import fetch_selected
+    fetched = fetch_selected(self.library, selection_for_story, hops)
+    story_ir = build_story_ir(hops, selection_for_story, fetched)
+    spine = render_formulation_spine(story_ir)
+    compact["chunks"] = len(story_ir.chunks)
+    if deep_trace:
+        compact.setdefault("trace", {})["required_body_extents"] = [
+            list(extent) for extent in expansion.required_body_extents]
+        compact["trace"]["chunk_extents"] = [
+            [chunk.file, chunk.line_start, chunk.line_end]
+            for chunk in story_ir.chunks][:64]
+    compact["formulation_prompt_tokens"] = len(spine) // 4
+    if len(spine) // 4 > 20000:
+        compact["status"] = "formulation-budget-exceeded"
+        return self._compact_failure(
+            question, source, compact,
+            f"structurally complete formulation prompt is "
+            f"{len(spine) // 4} tokens; the 20k budget refuses it")
+
+    prompt = _chain_prompt(question, spine, notes=notes)
+    started = _time.perf_counter()
+    trace("formulation", "start")
+    answer = await ask_chat(
+        messages=[
+            {"role": "system",
+             "content": "You explain compiler-derived code evidence. "
+                        "Use only the provided chain. Cite file:line "
+                        "for every code claim."},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=ANSWER_MAX_TOKENS)
+    phase_timings["formulation"] = _time.perf_counter() - started
+    trace("formulation", "end", phase_timings["formulation"])
+    appendix = render_unreferenced_story_evidence(answer, story_ir)
+    answer = expand_story_placeholders(answer, story_ir, strict=False)
+    answer = expand_bare_lines(answer)
+    if appendix:
+        answer += appendix
+    compact["status"] = "complete"
+    compact["final_answer_chars"] = len(answer)
+    return AskResponse(
+        answer=answer,
+        confidence=("low" if selection.unresolved_obligations
+                    or expansion.gaps else "high"),
+        confidence_reasons=[
+            *(f"unresolved obligation {obligation_id}"
+              for obligation_id in selection.unresolved_obligations),
+            *expansion.gaps],
+        graph_diagnostics=diagnostics,
+        selected_symbols=list(selection_for_story.symbols),
+        llm_calls=3)
+
+
+def _compact_failure(self, question, source, compact, reason):
+    """Fail cheaply: no formulation call, unresolved reported."""
+    compact["failure_reason"] = reason
+    return AskResponse(
+        answer="Compact selection could not assemble complete "
+               "compiler evidence: " + reason,
+        confidence="low",
+        confidence_reasons=[reason],
+        graph_diagnostics={"compact": compact},
+        llm_calls=int("selector" in str(compact.get("status"))) + 1)
+
+
+AnalysisMixin._ask_compact = _ask_compact
+AnalysisMixin._compact_failure = _compact_failure
