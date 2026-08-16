@@ -93,7 +93,6 @@ def materialize_citations(
             return None
         files[key] = (text.splitlines(), digest)
         return files[key]
-
     def materialize(
             source_name: str, file: str, line_start: int,
             line_end: int, kind: str) -> None:
@@ -121,10 +120,24 @@ def materialize_citations(
             content="\n".join(lines[line_start - 1:line_end]),
             sha256=digest))
         if kind in ("definition", "definition_body"):
+            # Documentation may sit up to two blank lines above the
+            # definition it describes; a longer gap means the comment block
+            # is not this definition's documentation.
             top = line_start
-            while (top > 1 and line_start - top < 60
-                   and _is_header_line(lines[top - 2])):
-                top -= 1
+            cursor = line_start - 1
+            blanks = 0
+            while cursor >= 1 and line_start - cursor < 60:
+                above = lines[cursor - 1]
+                if _is_header_line(above):
+                    top = cursor
+                    blanks = 0
+                    cursor -= 1
+                    continue
+                if not above.strip() and blanks < 2:
+                    blanks += 1
+                    cursor -= 1
+                    continue
+                break
             if top < line_start:
                 materialize(source_name, file, top, line_start - 1,
                             "doc_header")

@@ -214,3 +214,99 @@ async def test_completion_trace_records_provider_failure_without_hiding_it(
 def test_disabled_completion_trace_collects_nothing():
     with llm.capture_completion_trace(enabled=False) as rows:
         assert rows == []
+
+
+class TruncatedOpenAIResponse:
+    status_code = 200
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {
+            "choices": [
+                {"message": {"content": "B1, B"}, "finish_reason": "length"}],
+            "usage": {"prompt_tokens": 13, "completion_tokens": 5},
+        }
+
+
+class TruncatedOpenAIClient:
+    async def post(self, url, json):
+        return TruncatedOpenAIResponse()
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_captures_finish_reason_as_stop_reason(
+        monkeypatch):
+    from docgen.llm.openai import OpenAIProvider
+
+    monkeypatch.setattr(
+        OpenAIProvider, "_get_client", lambda self: TruncatedOpenAIClient())
+    provider = OpenAIProvider(model="gpt-5", api_key="test")
+
+    assert await provider.call("system", "user") == "B1, B"
+    assert provider.last_usage["stop_reason"] == "length"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_provider_captures_stop_reason(monkeypatch):
+    from docgen.llm.anthropic import AnthropicProvider
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "content": [{"type": "text", "text": "B1, B"}],
+                "usage": {"input_tokens": 17, "output_tokens": 128},
+                "stop_reason": "max_tokens",
+            }
+
+    class Client:
+        async def post(self, url, json):
+            return Response()
+
+    monkeypatch.setattr(AnthropicProvider, "_get_client", lambda self: Client())
+    provider = AnthropicProvider(model="claude-opus-4-8", api_key="test")
+
+    assert await provider.call("system", "user") == "B1, B"
+    assert provider.last_usage["stop_reason"] == "max_tokens"
+    assert provider.last_usage["output_tokens"] == 128
+
+
+@pytest.mark.asyncio
+async def test_usage_sink_delivers_request_cap_with_the_usage(monkeypatch):
+    import config
+    import cli.generate
+    import docgen.llm.factory
+
+    provider = FakeProvider({
+        "input_tokens": 11, "output_tokens": 128,
+        "stop_reason": "max_tokens"})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(
+        config, "get_config",
+        lambda: SimpleNamespace(
+            model="claude-opus-4-8", configured_provider="anthropic"))
+    monkeypatch.setattr(
+        cli.generate, "resolve_provider", lambda **kwargs: "anthropic")
+    monkeypatch.setattr(
+        docgen.llm.factory, "make_llm_provider", lambda **kwargs: provider)
+
+    sink = []
+    result = await llm.chat_complete(
+        [{"role": "user", "content": "question"}],
+        max_tokens=128, phase="scip-body-select", usage_sink=sink)
+
+    assert result == "answer"
+    assert sink == [{
+        "phase": "scip-body-select",
+        "model": "claude-opus-4-8",
+        "max_tokens": 128,
+        "input_tokens": 11,
+        "output_tokens": 128,
+        "stop_reason": "max_tokens",
+    }]

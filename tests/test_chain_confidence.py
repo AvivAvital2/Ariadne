@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
-
-from library.chain_confidence import assess_chain_confidence
+from library.chain_confidence import (
+    assess_chain_confidence,
+    assess_obligation_coverage,
+)
 
 
 @dataclass
@@ -191,3 +193,21 @@ def test_selection_coverage_requires_roots_not_every_alternative_route():
     assert missing.reasons == ("1 required route symbol missing",)
     assert empty.complete is False
     assert empty.reasons == ("no candidate route selected",)
+
+
+def test_obligation_coverage_fails_when_a_planned_obligation_lacks_proof():
+    coverage = assess_obligation_coverage(
+        ((1, 'pkg.Pipeline.run'), (2, 'pkg.Registrar.register')),
+        represented_symbols={'pkg.Pipeline.run'})
+
+    assert not coverage.complete
+    assert any('C2' in reason for reason in coverage.reasons)
+
+
+def test_obligation_coverage_passes_when_every_obligation_is_represented():
+    coverage = assess_obligation_coverage(
+        ((1, 'pkg.Pipeline.run'), (1, 'pkg.Step.apply')),
+        represented_symbols={'pkg.Step.apply'})
+
+    assert coverage.complete
+    assert coverage.reasons == ()

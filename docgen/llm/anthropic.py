@@ -241,6 +241,8 @@ class AnthropicProvider:
                 data = response.json()
                 usage = data.get('usage', {}) if isinstance(data, dict) else {}
                 self.last_usage = dict(usage)
+                if isinstance(data, dict) and data.get('stop_reason') is not None:
+                    self.last_usage['stop_reason'] = data.get('stop_reason')
                 cache_create = usage.get('cache_creation_input_tokens', 0) or 0
                 cache_read = usage.get('cache_read_input_tokens', 0) or 0
                 self.cache_stats.record(

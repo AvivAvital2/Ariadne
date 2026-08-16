@@ -1557,15 +1557,14 @@ def _obligation_neighbors(conn: "Connection", frontier: dict[str, str], *,
         rows.append((caller, target, site_file, site_line, edge_type,
                      target_name, target_file, start, end))
     return rows
-
-
 def _shared_reference_callers(conn: "Connection", target: str, *,
                               source: str) -> tuple:
     """Return a non-ubiquitous type's callers without an edge/symbol join."""
     raw = list(conn.execute(
         "SELECT caller_canonical_id,file,line FROM scip_edges "
         "INDEXED BY idx_scip_edges_callee WHERE callee_canonical_id=? "
-        "AND edge_type='type_ref' LIMIT 9", (target,)))
+        "AND edge_type='type_ref' "
+        "ORDER BY caller_canonical_id, file, line LIMIT 9", (target,)))
     if len(raw) > 8:
         return ()
     located = _locate(conn, source, [row[0] for row in raw])
@@ -1698,13 +1697,18 @@ def connect_obligation_targets(conn: "Connection", matches, *, source: str,
             for canonical, qualified in conn.execute(
                     f"SELECT canonical_id,qualified_name FROM scip_symbols "
                     f"WHERE source_name=? AND qualified_name IN ({marks}) "
-                    "AND canonical_id NOT GLOB ?", [source, *chunk, "local *"]):
-                ids.setdefault(qualified, canonical)
+                    "AND canonical_id NOT GLOB ? ORDER BY canonical_id",
+                    [source, *chunk, "local *"]):
+                # Every canonical instance of a qualified name stays a
+                # search endpoint until an actual edge resolves identity.
+                ids.setdefault(qualified, [])
+                if canonical not in ids[qualified]:
+                    ids[qualified].append(canonical)
         def directed(start, finish):
             if start not in ids or finish not in ids:
                 return []
-            target = ids[finish]
-            paths = {ids[start]: [ids[start]]}
+            targets = set(ids[finish])
+            paths = {canonical: [canonical] for canonical in ids[start]}
             visited = set(paths)
             for _depth in range(max(max_depth, 0)):
                 frontier = sorted(paths)[:max(max_frontier, 0)]
@@ -1722,9 +1726,12 @@ def connect_obligation_targets(conn: "Connection", matches, *, source: str,
                         if caller not in paths or callee in visited:
                             continue
                         next_paths.setdefault(callee, [*paths[caller], callee])
-                if target in next_paths:
-                    names = _qualified_names(conn, source, next_paths[target])
-                    return [names[item] for item in next_paths[target] if item in names]
+                hits = sorted(
+                    target for target in targets if target in next_paths)
+                if hits:
+                    names = _qualified_names(conn, source, next_paths[hits[0]])
+                    return [names[item] for item in next_paths[hits[0]]
+                            if item in names]
                 visited.update(next_paths)
                 paths = next_paths
             return []
@@ -2023,3 +2030,272 @@ def qualified_same_owner_reference_fanout(
         citation for citation in references
         if owners.get(citation.parent_qualified_name, set())
         & owners.get(citation.qualified_name, set()))
+
+
+@dataclass(frozen=True)
+class ObligationExpansion:
+    """Evidence and diagnostics from obligation-seeded reverse expansion."""
+
+    citations: tuple = ()
+    retained_candidates: tuple = ()
+    reserve_candidates: tuple = ()
+    truncated_seeds: tuple = ()
+    reasons: dict = field(default_factory=dict)
+
+
+def obligation_seeded_expansion(
+        conn: "Connection", matches, *, source: str,
+        question_seed_ids=(), catalog_seed_ids=(),
+        depth: int = 2, forward_depth: int = 0, per_seed_limit: int = 8,
+        reserve_limit: int = 16) -> ObligationExpansion:
+    """Bounded reverse entry discovery seeded by what obligations need.
+
+    Seeds are the union of resolved obligation targets, clew-route
+    endpoints, and question/catalog symbols — every canonical id per
+    qualified name — plus exactly one structural ownership bridge
+    (member -> exact owner) so a registrar that references the owning
+    type is reachable when the route ends at a member; sibling members
+    never enter. Reverse ``call`` edges recover entries (``called_by``),
+    reverse ``type_ref`` edges recover registrars (``shared_reference``);
+    an incoming reference is never represented as a forward one. Per-seed
+    shortlists are caps on citation, not silent deletion: overflow goes
+    to a bounded reserve and every cap event is recorded in ``reasons``.
+    """
+    seed_names: list = []
+    for match in matches:
+        route = [str(name) for name in getattr(match.clew, "route", ())]
+        endpoints = [name for name in (*route[:1], *route[-1:]) if name]
+        for name in (*endpoints,
+                     *(str(symbol) for _obligation, symbol
+                       in match.target_symbols if symbol)):
+            if name not in seed_names:
+                seed_names.append(name)
+    located: dict = {}
+    seed_ids: list = []
+    owner_names: list = []
+
+    def resolve_seed_names(names, collect_owners):
+        for chunk in _chunks([name for name in names if name]):
+            marks = ",".join("?" * len(chunk))
+            for row in conn.execute(
+                    f"SELECT canonical_id, qualified_name, file, line_start, "
+                    f"line_end, parent_qualified_name FROM scip_symbols "
+                    f"WHERE source_name = ? AND qualified_name IN ({marks}) "
+                    f"AND canonical_id NOT GLOB ? ORDER BY canonical_id",
+                    [source, *chunk, "local *"]):
+                canonical = str(row[0])
+                if canonical not in located:
+                    seed_ids.append(canonical)
+                    located[canonical] = (row[1], row[2], row[3], row[4])
+                parent = str(row[5] or "")
+                if (collect_owners and parent and parent not in seed_names
+                        and parent not in owner_names):
+                    owner_names.append(parent)
+
+    resolve_seed_names(seed_names, collect_owners=True)
+    resolve_seed_names(owner_names, collect_owners=False)
+    for canonical in (*question_seed_ids, *catalog_seed_ids):
+        if canonical and str(canonical) not in located:
+            seed_ids.append(str(canonical))
+    for canonical, location in _locate(
+            conn, source,
+            [cid for cid in seed_ids if cid not in located]).items():
+        located[canonical] = location
+
+    citations: list = []
+    retained: list = []
+    reserve: list = []
+    truncated: list = []
+    reasons: dict = {}
+    frontier = list(dict.fromkeys(seed_ids))
+    visited_callers = set(frontier)
+    visited_edges: set = set()
+    for level in range(1, max(int(depth), 0) + 1):
+        rows = []
+        for chunk in _chunks(sorted(frontier)):
+            marks = ",".join("?" * len(chunk))
+            rows.extend(conn.execute(
+                f"SELECT caller_canonical_id, callee_canonical_id, file, "
+                f"line, edge_type FROM scip_edges "
+                f"WHERE callee_canonical_id IN ({marks}) "
+                f"AND edge_type IN ('call', 'type_ref')", chunk))
+        by_seed: dict = {}
+        for caller, callee, file, line, edge_type in rows:
+            if _is_local(caller) or caller == callee:
+                continue
+            key = (caller, callee, edge_type, file, line)
+            if key in visited_edges:
+                continue
+            visited_edges.add(key)
+            by_seed.setdefault(str(callee), []).append(
+                (str(file), int(line), str(caller), str(edge_type)))
+        caller_locations = _locate(conn, source, sorted({
+            caller for pairs in by_seed.values()
+            for _file, _line, caller, _edge in pairs}))
+        next_frontier: list = []
+        for seed in sorted(by_seed):
+            seed_location = located.get(seed)
+            if seed_location is None:
+                continue
+            candidates = []
+            for file, line, caller, edge_type in sorted(by_seed[seed]):
+                location = caller_locations.get(caller)
+                if location is None or _nonproduction_path(location[1]):
+                    continue
+                candidates.append((file, line, caller, edge_type, location))
+            kept = candidates[:max(int(per_seed_limit), 0)]
+            spill = candidates[len(kept):]
+            reserved_here = [
+                caller for _file, _line, caller, _edge, _loc in spill
+            ][:max(int(reserve_limit) - len(reserve), 0)]
+            reserve.extend(reserved_here)
+            if spill:
+                truncated.append(seed)
+            reasons[seed] = {
+                "available": len(candidates),
+                "retained": len(kept),
+                "reserve": len(reserved_here),
+                "discarded": len(spill) - len(reserved_here)}
+            for file, line, caller, edge_type, location in kept:
+                caller_qualified, caller_file, caller_start, caller_end = (
+                    location)
+                seed_qualified, seed_file, seed_start, seed_end = (
+                    seed_location)
+                citations.append(StructuralCitation(
+                    qualified_name=str(caller_qualified),
+                    file=str(caller_file),
+                    line_start=int(caller_start), source_name=source,
+                    relation=edge_relation("incoming_" + edge_type),
+                    hop=level, call_site_file="", call_site_line=0,
+                    stop_reason="obligation_entry",
+                    line_end=int(caller_end)))
+                citations.append(StructuralCitation(
+                    qualified_name=str(seed_qualified), file=str(seed_file),
+                    line_start=int(seed_start), source_name=source,
+                    relation=edge_relation(edge_type), hop=level + 1,
+                    call_site_file=file, call_site_line=line,
+                    stop_reason="reference", line_end=int(seed_end),
+                    parent_qualified_name=str(caller_qualified)))
+                retained.append(caller)
+                located.setdefault(caller, location)
+                if caller not in visited_callers:
+                    visited_callers.add(caller)
+                    next_frontier.append(caller)
+        frontier = next_frontier
+        if not frontier:
+            break
+    if max(int(forward_depth), 0) > 0:
+        # Diagnostic/ablation mode only: production defaults
+        # keep forward continuation off, and every enabled
+        # run says so in its diagnostics.
+        reasons["forward:enabled"] = {
+            "depth": int(forward_depth)}
+    forward_frontier = list(dict.fromkeys(seed_ids))
+    visited_forward = set(forward_frontier)
+    for level in range(1, max(int(forward_depth), 0) + 1):
+        rows = []
+        for chunk in _chunks(sorted(forward_frontier)):
+            marks = ",".join("?" * len(chunk))
+            rows.extend(conn.execute(
+                f"SELECT caller_canonical_id, callee_canonical_id, "
+                f"file, line, edge_type FROM scip_edges "
+                f"WHERE caller_canonical_id IN ({marks}) "
+                f"AND edge_type IN ('call', 'type_ref')", chunk))
+        by_caller: dict = {}
+        for caller, callee, file, line, edge_type in rows:
+            if _is_local(callee) or caller == callee:
+                continue
+            key = (caller, callee, edge_type, file, line, "fwd")
+            if key in visited_edges:
+                continue
+            visited_edges.add(key)
+            by_caller.setdefault(str(caller), []).append(
+                (str(file), int(line), str(callee), str(edge_type)))
+        callee_locations = _locate(conn, source, sorted({
+            callee for pairs in by_caller.values()
+            for _file, _line, callee, _edge in pairs}))
+        next_forward: list = []
+        for caller in sorted(by_caller):
+            caller_location = located.get(caller)
+            if caller_location is None:
+                continue
+            candidates = []
+            for file, line, callee, edge_type in sorted(by_caller[caller]):
+                location = callee_locations.get(callee)
+                if location is None or _nonproduction_path(location[1]):
+                    continue
+                candidates.append((file, line, callee, edge_type, location))
+            kept = candidates[:max(int(per_seed_limit), 0)]
+            spill = candidates[len(kept):]
+            if spill:
+                truncated.append(caller)
+            reasons[f"forward:{caller}"] = {
+                "available": len(candidates),
+                "retained": len(kept),
+                "reserve": 0,
+                "discarded": len(spill)}
+            caller_qualified, caller_file, caller_start, caller_end = (
+                caller_location)
+            for file, line, callee, edge_type, location in kept:
+                (callee_qualified, callee_file, callee_start,
+                 callee_end) = location
+                citations.append(StructuralCitation(
+                    qualified_name=str(caller_qualified),
+                    file=str(caller_file),
+                    line_start=int(caller_start), source_name=source,
+                    relation=edge_relation(edge_type),
+                    hop=level, call_site_file="", call_site_line=0,
+                    stop_reason="obligation_continuation",
+                    line_end=int(caller_end)))
+                citations.append(StructuralCitation(
+                    qualified_name=str(callee_qualified),
+                    file=str(callee_file),
+                    line_start=int(callee_start), source_name=source,
+                    relation=edge_relation(edge_type), hop=level + 1,
+                    call_site_file=file, call_site_line=line,
+                    stop_reason="reference", line_end=int(callee_end),
+                    parent_qualified_name=str(caller_qualified)))
+                retained.append(callee)
+                located.setdefault(callee, location)
+                if callee not in visited_forward:
+                    visited_forward.add(callee)
+                    next_forward.append(callee)
+        forward_frontier = next_forward
+        if not forward_frontier:
+            break
+    return ObligationExpansion(
+        citations=tuple(citations),
+        retained_candidates=tuple(dict.fromkeys(retained)),
+        reserve_candidates=tuple(dict.fromkeys(reserve)),
+        truncated_seeds=tuple(dict.fromkeys(truncated)),
+        reasons=reasons)
+
+
+def facet_symbol_seeds(conn: "Connection", identifiers, *,
+                       source: str, per_identifier: int = 8) -> tuple:
+    """Canonical ids matching facet identifiers exactly, by name channels.
+
+    Channels per identifier: exact qualified name, exact display name,
+    and exact qualified-name suffix (``.identifier``) — never fuzzy
+    matching, so an identifier the question does not contain can never
+    seed. Underscores are escaped so snake_case identifiers stay literal
+    instead of acting as LIKE wildcards.
+    """
+    seeds: list = []
+    for identifier in identifiers:
+        name = str(identifier).strip().strip("`")
+        if not name:
+            continue
+        escaped = (name.replace("\\", "\\\\")
+                   .replace("%", "\\%").replace("_", "\\_"))
+        rows = conn.execute(
+            "SELECT canonical_id FROM scip_symbols WHERE source_name = ? "
+            "AND (qualified_name = ? OR display_name = ? "
+            "OR qualified_name LIKE ? ESCAPE '\\') "
+            "AND canonical_id NOT GLOB ? ORDER BY canonical_id LIMIT ?",
+            (source, name, name, f"%.{escaped}", "local *",
+             max(int(per_identifier), 0))).fetchall()
+        for row in rows:
+            if row[0] not in seeds:
+                seeds.append(row[0])
+    return tuple(seeds)

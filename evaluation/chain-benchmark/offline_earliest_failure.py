@@ -208,6 +208,11 @@ def stage_pipeline(service, question_id, question, vector, *, source,
     body_menu = definition_body_menu(evidence.hops, selection)
     body_selection = complete_definition_body_selection(
         body_menu, all_definition_body_selection(body_menu))
+    from library.body_plan import derive_definition_body_plan
+    body_plan = derive_definition_body_plan(
+        hops=evidence.hops,
+        retained_symbols=tuple(selection.symbols),
+        bindings=())
     body_symbols = list(body_selection.symbols)
     timings["selection"] = time.perf_counter() - started
 
@@ -231,14 +236,13 @@ def stage_pipeline(service, question_id, question, vector, *, source,
         evidence, selection, hydrated_hops=selected_hops,
         source_gaps=source_gaps)
     timings["materialization"] = time.perf_counter() - started
-
     return {
         "pool": pool, "matches": matches, "evidence": evidence,
         "menu": menu, "scoped": scoped, "selection": selection,
         "body_symbols": body_symbols, "selected_hops": selected_hops,
         "story": story, "spine": spine, "ledger": ledger,
         "projected": projected, "source_gaps": source_gaps,
-        "timings": timings,
+        "timings": timings, "body_plan": body_plan,
     }
 
 

@@ -155,3 +155,48 @@ def test_definition_doc_header_travels_as_its_own_excerpt(tmp_path):
         ' */',
         '@Evolving'))
     assert result.gaps == ()
+
+
+def test_doc_header_crosses_a_bounded_blank_separation(tmp_path):
+    root = tmp_path / 'source'
+    root.mkdir()
+    body = (
+        '# Explains the writer fork.\n'
+        '# Documented above a gap.\n'
+        '\n'
+        '\n'
+        'def run():\n'
+        '    pass\n')
+    (root / 'm.py').write_text(body)
+
+    result = materialize_citations(
+        [_citation(line_start=5, line_end=6,
+                   call_site_file='', call_site_line=0)],
+        {'src1': root})
+
+    headers = [item for item in result.excerpts
+               if item.kind == 'doc_header']
+    assert len(headers) == 1
+    assert (headers[0].line_start, headers[0].line_end) == (1, 4)
+    assert 'Explains the writer fork.' in headers[0].content
+
+
+def test_doc_header_walk_stops_beyond_the_blank_bound(tmp_path):
+    root = tmp_path / 'source'
+    root.mkdir()
+    body = (
+        '# Stray distant note.\n'
+        '\n'
+        '\n'
+        '\n'
+        'def run():\n'
+        '    pass\n')
+    (root / 'm.py').write_text(body)
+
+    result = materialize_citations(
+        [_citation(line_start=5, line_end=6,
+                   call_site_file='', call_site_line=0)],
+        {'src1': root})
+
+    assert not [item for item in result.excerpts
+                if item.kind == 'doc_header']

@@ -102,6 +102,11 @@ class OpenAIProvider:
                     'input_tokens': int(usage.get('prompt_tokens', 0) or 0),
                     'output_tokens': int(usage.get('completion_tokens', 0) or 0),
                 }
+                finish_reason = (
+                    (data.get('choices') or [{}])[0].get('finish_reason')
+                    if isinstance(data, dict) else None)
+                if finish_reason is not None:
+                    self.last_usage['stop_reason'] = finish_reason
                 _logger.info(
                     'OpenAI response: status=%d elapsed=%.1fs',
                     response.status_code, elapsed,

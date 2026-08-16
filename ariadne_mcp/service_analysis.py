@@ -399,6 +399,8 @@ class AnalysisMixin:
                 _clew_started = time.perf_counter()
                 _trace("clew_selection", "start")
                 _clew_matches: list = []
+                _obligation_route_targets = ()
+                _required_route_symbols = ()
                 _clew_diagnostics = {
                     "recalled": 0, "accepted": 0, "selected": 0,
                     "rejected": 0, "families": 0, "status": "not-run",
@@ -763,6 +765,16 @@ class AnalysisMixin:
                 except Exception as _route_embedding_error:
                     _logger.info("pre-scope route embedding skipped: %s", _route_embedding_error)
                 components = component_menu_for(graph, menu)
+                from library.chain_menu import guarded_component_scope, guarded_definition_body_selection, guarded_route_selection, obligation_definition_body_symbols, retain_obligation_target_occurrences
+                from library.selection_policy import signal_from_usage
+                _obligation_route_targets = tuple(dict.fromkeys(
+                    pair for match in _clew_matches
+                    for pair in match.target_symbols))
+                _required_route_symbols = tuple(dict.fromkeys(
+                    symbol for _obligation, symbol in _obligation_route_targets))
+                _component_usage: list = []
+                _route_usage: list = []
+                _body_usage: list = []
                 _post_walk = _graph_diagnostics.setdefault("post_walk_selection", {})
                 _post_walk["component_menu_chars"] = len(components.text)
                 route_scope_retained = len(menu.routes)
@@ -781,20 +793,29 @@ class AnalysisMixin:
                         reply = ",".join(components.components)
                     else:
                         reply = await _ask_chat(
-                        messages=[
-                            {'role': 'system', 'content': 'You select evidence. Reply with '
-                                                          'numbers only.'},
-                            {'role': 'user',
-                             'content': _component_prompt(question, components.text, _coverage_plan)},
-                        ],
-                        max_tokens=MENU_MAX_TOKENS, phase="scip-component-select")
+                            messages=[
+                                {'role': 'system', 'content': 'You select evidence. Reply with '
+                                                              'numbers only.'},
+                                {'role': 'user',
+                                 'content': _component_prompt(question, components.text, _coverage_plan)},
+                            ],
+                            max_tokens=MENU_MAX_TOKENS, phase="scip-component-select",
+                            usage_sink=_component_usage)
                     component_route_ids = resolve_component_selection(components, reply)
                     _post_walk["component_plan"] = str(reply or "").strip()[:1200]
                     _post_walk["component_routes"] = len(component_route_ids)
-                    if component_route_ids:
-                        menu = routes_for_modules(menu, component_route_ids)
+                    menu, _component_decision = guarded_component_scope(
+                        menu, components, reply, _obligation_route_targets,
+                        question=question, obligations=_coverage_plan,
+                        completion=signal_from_usage(
+                            _component_usage[-1] if _component_usage else None,
+                            max_tokens=MENU_MAX_TOKENS))
+                    _post_walk["component_decision"] = {
+                        "outcome": _component_decision["outcome"],
+                        "retained_route_ids": list(_component_decision["retained_route_ids"]),
+                        "dropped_route_ids": list(_component_decision["dropped_route_ids"])}
                     if _selector_mode == "deterministic":
-                        menu = scope_route_menu(menu, question, route_scores=_route_scores, )
+                        menu = scope_route_menu(menu, question, route_scores=_route_scores, required_symbols=_required_route_symbols)
                     route_scope_retained = len(menu.routes)
                     _post_walk["expanded_routes"] = len(menu.routes)
                     section_candidates = len(menu.sections)
@@ -807,17 +828,25 @@ class AnalysisMixin:
                         route_reply = ",".join(menu.routes)
                     else:
                         route_reply = await _ask_chat(
-                        messages=[
-                            {"role": "system", "content": "You select exact compiler-derived routes. Reply with IDs only."},
-                            {"role": "user", "content": _menu_prompt(question, menu.text, _coverage_plan)},
-                        ],
-                        max_tokens=MENU_MAX_TOKENS, phase="scip-exact-route-select")
-                    selection = resolve_obligation_route_selection(menu, route_reply)
+                            messages=[
+                                {"role": "system", "content": "You select exact compiler-derived routes. Reply with IDs only."},
+                                {"role": "user", "content": _menu_prompt(question, menu.text, _coverage_plan)},
+                            ],
+                            max_tokens=MENU_MAX_TOKENS, phase="scip-exact-route-select",
+                            usage_sink=_route_usage)
+                    selection = guarded_route_selection(
+                        menu, route_reply, _obligation_route_targets, question=question,
+                        obligations=_coverage_plan,
+                        completion=signal_from_usage(
+                            _route_usage[-1] if _route_usage else None,
+                            max_tokens=MENU_MAX_TOKENS))
                     _post_walk["exact_route_plan"] = str(route_reply or "").strip()[:1200]
                     if not selection.route_ids:
                         selection = all_route_selection(menu)
                     graph_selection = selection_for_graph_symbols(graph, selection.symbols, occurrence_keys = selection.occurrence_keys)
                     selection = merge_selections(selection, graph_selection)
+                    selection = retain_obligation_target_occurrences(
+                        graph, selection, _obligation_route_targets)
                     selection = complete_route_selection(menu, selection, question)
                     _section_scores = {}
                     try:
@@ -863,13 +892,32 @@ class AnalysisMixin:
                                      "Cover every compared implementation and sequential stage. Pick bodies containing decisions or transformations, not incidental getters or types.\n\nQuestion: "
                                      + question + "\n\n" + _body_menu.text},
                                 ],
-                                max_tokens=128, phase="scip-body-select")
-                            _body_selection = resolve_definition_body_selection(
-                                _body_menu, _body_reply)
+                                max_tokens=128, phase="scip-body-select",
+                                usage_sink=_body_usage)
+                            _body_selection = guarded_definition_body_selection(
+                                _body_menu, _body_reply,
+                                completion=signal_from_usage(
+                                    _body_usage[-1] if _body_usage else None, max_tokens=128))
+                            _post_walk["body_reply"] = str(_body_reply or "").strip()[:400]
                             if not _body_selection.symbols:
                                 _body_selection = all_definition_body_selection(_body_menu)
-                        _body_selection = complete_definition_body_selection(_body_menu, _body_selection)
+                        _required_body_symbols = obligation_definition_body_symbols(
+                            _body_menu, _obligation_route_targets)
+                        _body_selection = complete_definition_body_selection(
+                            _body_menu, _body_selection,
+                            required_symbols=_required_body_symbols)
+                        from library.body_plan import derive_definition_body_plan
+                        _body_plan = derive_definition_body_plan(
+                            hops=hops,
+                            retained_symbols=tuple(selection.symbols),
+                            bindings=_obligation_route_targets)
                         selected_body_symbols = list(_body_selection.symbols)
+                        _post_walk["body_plan"] = {
+                            "required": len(_body_plan.required),
+                            "optional": len(_body_plan.optional),
+                            "selected": len(_body_plan.selected),
+                            "gaps": list(_body_plan.gaps),
+                            "cap_events": len(_body_plan.cap_events)}
                         _post_walk["selected_bodies"] = len(selected_body_symbols)
                         source_root = str(
                             self.config.get_all_source_paths().get(_scip_source) or "") or None
@@ -926,7 +974,9 @@ class AnalysisMixin:
                                     for route_id in menu.routes}
                         except Exception as _route_embedding_error:
                             _logger.info("pre-scope route embedding skipped: %s", _route_embedding_error)
-                        menu = scope_route_menu(menu, question, route_scores=_route_scores)
+                        menu = scope_route_menu(menu, question, route_scores=_route_scores, required_symbols=tuple(dict.fromkeys(
+                            symbol for match in _clew_matches
+                            for _obligation, symbol in match.target_symbols)))
                         route_scope_retained = len(menu.routes)
                         _post_walk["expanded_routes"] = len(menu.routes)
                         section_candidates = len(menu.sections)
@@ -1025,13 +1075,19 @@ class AnalysisMixin:
                         ledger = validate_claims(answer + _proof_appendix, _formulation_evidence)
                     except Exception as repair_error:
                         _logger.warning("claim repair failed: %s", repair_error)
-                answer += _proof_appendix
                 evidence_gaps = list(ledger.gaps)
                 if not ledger.valid:
                     answer, ledger = filter_supported(
                         answer, _formulation_evidence, ledger)
                     if not answer:
                         answer = "The compiler evidence does not support a complete answer."
+                if _proof_appendix and _formulation_evidence is not None:
+                    # The deterministic appendix is hash-backed mandatory proof;
+                    # repair and filtering act on narration only and never
+                    # delete it. Grading happens on the true final artifact.
+                    from library.claim_validation import validate_claims
+                    answer += _proof_appendix
+                    ledger = validate_claims(answer, _formulation_evidence)
                 supported_claims = [
                     {"text": claim.text, "locations": list(claim.locations), "supported": True}
                     for claim in ledger.claims if claim.supported
@@ -1053,9 +1109,10 @@ class AnalysisMixin:
             scope_confidence = "low"
             if _formulation_evidence is not None and _formulation_evidence.hops:
                 from library.chain_confidence import (
+                    CompletenessAssessment,
                     assess_chain_confidence, assess_chain_completeness,
-                    assess_formulation_coverage, assess_scope_completeness,
-                    assess_selection_coverage)
+                    assess_formulation_coverage, assess_obligation_coverage,
+                    assess_scope_completeness, assess_selection_coverage)
                 assessment = assess_chain_confidence(
                     _formulation_evidence, claims_total=len(ledger.claims),
                     supported_claims=len(supported_claims))
@@ -1066,11 +1123,22 @@ class AnalysisMixin:
                 chain_complete = completeness.complete
                 completeness_reasons = list(completeness.reasons)
                 formulation = assess_formulation_coverage(claims_total=len(ledger.claims), supported_claims=len(supported_claims))
+                if story_ir is not None and _obligation_route_targets:
+                    _represented_symbols = {
+                        node.symbol for node in story_ir.nodes}
+                    _obligation_coverage = assess_obligation_coverage(
+                        _obligation_route_targets,
+                        represented_symbols=_represented_symbols)
+                    if not _obligation_coverage.complete:
+                        formulation = CompletenessAssessment(
+                            False,
+                            (*formulation.reasons, *_obligation_coverage.reasons))
                 formulation_complete = formulation.complete
                 formulation_reasons = list(formulation.reasons)
                 scope = assess_scope_completeness(_evidence)
                 selection_coverage = assess_selection_coverage(
-                    route_candidates, selected_route_ids, )
+                    route_candidates, selected_route_ids,
+                    required_symbols=_required_route_symbols)
                 selection_complete = selection_coverage.complete
                 selection_reasons = list(selection_coverage.reasons)
                 scope_complete = scope.complete and selection_complete

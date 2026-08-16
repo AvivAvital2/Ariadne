@@ -56,6 +56,7 @@ class AnswerEvidence:
     mandatory_fan_outs: tuple = ()
     source_gaps: tuple = ()
     seed_provenance: tuple = ()
+    expansion_diagnostics: dict = field(default_factory=dict)
     def citations(self) -> list[dict]:
         """The response payload — coordinates, not prose, and each one once.
 
@@ -225,15 +226,17 @@ def expand_bare_lines(answer: str) -> str:
         position = match.end()
     result.append(answer[position:])
     return ''.join(result)
-
-
 def locations_for(hops) -> frozenset:
-    """Every coordinate the spine puts in front of the model — definitions and call sites.
+    """Every coordinate the spine puts in front of the model — definitions, call sites, and hash-verified excerpts.
 
-    Both are admissible because both are shown. The prompt renders the site as ``called at file:line`` for a call
+    All are admissible because all are shown. The prompt renders the site as ``called at file:line`` for a call
     edge and ``referenced at file:line`` for a type reference, and tells the model that
     site is what the index recorded, so citing either is citing what the chain showed. A live run cited five call sites and the guard reported all five as
-    invented, because this set held definitions only.
+    invented, because this set held definitions only. Materialized source
+    excerpts (doc headers, edge sites) are exact, hash-verified evidence
+    outside the definition extent — citing their coordinates is citing
+    proof the bundle carries, so rejecting them silently deleted true
+    doc-adjacent evidence from answers.
     """
     coordinates: set[str] = set()
     for entry in hops:
@@ -242,6 +245,9 @@ def locations_for(hops) -> frozenset:
             coordinates.add(f"{citation.file}:{line}")
         if citation.call_site_file:
             coordinates.add(f'{citation.call_site_file}:{citation.call_site_line}')
+        for excerpt in getattr(entry, 'source_excerpts', ()) or ():
+            for line in range(excerpt.line_start, excerpt.line_end + 1):
+                coordinates.add(f"{excerpt.file}:{line}")
     return frozenset(coordinates)
 
 
@@ -349,7 +355,9 @@ clew_matches=(), positioning_documents=(), defer_source: bool = False) -> Answer
     """
     from docgen.scip_paths import indexer_cwds
     from library.chain_bundle import curate_bundle
-    from library.structural_assembly import chain_from_seeds, seeds_from_documents, caller_roots, question_symbol_seeds, reference_bridges, localized_citations, question_ranked_seeds, citations_from_qualified_routes, obligation_reference_closure, connect_obligation_targets, selected_route_call_fanout
+    from library.structural_assembly import chain_from_seeds, seeds_from_documents, caller_roots, question_symbol_seeds, reference_bridges, localized_citations, question_ranked_seeds, citations_from_qualified_routes, obligation_reference_closure, connect_obligation_targets, selected_route_call_fanout, obligation_seeded_expansion
+    from library.structural_assembly import facet_symbol_seeds
+    from library.question_facets import extract_question_facets
 
     root = None
     try:
@@ -414,6 +422,8 @@ clew_matches=(), positioning_documents=(), defer_source: bool = False) -> Answer
                 conn, seeds, question, source=source))
         seeds = list(dict.fromkeys((*seeds, *targeted_seeds)))
         selected_route_mode = bool(clew_matches)
+        expansion_retained_ids = ()
+        expansion_diagnostics = {}
         if selected_route_mode:
             caller_expansion = caller_roots(conn, [], source=source, depth=0)
             citations = citations_from_qualified_routes(
@@ -430,6 +440,26 @@ clew_matches=(), positioning_documents=(), defer_source: bool = False) -> Answer
                 conn, clew_matches, source=source))
             citations.extend(obligation_reference_closure(
                 conn, clew_matches, source=source, question=question))
+            _facet_identifiers = tuple(dict.fromkeys(
+                identifier
+                for facet in extract_question_facets(question)
+                for identifier in facet.identifiers))
+            _facet_seed_ids = facet_symbol_seeds(
+                conn, _facet_identifiers, source=source)
+            _expansion = obligation_seeded_expansion(
+                conn, clew_matches, source=source,
+                question_seed_ids=(
+                    *explicit_question_seeds, *_facet_seed_ids),
+                catalog_seed_ids=tuple(targeted_seeds))
+            citations.extend(_expansion.citations)
+            expansion_retained_ids = _expansion.retained_candidates
+            expansion_diagnostics = {
+                "retained": len(_expansion.retained_candidates),
+                "reserve": list(_expansion.reserve_candidates),
+                "truncated_seeds": list(_expansion.truncated_seeds),
+                "reasons": {key: dict(value) for key, value
+                            in _expansion.reasons.items()},
+            }
             _empty, truncation = chain_from_seeds(conn, [], source=source, depth=0)
         else:
             caller_expansion = caller_roots(
@@ -468,6 +498,8 @@ clew_matches=(), positioning_documents=(), defer_source: bool = False) -> Answer
             origins_by_id.setdefault(canonical_id, set()).add("caller_expansion")
         for canonical_id in question_caller_expansion.roots:
             origins_by_id.setdefault(canonical_id, set()).add("caller_expansion")
+        for canonical_id in expansion_retained_ids:
+            origins_by_id.setdefault(canonical_id, set()).add("obligation_expansion")
         provenance_by_symbol = {}
         provenance_ids = list(origins_by_id)
         for start in range(0, len(provenance_ids), 300):
@@ -510,7 +542,7 @@ clew_matches=(), positioning_documents=(), defer_source: bool = False) -> Answer
 
     if not citations:
         return AnswerEvidence(unresolved_paths=seed_set.unresolved_paths,
-                              fan_outs=truncation.fan_outs, caller_frontiers = tuple(dict.fromkeys((*caller_expansion.gated_targets, *question_caller_expansion.gated_targets, *bridge_expansion.gated_targets))), mandatory_fan_outs = mandatory_fan_outs(question, question_truncation.fan_outs, truncation.fan_outs), seed_provenance=seed_provenance)
+                              fan_outs=truncation.fan_outs, caller_frontiers = tuple(dict.fromkeys((*caller_expansion.gated_targets, *question_caller_expansion.gated_targets, *bridge_expansion.gated_targets))), mandatory_fan_outs = mandatory_fan_outs(question, question_truncation.fan_outs, truncation.fan_outs), seed_provenance=seed_provenance, expansion_diagnostics=expansion_diagnostics)
 
     bundle = curate_bundle(
         library, citations, source=source, source_root=root,
@@ -532,7 +564,7 @@ clew_matches=(), positioning_documents=(), defer_source: bool = False) -> Answer
         # a fork the walk declined to expand is evidence about the code, so it travels
         fan_outs=truncation.fan_outs,
         hops=tuple(bundle.hops),
-    caller_frontiers = tuple(dict.fromkeys((*caller_expansion.gated_targets, *question_caller_expansion.gated_targets, *bridge_expansion.gated_targets))), source_gaps = bundle.source_gaps, mandatory_fan_outs = mandatory_fan_outs(question, question_truncation.fan_outs, truncation.fan_outs), seed_provenance=seed_provenance)
+    caller_frontiers = tuple(dict.fromkeys((*caller_expansion.gated_targets, *question_caller_expansion.gated_targets, *bridge_expansion.gated_targets))), source_gaps = bundle.source_gaps, mandatory_fan_outs = mandatory_fan_outs(question, question_truncation.fan_outs, truncation.fan_outs), seed_provenance=seed_provenance, expansion_diagnostics=expansion_diagnostics)
 
 
 def unsupported_locations(answer: str, evidence: AnswerEvidence) -> tuple[str, ...]:

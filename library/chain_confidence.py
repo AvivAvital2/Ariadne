@@ -183,3 +183,26 @@ def assess_selection_coverage(candidate_routes, selected_routes, *,
         reasons.append(_count_reason(
             len(missing), "required route symbol missing"))
     return CompletenessAssessment(not reasons, tuple(reasons))
+
+
+def assess_obligation_coverage(
+        bindings, *, represented_symbols) -> CompletenessAssessment:
+    """Every planned obligation needs at least one materialized bound target.
+
+    Completeness is graded against the obligation plan, never against the
+    claims the answer happens to contain: an obligation whose bound target
+    symbols all failed to materialize is missing proof, whatever the
+    narration says about itself.
+    """
+    grouped: dict = {}
+    for obligation, symbol in bindings:
+        grouped.setdefault(int(obligation), []).append(str(symbol))
+    represented = set(represented_symbols)
+    uncovered = sorted(
+        number for number, symbols in grouped.items()
+        if not represented.intersection(symbols))
+    if uncovered:
+        return CompletenessAssessment(False, tuple(
+            f"obligation C{number} has no materialized proof"
+            for number in uncovered))
+    return CompletenessAssessment(True, ())

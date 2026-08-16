@@ -33,6 +33,7 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from library.relation_semantics import relation_site_phrase, transition_verb
+from library.selection_policy import trailing_menu_token
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from library import Library
@@ -1733,11 +1734,13 @@ def all_definition_body_selection(menu: DefinitionBodyMenu) -> DefinitionBodySel
     return DefinitionBodySelection(symbols=tuple(menu.symbols.values()))
 def complete_definition_body_selection(
         menu: DefinitionBodyMenu,
-        selection: DefinitionBodySelection) -> DefinitionBodySelection:
-    """Keep compiler route-transition bodies in addition to model choices."""
+        selection: DefinitionBodySelection,
+        *, required_symbols=()) -> DefinitionBodySelection:
+    """Keep compiler route-transition and selected obligation bodies."""
     symbols = list(selection.symbols)
-    for symbol in menu.required_symbols:
-        if symbol not in symbols:
+    available = set(menu.symbols.values())
+    for symbol in (*menu.required_symbols, *required_symbols):
+        if symbol in available and symbol not in symbols:
             symbols.append(symbol)
     return DefinitionBodySelection(
         symbols=tuple(symbols), unknown=selection.unknown)
@@ -1772,3 +1775,185 @@ def resolve_obligation_route_selection(
                 route_labels.append(label)
     labels = " ".join((*route_labels, *section_labels))
     return resolve_route_selection(menu, labels)
+
+
+def retain_obligation_routes(
+        menu: RouteMenu, selection: Selection, bindings, *, question: str,
+        obligations: str = "", max_per_obligation: int = 1) -> Selection:
+    """Add a bounded connected route for uncovered obligation targets.
+
+    Target binding is a safety net after explicit route selection: the
+    binding is authority, and token overlap with the question only ranks
+    alternatives — it never gates retention. Singleton symbol cards do not
+    prove a transition and therefore cannot widen the selected source-body
+    surface.
+    """
+    grouped = {}
+    for obligation, symbol in bindings:
+        if symbol:
+            values = grouped.setdefault(int(obligation), [])
+            if str(symbol) not in values:
+                values.append(str(symbol))
+    obligation_text = {
+        int(number): text
+        for number, text in re.findall(
+            r"(?m)^\s*C(\d{1,2})\s*:\s*(.*)$", obligations or "")}
+    route_ids = list(selection.route_ids)
+    symbols = list(selection.symbols)
+    occurrences = list(selection.occurrence_keys)
+    covered = {
+        symbol for route_id in route_ids
+        for symbol in menu.routes.get(route_id, ())}
+    for obligation in sorted(grouped):
+        targets = set(grouped[obligation])
+        query_tokens = _semantic_tokens(
+            question + " " + obligation_text.get(obligation, ""))
+        for _ in range(max(int(max_per_obligation), 0)):
+            missing = targets - covered
+            ranked = []
+            for label, route in menu.routes.items():
+                if label in route_ids or len(route) < 2:
+                    continue
+                hits = missing.intersection(route)
+                if not hits:
+                    continue
+                target_overlap = max((
+                    len(query_tokens.intersection(_semantic_tokens(target)))
+                    for target in hits), default=0)
+                route_overlap = len(query_tokens.intersection(
+                    set().union(*(_semantic_tokens(name) for name in route))))
+                ranked.append((
+                    -len(hits), -target_overlap, -route_overlap,
+                    len(route), int(label[1:]), label))
+            if not ranked:
+                break
+            label = min(ranked)[-1]
+            route_ids.append(label)
+            for symbol in menu.routes[label]:
+                if symbol not in symbols:
+                    symbols.append(symbol)
+            covered.update(menu.routes[label])
+            occurrences.extend(menu.route_occurrences.get(label, ()))
+    return Selection(
+        symbols=symbols, sections=list(selection.sections),
+        unknown=selection.unknown, route_ids=tuple(route_ids),
+        section_ids=selection.section_ids,
+        occurrence_keys=tuple(dict.fromkeys(occurrences)))
+
+
+def retain_obligation_target_occurrences(
+        graph: EvidenceGraph, selection: Selection, bindings, *,
+        max_per_obligation: int = 8) -> Selection:
+    """Retain compiler occurrences and ancestors for selected obligation targets.
+
+    Route cards are a compact selection surface, not an authority boundary.  A
+    target selected for an obligation can be a singleton or a disconnected graph
+    node; preserve its exact recorded occurrence and bounded ancestor path before
+    definition-body selection instead of silently losing the target.
+    """
+    grouped = {}
+    for obligation, symbol in bindings:
+        if not symbol:
+            continue
+        values = grouped.setdefault(int(obligation), [])
+        name = str(symbol)
+        if name not in values and len(values) < max(int(max_per_obligation), 0):
+            values.append(name)
+    targets = tuple(
+        name for obligation in sorted(grouped) for name in grouped[obligation])
+    if not targets:
+        return selection
+    return merge_selections(
+        selection, selection_for_graph_symbols(graph, targets))
+
+
+def obligation_definition_body_symbols(
+        menu: DefinitionBodyMenu, bindings, *,
+        max_per_obligation: int = 4) -> tuple[str, ...]:
+    """Return available definition bodies explicitly selected for obligations."""
+    available = set(menu.symbols.values())
+    grouped = {}
+    for obligation, symbol in bindings:
+        name = str(symbol or "")
+        if not name or name not in available:
+            continue
+        values = grouped.setdefault(int(obligation), [])
+        if name not in values and len(values) < max(int(max_per_obligation), 0):
+            values.append(name)
+    return tuple(
+        name for obligation in sorted(grouped) for name in grouped[obligation])
+
+
+def guarded_definition_body_selection(
+        menu: DefinitionBodyMenu, reply: str, *, completion=None,
+        required_symbols=()) -> DefinitionBodySelection:
+    """Resolve body selection; an incomplete reply fails open to every card.
+
+    The card menu is already proof-scoped to the selected routes, so when
+    the reply was truncated at the output cap or cut mid-label, selecting
+    every scoped card is safer than hard-deleting the unnamed bodies. One
+    parseable id never suppresses this fallback.
+    """
+    selection = resolve_definition_body_selection(menu, reply)
+    incomplete = completion is not None and (
+        completion.truncated or completion.malformed)
+    if (incomplete or not selection.symbols
+            or trailing_menu_token(reply, menu.symbols) is not None):
+        selection = DefinitionBodySelection(
+            symbols=tuple(menu.symbols.values()), unknown=selection.unknown)
+    return complete_definition_body_selection(
+        menu, selection, required_symbols=required_symbols)
+
+
+def guarded_route_selection(
+        menu: RouteMenu, reply: str, bindings, *, question: str,
+        obligations: str = "", completion=None) -> Selection:
+    """Resolve exact routes with fail-open truncation handling.
+
+    Obligation bindings are authority: their routes are retained whether
+    or not the model named them. A truncated or mid-label reply promotes
+    every scoped route instead of trusting a partial reading of intent.
+    """
+    selection = resolve_obligation_route_selection(menu, reply)
+    incomplete = completion is not None and (
+        completion.truncated or completion.malformed)
+    if incomplete or trailing_menu_token(reply, menu.routes) is not None:
+        selection = merge_selections(selection, all_route_selection(menu))
+    return retain_obligation_routes(
+        menu, selection, bindings, question=question, obligations=obligations)
+
+
+def guarded_component_scope(
+        menu: RouteMenu, components: ComponentMenu, reply: str, bindings, *,
+        question: str, obligations: str = "", completion=None):
+    """Scope routes to selected components without erasing bound routes.
+
+    Component scoping is the one hard delete in the selection pipeline, so
+    it must not run on a reply the provider cut off, and an
+    obligation-bound route survives it regardless of the model's picks.
+    Returns the scoped menu plus a decision record naming every dropped
+    route.
+    """
+    incomplete = completion is not None and (
+        completion.truncated or completion.malformed)
+    if (incomplete
+            or trailing_menu_token(reply, components.components) is not None):
+        return menu, {
+            "outcome": "component-scope-skipped:incomplete",
+            "retained_route_ids": tuple(menu.routes),
+            "dropped_route_ids": ()}
+    component_route_ids = resolve_component_selection(components, reply)
+    if not component_route_ids:
+        return menu, {
+            "outcome": "component-scope-skipped:empty",
+            "retained_route_ids": tuple(menu.routes),
+            "dropped_route_ids": ()}
+    retained = retain_obligation_routes(
+        menu, Selection(route_ids=tuple(component_route_ids)), bindings,
+        question=question, obligations=obligations)
+    scoped = routes_for_modules(menu, retained.route_ids)
+    return scoped, {
+        "outcome": "component-scope-applied",
+        "retained_route_ids": tuple(scoped.routes),
+        "dropped_route_ids": tuple(
+            label for label in menu.routes if label not in scoped.routes)}

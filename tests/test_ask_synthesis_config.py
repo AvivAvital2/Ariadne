@@ -529,7 +529,7 @@ def test_ask_selects_modules_before_expanding_and_scoping_routes():
     source = Path("ariadne_mcp/service_analysis.py").read_text()
     build = source.index('component_menu_for(graph, menu)')
     choose = source.index('resolve_component_selection(', build)
-    expand = source.index("routes_for_modules(", choose)
+    expand = source.index("guarded_component_scope(", choose)
     scope = source.index("scope_route_menu(", expand)
 
     assert build < choose < expand < scope
@@ -538,13 +538,13 @@ def test_ask_selects_exact_routes_after_module_expansion_and_scope():
     modules = source.index('resolve_component_selection(')
     scope = source.index("scope_route_menu(", modules)
     route_prompt = source.index('_menu_prompt(question, menu.text, _coverage_plan)', scope)
-    route_select = source.index('resolve_obligation_route_selection(menu, route_reply)', route_prompt)
+    route_select = source.index('selection = guarded_route_selection(', route_prompt)
     hydrate = source.index("hydrate_selected_hops(", route_select)
 
     assert modules < scope < route_prompt < route_select < hydrate
 def test_ask_retains_selected_owner_routes_after_exact_route_selection():
     source = Path("ariadne_mcp/service_analysis.py").read_text()
-    exact = source.index('resolve_obligation_route_selection(menu, route_reply)')
+    exact = source.index('selection = guarded_route_selection(')
     retain = source.index('merge_selections(', exact)
     complete = source.index("complete_route_selection(", retain)
 
@@ -553,7 +553,7 @@ def test_ask_anchors_and_retains_exact_method_cards():
     source = Path("ariadne_mcp/service_analysis.py").read_text()
     resolve = source.index('resolve_component_selection(')
     scope = source.index('scope_route_menu(', resolve)
-    exact = source.index('resolve_obligation_route_selection(menu, route_reply)', scope)
+    exact = source.index('selection = guarded_route_selection(', scope)
     retain = source.index('merge_selections(', exact)
 
     assert resolve < scope < exact < retain
@@ -571,7 +571,7 @@ def test_ask_selects_components_before_routes_then_closes_the_graph():
     graph = source.index("evidence_graph_for(hops)")
     components = source.index("component_menu_for(graph, menu)", graph)
     choose_components = source.index("resolve_component_selection(", components)
-    choose_routes = source.index('resolve_obligation_route_selection(menu, route_reply)', choose_components)
+    choose_routes = source.index('selection = guarded_route_selection(', choose_components)
     closure = source.index('selection_for_graph_symbols(graph, selection.symbols, occurrence_keys = selection.occurrence_keys)', choose_routes)
 
     assert graph < components < choose_components < choose_routes < closure
@@ -731,7 +731,7 @@ def test_ask_preserves_llm_phase_for_usage_accounting():
     assert 'kwargs.pop("phase", None)' not in source
 def test_llm_route_selection_sees_routes_before_deterministic_scope_pruning():
     source = Path("ariadne_mcp/service_analysis.py").read_text()
-    expand = source.index("routes_for_modules(")
+    expand = source.index("guarded_component_scope(")
     scope = source.index("menu = scope_route_menu(", expand)
     guard = source.rfind('if _selector_mode == "deterministic":', expand, scope)
     prompt = source.index('_menu_prompt(question, menu.text, _coverage_plan)', scope)
@@ -746,8 +746,6 @@ def test_exact_route_prompt_uses_fixed_obligations_and_minimal_routes():
     assert "smallest complete set" in prompt
     assert "missing a relevant route is worse" not in prompt
     assert "C<n>: R<id>" in prompt
-
-
 def test_ask_preserves_obligations_for_exact_route_selection():
     import inspect
     source = inspect.getsource(AnalysisMixin.ask)
@@ -755,7 +753,8 @@ def test_ask_preserves_obligations_for_exact_route_selection():
     exact_prompt = source.index("_menu_prompt(question, menu.text, _coverage_plan)")
     evidence = source.index("hydrate_selected_hops(", exact_prompt)
     assert "_coverage_plan = \"\"" not in source[source.index("_selected_clews = []"):exact_prompt]
-    assert "resolve_obligation_route_selection" in source[exact_prompt:evidence]
+    assert "guarded_route_selection" in source[exact_prompt:evidence]
+    assert "obligations=_coverage_plan" in source[exact_prompt:evidence]
 
 
 def test_ask_does_not_restore_every_unselected_mandatory_alternative():
@@ -807,7 +806,8 @@ def test_ask_completes_compiler_transition_bodies_after_model_selection():
     from ariadne_mcp.service_analysis import AnalysisMixin
 
     source = inspect.getsource(AnalysisMixin.ask)
-    selection = source.index("resolve_definition_body_selection(")
+    selection = source.index(
+        "_body_selection = guarded_definition_body_selection(")
     completion = source.index(
         "complete_definition_body_selection(", selection)
     hydration = source.index("hydrate_selected_hops(", completion)

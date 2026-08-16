@@ -564,7 +564,10 @@ def test_an_accepted_clew_route_replaces_broad_document_seed_expansion(library):
                             clew_matches=[match])
     names = {citation.qualified_name for citation in evidence.bundle_citations}
 
-    assert names == {"m.helper", "m.deep"}
+    # Bounded compiler-verified entry discovery may recover the upstream
+    # caller of a route endpoint; broad document-seed expansion stays off.
+    assert {"m.helper", "m.deep"} <= names
+    assert names <= {"m.run", "m.helper", "m.deep"}
     assert not any(name.startswith("noise") for name in names)
     assert len(evidence.bundle_citations) < 10
 def test_recovered_roots_and_original_seeds_share_one_graph_walk(library, monkeypatch):
@@ -1011,3 +1014,19 @@ def test_render_spine_revisit_preserves_non_call_relation():
 
     assert "contained at owner.py:8" in spine
     assert "called again" not in spine
+
+
+def test_locations_admit_hash_verified_excerpt_coordinates():
+    from library.source_materialization import SourceExcerpt
+    hop = BundleHop(
+        citation=StructuralCitation(
+            qualified_name='m.run', file='m.py', line_start=20, line_end=25,
+            source_name=SOURCE, relation='calls', hop=1,
+            call_site_file='', call_site_line=0),
+        source_excerpts=(SourceExcerpt(
+            source_name=SOURCE, file='m.py', line_start=17, line_end=19,
+            kind='doc_header', content='# docs', sha256='x'),))
+
+    locations = locations_for([hop])
+
+    assert {'m.py:17', 'm.py:18', 'm.py:19'} <= set(locations)

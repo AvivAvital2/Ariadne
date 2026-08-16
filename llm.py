@@ -32,8 +32,16 @@ async def chat_complete(
     max_tokens: int = 2048,
     timeout: float = 60.0,
     phase: str = "completion",
+    usage_sink: list | None = None,
 ) -> str:
-    """One-shot completion with optional exact request/response diagnostics."""
+    """One-shot completion with optional exact request/response diagnostics.
+
+    ``usage_sink``, when given, receives one row per completion carrying
+    the recorded provider usage (token counts and, when reported, the
+    provider stop reason) together with the request's ``max_tokens`` cap —
+    the signal a caller needs to detect a truncated selection reply
+    instead of mistaking it for a deliberately short one.
+    """
     from cli.generate import resolve_provider
     from config import get_config
     from docgen.llm.factory import make_llm_provider
@@ -94,6 +102,10 @@ async def chat_complete(
         result = await provider.call(
             system_prompt, user_prompt, max_tokens=max_tokens)
         usage = dict(getattr(provider, "last_usage", None) or {})
+        if usage_sink is not None:
+            usage_sink.append({
+                "phase": phase, "model": model,
+                "max_tokens": max_tokens, **usage})
         collector = _completion_usage.get()
         if collector is not None and usage:
             collector.append({"phase": phase, "model": model, **usage})
