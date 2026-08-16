@@ -21,7 +21,11 @@ Four rules are load-bearing, each measured (design §2.6, §2.7, §5.1):
   Python.
 * **``call`` and ``type_ref`` edges, and never through a ``local N`` node.** What a body
   touches is part of what it does, and reading only ``call`` discarded 69% of the store.
-  The local rule is separate and absolute: ``canonical_id`` is a global primary key while
+  A type reference is **cited but not traversed**: touching a type is not executing it, and
+  following one onward reaches whatever that type happens to touch. Traversed, they were
+  15,216 of 25,313 hops at production width and left a MERGE question with its widest call
+  sites in correlation statistics; the descent continues through ``call`` and
+  ``implements``, which are what runs. The local rule is separate and absolute: ``canonical_id`` is a global primary key while
   SCIP numbers local bindings per document, so one ``local 5`` row is shared by every
   document that emitted that index — 19.5% of the call graph fuses through such nodes,
   welding unrelated files and repositories together, and 42% of ``type_ref`` edges point at
@@ -36,6 +40,7 @@ Four rules are load-bearing, each measured (design §2.6, §2.7, §5.1):
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 # The path seam has ONE owner. This module used to carry its own copy of the
@@ -45,8 +50,6 @@ from docgen.scip_paths import scip_paths_for  # noqa: F401
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from sqlite3 import Connection
-
-
 @dataclass(frozen=True)
 class StructuralCitation:
     """One hop, quotable at a verifiable line.
@@ -54,6 +57,10 @@ class StructuralCitation:
     ``file``/``line_start`` locate the *definition* reached; ``call_site_file``/
     ``call_site_line`` locate where the call was made. Both matter: the first is what a
     reader opens, the second is what proves the edge.
+
+    ``line_end`` closes the extent, which is what makes the hop quotable at all. Selecting
+    only ``line_start`` meant the body extents the ingest rebuild reconstructed — and that
+    ``definition_extents_present`` guards — could not reach the answer path.
     """
 
     qualified_name: str
@@ -67,9 +74,38 @@ class StructuralCitation:
     #: Why the walk stopped here, straight from the traversal's own judgement:
     #: ``descended`` (walked into it) · ``leaf`` (its body calls nothing in-corpus) ·
     #: ``plumbing`` (fan-in at or above the descent boundary) · ``depth`` (would have
-    #: descended, hit the limit) · ``revisit`` (already expanded elsewhere).
+    #: descended, hit the limit) · ``revisit`` (already expanded elsewhere) ·
+    #: ``reference`` (a type the body names -- cited and quoted, never walked through).
     #: Curation reads this instead of inventing a relevance score.
     stop_reason: str = 'descended'
+    #: Last line of the definition's body. Equal to ``line_start`` when the indexer gave
+    #: no extent and none could be reconstructed — such a hop cites but cannot quote.
+    line_end: int = 0
+    #: The body this hop was reached from — the other end of the edge, recorded at the moment
+    #: the walk followed it. A chain is a path, and without this the citations are a set with
+    #: depth numbers: recovering the parent afterwards means matching call-site coordinates
+    #: back to definitions and guessing whenever a file holds several. The traversal has the
+    #: caller in hand, so this is exact and costs nothing.
+    parent_qualified_name: str = ''
+@dataclass(frozen=True)
+class FanOut:
+    """A dispatch reported rather than walked, with the shape a caller can narrow by.
+
+    ``implementations`` is **what the index can see** — a floor, never a census. Modules of
+    a corpus can sit on disk and never reach the graph (615 code files measured on the live
+    databricks corpus), and implementations can live in code the corpus does not contain,
+    so no count here may be presented as a total.
+    """
+
+    qualified_name: str
+    file: str
+    line_start: int
+    implementations: int
+    #: ``(package, count)``, widest first. The package is the directory the implementations
+    #: live in, because that is a dimension a caller can actually name back.
+    by_package: tuple[tuple[str, int], ...] = ()
+    #: How many sit under a test path — often the bulk, and rarely what was asked about.
+    tests: int = 0
 @dataclass(frozen=True)
 class Truncation:
     """What the walk left out. Never silent (design §5 contract item 6)."""
@@ -78,6 +114,10 @@ class Truncation:
     dropped: int = 0
     reason: str = ''
     unresolved_seeds: tuple[str, ...] = field(default_factory=tuple)
+    #: Dispatches too wide to walk, reported with their shape instead. Not a drop: the
+    #: count and the spread travel so the caller can narrow, which is the one thing a
+    #: silent cap cannot do.
+    fan_outs: tuple[FanOut, ...] = field(default_factory=tuple)
 
 
 _BATCH = 400
@@ -187,9 +227,54 @@ def _fan_in(conn: 'Connection', ids: list[str]) -> dict[str, int]:
                 chunk):
             counts[cid] = seen
     return counts
+#: Where a JVM build layout stops and the package begins.
+_BUILD_LAYOUT = re.compile(r'(?:^|/)src/(?:main|test)/(?:scala|java|kotlin|resources)/')
+
+
+def _package_label(file: str) -> str:
+    """The package a file sits in, with the build layout removed.
+
+    ``sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/Add.scala`` is
+    ``org.apache.spark.sql.catalyst.expressions`` — what a caller would name back. The
+    directory as stored repeats the module and carries ``src/main/scala`` on top of the
+    package, and a sentence asking someone to choose an area cannot afford that noise.
+
+    A layout with no ``src/main`` (Python, JS) keeps its directory, which is already the
+    package there.
+    """
+    directory = file.rsplit('/', 1)[0] if '/' in file else file
+    match = _BUILD_LAYOUT.search(directory + '/')
+    if match:
+        directory = (directory + '/')[match.end():].rstrip('/')
+    return directory.replace('/', '.')
+
+
+def _fan_out_for(conn: 'Connection', source: str, interface: str,
+                 implementors: list[tuple[str, str, int]]) -> FanOut:
+    """Describe a dispatch too wide to walk, from what the index holds about it.
+
+    The package is taken from the implementation's **directory** rather than its qualified
+    name: a caller narrowing a search says "the connector one" or "not the tests", and a
+    directory is what that maps onto.
+    """
+    located = _locate(conn, source, [interface])
+    qualified_name, file, line_start, _ = located.get(
+        interface, (interface, '', 0, 0))
+    impls = _locate(conn, source, [impl for impl, _, _ in implementors])
+    packages: Counter = Counter()
+    tests = 0
+    for _qn, impl_file, _start, _end in impls.values():
+        packages[_package_label(impl_file)] += 1
+        if 'test' in impl_file.lower():
+            tests += 1
+    return FanOut(
+        qualified_name=qualified_name, file=file, line_start=line_start,
+        # what would have been cited: implementations this source owns
+        implementations=len(impls),
+        by_package=tuple(packages.most_common()), tests=tests)
 def _locate(conn: 'Connection', source: str,
-            ids: list[str]) -> dict[str, tuple[str, str, int]]:
-    """canonical_id -> (qualified_name, file, line_start), scoped to ``source``.
+            ids: list[str]) -> dict[str, tuple[str, str, int, int]]:
+    """canonical_id -> (qualified_name, file, line_start, line_end), scoped to ``source``.
 
     This lookup *is* the source guard: an id absent from it is external to the corpus or
     owned by another source, and is therefore neither cited nor descended into.
@@ -203,17 +288,19 @@ def _locate(conn: 'Connection', source: str,
     seconds, and it scaled with the walk -- 279 hops hid it, 884 did not. The guard is
     identical either way: a row owned by another source is dropped before the caller sees
     it.
+
+    ``line_end`` travels because stage two quotes a hop from its extent.
     """
-    out: dict[str, tuple[str, str, int]] = {}
+    out: dict[str, tuple[str, str, int, int]] = {}
     for chunk in _chunks(ids):
         placeholders = ','.join('?' * len(chunk))
-        for cid, qn, file, line_start, owner in conn.execute(
-                f'SELECT canonical_id, qualified_name, file, line_start, source_name '
-                f'FROM scip_symbols WHERE canonical_id IN ({placeholders})',
+        for cid, qn, file, line_start, line_end, owner in conn.execute(
+                f'SELECT canonical_id, qualified_name, file, line_start, line_end, '
+                f'source_name FROM scip_symbols WHERE canonical_id IN ({placeholders})',
                 chunk):
             if owner != source:
                 continue
-            out[cid] = (qn, file, line_start or 0)
+            out[cid] = (qn, file, line_start or 0, line_end or 0)
     return out
 def _body_edges(conn: 'Connection',
                 caller: str) -> list[tuple[str, str, int, str]]:
@@ -260,6 +347,7 @@ def _body_edges(conn: 'Connection',
 #: ``prepareMergeSource`` and ``SQLMetric.value`` both make 2 calls — so fan-in is the
 #: discriminator, and this default sits inside the observed gap with margin either side.
 DEFAULT_EXPAND_FAN_IN_MAX = 16
+DEFAULT_DISCLOSE_ABOVE = 10
 def chain_from_seeds(
     conn: 'Connection',
     symbols,
@@ -267,6 +355,7 @@ def chain_from_seeds(
     source: str,
     depth: int = 3,
     expand_below_fan_in: int = DEFAULT_EXPAND_FAN_IN_MAX,
+    disclose_above: int = DEFAULT_DISCLOSE_ABOVE,
 ) -> tuple[list[StructuralCitation], Truncation]:
     """Trace one chain covering every seed, sharing state across them.
 
@@ -285,18 +374,23 @@ def chain_from_seeds(
                     sorted(expand_to_members(conn, source, sorted(resolved))))
     citations: list[StructuralCitation] = []
     expanded: set[str] = set(roots)
+    fan_outs: list[FanOut] = []
     deferred = 0
 
-    def trace(caller: str, hop: int, rows) -> None:
+    def trace(caller: str, caller_name: str, hop: int, rows) -> None:
         nonlocal deferred
         located = _locate(conn, source, [callee for callee, _, _, _ in rows])
         fan_in = _fan_in(conn, list(located))
         for callee, site_file, site_line, edge_type in rows:
             if callee not in located:
                 continue
-            qualified_name, file, line_start = located[callee]
+            qualified_name, file, line_start, line_end = located[callee]
             onward = None
-            if fan_in.get(callee, 0) >= expand_below_fan_in:
+            if edge_type == 'type_ref':
+                # Touching a type is not executing it. Cite it, do not continue through
+                # it, and do not dispatch from it -- nothing runs on account of a name.
+                reason = 'reference'
+            elif fan_in.get(callee, 0) >= expand_below_fan_in:
                 reason = 'plumbing'
             elif callee in expanded:
                 reason = 'revisit'
@@ -312,38 +406,46 @@ def chain_from_seeds(
                 relation='calls' if edge_type == 'call' else 'references',
                 hop=hop,
                 call_site_file=site_file, call_site_line=site_line,
-                stop_reason=reason,
+                stop_reason=reason, line_end=line_end,
+                parent_qualified_name=caller_name,
             ))
             if reason == 'descended':
                 expanded.add(callee)
-                trace(callee, hop + 1, onward)
+                trace(callee, qualified_name, hop + 1, onward)
             # Both a leaf and a descended hop can be overridden. Gating this on `leaf`
             # alone answered "which implementation runs" only for a method with no body
             # of its own, which is not where overriding lives: on the rebuilt store 7,176
             # descending hops have implementors, and the base body the walk descended into
             # is not what runs for a subtype.
             if reason in ('descended', 'leaf'):
-                dispatch(callee, hop)
+                dispatch(callee, qualified_name, hop)
 
-    def dispatch(interface: str, hop: int) -> None:
+    def dispatch(interface: str, interface_name: str, hop: int) -> None:
         """Follow `implements` from a hop to the implementations that really run.
 
-        Every implementor is cited, however many there are. A ceiling here would be the
-        count budget this module's docstring rejects, and it would decide what is *cited*
-        -- something not even the fan-in rule is permitted to do. How widely an interface
-        forks is itself part of the answer to which implementation runs. ``expanded`` keeps
-        a body from being walked twice and ``depth`` ends the recursion; nothing else
-        bounds this.
+        Up to ``disclose_above`` implementations, every one is cited. A ceiling on what is
+        *cited* would be the count budget this module's docstring rejects, and how widely an
+        interface forks is itself part of the answer to which implementation runs.
+
+        Past it the fan-out is **reported instead of walked**: a :class:`FanOut` records how
+        many there are, which packages they sit in, and how many are tests. That is not the
+        cap this module rejects — nothing is dropped silently and no subset is chosen — it is
+        the difference between handing back 529 coordinates and saying "this forks 529 ways
+        in the index; which area did you mean?". The count is what the index can see, so it
+        is a floor.
         """
         nonlocal deferred
         implementors = _implementors(conn, interface)
         if not implementors:
             return
+        if len(implementors) > disclose_above:
+            fan_outs.append(_fan_out_for(conn, source, interface, implementors))
+            return
         located = _locate(conn, source, [impl for impl, _, _ in implementors])
         for impl, site_file, site_line in implementors:
             if impl not in located or impl in expanded:
                 continue
-            qualified_name, file, line_start = located[impl]
+            qualified_name, file, line_start, line_end = located[impl]
             onward = _body_edges(conn, impl) if hop < depth else None
             if hop >= depth:
                 deferred += 1
@@ -354,19 +456,21 @@ def chain_from_seeds(
                 qualified_name=qualified_name, file=file, line_start=line_start,
                 source_name=source, relation='implemented_by', hop=hop + 1,
                 call_site_file=site_file, call_site_line=site_line,
-                stop_reason=reason,
+                stop_reason=reason, line_end=line_end,
+                parent_qualified_name=interface_name,
             ))
             if reason == 'descended':
                 expanded.add(impl)
-                trace(impl, hop + 2, onward)
+                trace(impl, qualified_name, hop + 2, onward)
 
     for caller in sorted(roots, key=lambda cid: (roots[cid][1], roots[cid][2])):
-        trace(caller, 1, _body_edges(conn, caller))
+        trace(caller, roots[caller][0], 1, _body_edges(conn, caller))
 
     return citations, Truncation(
-        truncated=bool(deferred) or bool(unresolved), dropped=deferred,
-        reason=('depth' if deferred else 'unresolved seeds' if unresolved else ''),
-        unresolved_seeds=unresolved,
+        truncated=bool(deferred) or bool(unresolved) or bool(fan_outs), dropped=deferred,
+        reason=('depth' if deferred else 'unresolved seeds' if unresolved
+                else 'fan-out' if fan_outs else ''),
+        unresolved_seeds=unresolved, fan_outs=tuple(fan_outs),
     )
 def chain_from(
     conn: 'Connection',
@@ -454,10 +558,22 @@ def seeds_from_documents(
     1. **The file route** — symbols defined in the retrieved file. This is the seeding
        design §5.1 measures at production width, and it takes required-slot reach from
        35% to 59%.
-    2. **The mention route, for documents whose file resolves to nothing** — prose has no
-       code symbols in its own file but names them in its body, and 24 of the 32 files the
-       file route discards name at least one indexed symbol. Each mention must resolve to
-       exactly one symbol (``_unique_symbol``); ambiguous ones are dropped and counted.
+    2. **The mention route, for a document whose named files the index cannot resolve** —
+       prose has no code symbols in its own file but names them in its body, and 24 of the
+       32 files the file route discards name at least one indexed symbol. Each mention
+       must resolve to exactly one symbol (``_unique_symbol``); ambiguous ones are dropped
+       and counted. 34,235 documents in the live databricks store qualify, mostly catalog
+       entries for files outside the SCIP index.
+
+    A document naming **no** files gets neither route. It has not pointed at code, and
+    scraping it anyway made prose the largest single influence on the walk: measured at
+    production width (8 documents, depth 3), one retrieved theme contributed 23 of 127
+    seeds, and those 23 produced **21,713 of the chain's 25,313 hops** — seeded from the
+    very names the theme's own caveats section calls false positives of its clustering
+    (``Corr``, ``Covariance``, ``ParquetFilters``), which are graph hubs. A MERGE question
+    came out with its widest call site in correlation statistics. Store-wide, 2,579 of the
+    2,581 file-less documents are themes — Ariadne's own cluster summaries — so this is
+    the trust rule applied to seeding, not a special case for one document.
 
     The mention route never runs for a document the file route already placed, so it
     cannot flood a seed set that was resolved structurally.
@@ -482,6 +598,8 @@ def seeds_from_documents(
     ambiguous = 0
     considered: set[str] = set()
     for document, files in by_document:
+        if not files:
+            continue  # pointed at no code, so it introduces none
         if any(file in resolved for file in files):
             continue  # the file route placed this document; do not scrape it
         content = _document_field(document, 'content') or ''

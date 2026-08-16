@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS scip_edges (
     file                  TEXT NOT NULL,
     line                  INTEGER NOT NULL,
     confidence            TEXT NOT NULL,
-    PRIMARY KEY (caller_canonical_id, callee_canonical_id, file, line)
+    PRIMARY KEY (caller_canonical_id, callee_canonical_id, edge_type, file, line)
 )
 '''
 
@@ -60,16 +60,7 @@ CREATE TABLE IF NOT EXISTS scip_index_state (
 )
 '''
 
-_SCIP_INDEXES = '''
-CREATE INDEX IF NOT EXISTS idx_scip_symbols_source ON scip_symbols(source_name);
-CREATE INDEX IF NOT EXISTS idx_scip_symbols_file   ON scip_symbols(file);
--- `expand_to_members` looks a seed's members up by parent, and without this the
--- planner falls back to idx_scip_symbols_source and walks every row the source
--- owns: 0.320s against 0.060s for a runMerge chain, measured A/B/A on a warm cache.
-CREATE INDEX IF NOT EXISTS idx_scip_symbols_parent ON scip_symbols(parent_qualified_name);
-CREATE INDEX IF NOT EXISTS idx_scip_edges_callee   ON scip_edges(callee_canonical_id);
-CREATE INDEX IF NOT EXISTS idx_scip_edges_caller   ON scip_edges(caller_canonical_id);
-'''
+_SCIP_INDEXES = "\nCREATE INDEX IF NOT EXISTS idx_scip_symbols_source ON scip_symbols(source_name);\nCREATE INDEX IF NOT EXISTS idx_scip_symbols_file   ON scip_symbols(file);\n-- `expand_to_members` looks a seed's members up by parent, and without this the\n-- planner falls back to idx_scip_symbols_source and walks every row the source\n-- owns: 0.320s against 0.060s for a runMerge chain, measured A/B/A on a warm cache.\nCREATE INDEX IF NOT EXISTS idx_scip_symbols_display ON scip_symbols(display_name, source_name);\nCREATE INDEX IF NOT EXISTS idx_scip_symbols_parent ON scip_symbols(parent_qualified_name);\nCREATE INDEX IF NOT EXISTS idx_scip_edges_callee   ON scip_edges(callee_canonical_id);\nCREATE INDEX IF NOT EXISTS idx_scip_edges_caller   ON scip_edges(caller_canonical_id);\n"
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +333,60 @@ CREATE TABLE IF NOT EXISTS data_model_gaps (
     detail      TEXT NOT NULL
 )
 '''
+_SCIP_EDGE_PRIMARY_KEY = (
+    "caller_canonical_id",
+    "callee_canonical_id",
+    "edge_type",
+    "file",
+    "line",
+)
+_LEGACY_SCIP_EDGE_PRIMARY_KEY = (
+    "caller_canonical_id",
+    "callee_canonical_id",
+    "file",
+    "line",
+)
+
+
+def _scip_edge_primary_key(conn: "Connection") -> tuple[str, ...]:
+    """Return primary-key columns in key order."""
+    rows = [row for row in conn.execute("PRAGMA table_info(scip_edges)") if row[5]]
+    return tuple(row[1] for row in sorted(rows, key=lambda row: row[5]))
+
+
+def _migrate_scip_edge_primary_key(conn: "Connection") -> None:
+    """Permit distinct semantic edge types at one endpoint and coordinate.
+
+    The legacy key omitted edge_type, causing a call edge to suppress a
+    canonical ownership edge at the same definition site. Rebuilding is
+    lossless and runs once; existing edge rows retain their coordinates and
+    confidence.
+    """
+    primary_key = _scip_edge_primary_key(conn)
+    if primary_key == _SCIP_EDGE_PRIMARY_KEY:
+        return
+    if primary_key != _LEGACY_SCIP_EDGE_PRIMARY_KEY:
+        raise RuntimeError(
+            "unsupported scip_edges primary key: "
+            + ", ".join(primary_key)
+        )
+
+    conn.execute("DROP INDEX IF EXISTS idx_scip_edges_callee")
+    conn.execute("DROP INDEX IF EXISTS idx_scip_edges_caller")
+    conn.execute(
+        "ALTER TABLE scip_edges RENAME TO scip_edges_legacy_primary_key"
+    )
+    conn.execute(_SCIP_EDGES_SCHEMA)
+    conn.execute(
+        "INSERT OR IGNORE INTO scip_edges ("
+        "caller_canonical_id, callee_canonical_id, edge_type, "
+        "file, line, confidence) "
+        "SELECT caller_canonical_id, callee_canonical_id, edge_type, "
+        "file, line, confidence FROM scip_edges_legacy_primary_key"
+    )
+    conn.execute("DROP TABLE scip_edges_legacy_primary_key")
+
+
 def init_scip_schema(conn: 'Connection') -> None:
     """Create the SCIP tables (cross-source graph + API surface +
     config-value index + config-read index + string-literal index +
@@ -354,6 +399,7 @@ def init_scip_schema(conn: 'Connection') -> None:
     """
     conn.execute(_SCIP_SYMBOLS_SCHEMA)
     conn.execute(_SCIP_EDGES_SCHEMA)
+    _migrate_scip_edge_primary_key(conn)
     conn.execute(_SCIP_INDEX_STATE_SCHEMA)
     conn.executescript(_SCIP_INDEXES)
     # API surface tables (Wave 4)

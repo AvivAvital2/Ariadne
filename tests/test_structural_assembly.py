@@ -26,7 +26,11 @@ import sqlite3
 import pytest
 
 from library.scip import init_scip_schema
-from library.structural_assembly import chain_from, expand_to_members
+from library.structural_assembly import (
+    _package_label,
+    chain_from,
+    expand_to_members,
+)
 
 ALPHA_TYPE = 'scip-python python src1 0.1 `pkg.alpha`/Alpha#'
 ALPHA_RUN = 'scip-python python src1 0.1 `pkg.alpha`/Alpha#run().'
@@ -402,12 +406,12 @@ class TestDispatchFollowsAnOverriddenMethodToo:
         assert override.relation == 'implemented_by'
     @pytest.fixture
     def wide(self, conn):
-        """One interface with twelve implementors — more than any cap would allow."""
+        """One interface with ten implementors — right at the threshold."""
         iface = 'scip-python python src1 0.1 `pkg.wide`/Wide#run().'
         _symbol(conn, iface, file='pkg/wide.py', line_start=4,
                 qn='pkg.wide.Wide.run', parent='pkg.wide.Wide')
         _edge(conn, ALPHA_RUN, iface, line=12)
-        for index in range(12):
+        for index in range(10):
             impl = f'scip-python python src1 0.1 `pkg.i{index}`/I{index}#run().'
             _symbol(conn, impl, file=f'pkg/i{index}.py', line_start=5,
                     qn=f'pkg.i{index}.I{index}.run', parent=f'pkg.i{index}.I{index}')
@@ -416,20 +420,65 @@ class TestDispatchFollowsAnOverriddenMethodToo:
         conn.commit()
         return conn
     def test_a_wide_dispatch_cites_every_implementor(self, wide):
-        """No cap. This module says it plainly: "There is no output cap here."
+        """Ten implementors are all cited: this is the boundary, not a cap.
 
-        A count budget on the walk is the error its own docstring rejects — top-k
-        retrieval wearing a graph's clothes — and how many implementations an interface
-        has is itself part of the answer to which one runs. Dropping them because there
-        are many would decide what is *cited*, which even the fan-in rule is forbidden to
-        do. Termination comes from ``depth`` and the ``expanded`` set, not a ceiling.
+        A count budget on the walk is still the error this module's docstring rejects, and
+        how many implementations an interface has is part of the answer to which one runs.
+        What changed is only the far tail: above ``DEFAULT_DISCLOSE_ABOVE`` the walk reports
+        the fan-out and its shape instead of expanding it, so the caller can narrow (see
+        ``test_a_dispatch_beyond_the_threshold_is_reported_not_expanded``). Every dispatch at
+        or below the threshold takes this path -- every implementor cited, nothing dropped.
         """
         citations, _ = _trace(wide, depth=4)
         implementors = [c for c in citations if c.relation == 'implemented_by']
 
         assert {c.qualified_name for c in implementors} == {
-            f'pkg.i{index}.I{index}.run' for index in range(12)}
-class TestTypeReferencesAreWalked:
+            f'pkg.i{index}.I{index}.run' for index in range(10)}
+    @pytest.fixture
+    def wider(self, conn):
+        """Twelve implementors — past the threshold — split across two packages."""
+        iface = 'scip-python python src1 0.1 `pkg.wide`/Wide#run().'
+        _symbol(conn, iface, file='pkg/wide.py', line_start=4,
+                qn='pkg.wide.Wide.run', parent='pkg.wide.Wide')
+        _edge(conn, ALPHA_RUN, iface, line=12)
+        for index in range(12):
+            area = 'main' if index < 8 else 'tests'
+            impl = f'scip-python python src1 0.1 `pkg.{area}.i{index}`/I{index}#run().'
+            _symbol(conn, impl, file=f'pkg/{area}/i{index}.py', line_start=5,
+                    qn=f'pkg.{area}.i{index}.I{index}.run',
+                    parent=f'pkg.{area}.i{index}.I{index}')
+            _edge(conn, impl, iface, line=5, file=f'pkg/{area}/i{index}.py',
+                  edge_type='implements')
+        conn.commit()
+        return conn
+
+    def test_a_dispatch_beyond_the_threshold_is_reported_not_expanded(self, wider):
+        """Hundreds of answers is not an answer. The count is the finding; the caller narrows.
+
+        Nothing is dropped silently -- that is the whole difference from a cap. The number
+        is stated, the shape travels so the caller has something to narrow *by*, and the
+        interface where the chain forks is still cited so the chain does not just end.
+        """
+        citations, truncation = _trace(wider, depth=4)
+
+        assert not [c for c in citations if c.relation == 'implemented_by'], (
+            'a fan-out this wide is described, not walked')
+        assert 'pkg.wide.Wide.run' in [c.qualified_name for c in citations], (
+            'the interface where the chain forks is still a hop')
+        assert len(truncation.fan_outs) == 1
+        fan_out = truncation.fan_outs[0]
+        assert fan_out.qualified_name == 'pkg.wide.Wide.run'
+        assert fan_out.implementations == 12
+        assert dict(fan_out.by_package)['pkg.tests'] == 4, (
+            'the breakdown is what makes the question answerable')
+    def test_an_implementation_names_the_interface_it_was_reached_through(self, wide):
+        """`implements` is followed from a hop, so that hop is the parent."""
+        citations, _ = _trace(wide, depth=4)
+        implementors = [c for c in citations if c.relation == 'implemented_by']
+
+        assert implementors, 'fixture must produce implementors'
+        assert {c.parent_qualified_name for c in implementors} == {'pkg.wide.Wide.run'}
+class TestTypeReferencesAreCitedNotTraversed:
     """`type_ref` is 69% of the graph and stage one read none of it.
 
     1,810,941 edges against 777,182 calls. A body's type and field references are what it
@@ -440,6 +489,14 @@ class TestTypeReferencesAreWalked:
 
     They are hops like any other: cited in call-site line order so the sequence survives,
     and typed `references` so curation can tell touching a type from calling a method.
+
+    What they are **not** is a step the walk continues through. Touching a type is not
+    executing it. Measured at production width (8 documents, source `databricks`, depth 3),
+    traversing them made references 15,216 of 25,313 hops and turned the call chain into a
+    sweep of the type neighbourhood: a question about MERGE came out with its widest call
+    sites in correlation statistics. A `call` edge reaches what runs next; a type reached
+    onward reaches whatever that type happens to touch, which in a Scala corpus is most of
+    it.
     """
 
     @pytest.fixture
@@ -481,3 +538,92 @@ class TestTypeReferencesAreWalked:
         citations, _ = _trace(conn)
 
         assert not [c for c in citations if 'local' in c.qualified_name]
+    def test_a_type_reference_does_not_extend_the_walk(self, touching):
+        """The chain stops at the type it touches, and says so with `reference`."""
+        beyond = 'scip-python python src1 0.1 `pkg.data`/Dataset#load().'
+        _symbol(touching, beyond, file='pkg/data.py', line_start=8,
+                qn='pkg.data.Dataset.load', parent='pkg.data.Dataset')
+        _edge(touching, 'scip-python python src1 0.1 `pkg.data`/Dataset#', beyond,
+              line=9, file='pkg/data.py')
+        touching.commit()
+
+        citations, _ = _trace(touching)
+        names = [c.qualified_name for c in citations]
+
+        assert 'pkg.data.Dataset' in names, 'the type it touches is still cited'
+        assert 'pkg.data.Dataset.load' not in names, (
+            'what a referenced type calls is not part of this chain')
+        hop = next(c for c in citations if c.qualified_name == 'pkg.data.Dataset')
+        assert hop.stop_reason == 'reference'
+
+    def test_a_referenced_interface_does_not_dispatch_to_its_implementors(self, touching):
+        """`implements` answers which implementation *runs*. A reference runs nothing.
+
+        This is the sharper half: a type reference to an interface previously fanned out to
+        every implementor it had — measured at 529 for one live interface — none of which
+        is executing on account of a type being named.
+        """
+        iface = 'scip-python python src1 0.1 `pkg.data`/Dataset#'
+        impl = 'scip-python python src1 0.1 `pkg.impl`/CsvDataset#'
+        _symbol(touching, impl, file='pkg/impl.py', line_start=4,
+                qn='pkg.impl.CsvDataset', parent='pkg.impl')
+        _edge(touching, impl, iface, line=4, file='pkg/impl.py',
+              edge_type='implements')
+        touching.commit()
+
+        citations, _ = _trace(touching)
+
+        assert 'pkg.impl.CsvDataset' not in [c.qualified_name for c in citations], (
+            'a named type does not dispatch — nothing is running')
+def test_a_citation_carries_the_body_extent_not_just_its_start(conn):
+    """Stage two quotes a hop, which needs both ends of the definition.
+
+    ``_locate`` selected ``line_start`` alone, so the extent the ingest rebuild exists to
+    reconstruct — guarded by ``definition_extents_present`` — could not reach the answer
+    path at all. A citation that cannot say where a definition ends cannot be quoted from.
+    """
+    citations, _ = _trace(conn)
+    alpha = next(c for c in citations
+                 if c.qualified_name == 'pkg.aaa_util.Util.common')
+
+    assert alpha.line_end >= alpha.line_start
+    assert alpha.line_end == 4, (
+        f'the fixture gives Util.common lines 2-4; got {alpha.line_end}')
+def test_a_package_label_drops_the_build_layout():
+    """`org.apache.spark.sql.catalyst.expressions`, not `sql.catalyst.src.main.scala.org...`.
+
+    A caller narrowing a fan-out names a package. The directory as stored carries the module
+    and the JVM build layout on top of the package, which is noise in a sentence asking
+    someone to choose an area.
+    """
+    jvm = ('sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/'
+           'expressions/Add.scala')
+
+    assert _package_label(jvm) == 'org.apache.spark.sql.catalyst.expressions'
+    assert _package_label('sql/core/src/test/scala/org/apache/spark/sql/X.scala') == (
+        'org.apache.spark.sql'), 'a test tree carries the same package'
+    assert _package_label('pkg/tests/i8.py') == 'pkg.tests', (
+        'a layout without src/main falls back to the directory itself')
+class TestAHopRecordsWhereItCameFrom:
+    """A chain is a path, so each hop must know which body reached it.
+
+    Without this the citation list is a set with depth numbers: reconstructing the parent
+    afterwards means matching call-site coordinates back to definitions and guessing when a
+    file has several, which is what an earlier measurement had to do. The walk holds the
+    caller in its hand at the moment it follows the edge — recording it there is exact and
+    free, and it is what lets a path to a terminal be computed at all.
+    """
+
+    def test_a_hop_names_the_body_that_reached_it(self, conn):
+        citations, _ = _trace(conn)
+        by_name = {c.qualified_name: c for c in citations}
+
+        assert by_name['pkg.beta.Beta.start'].parent_qualified_name == 'pkg.alpha.Alpha.run'
+
+    def test_a_first_ring_hop_names_the_seed_it_expanded_from(self, conn):
+        citations, _ = _trace(conn)
+        first_ring = [c for c in citations if c.hop == 1]
+
+        assert all(c.parent_qualified_name for c in first_ring), (
+            'every hop has a parent; a root ring came from the root')
+

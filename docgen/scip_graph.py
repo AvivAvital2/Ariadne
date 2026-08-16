@@ -17,11 +17,16 @@ because the model already settled them:
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from docgen.scip_descriptors import (
+    _enclosing_symbol_from_symbol,
+    _symbol_descriptor_kind,
+)
 
 from attrs import field, frozen
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from docgen.scip_index import ScipDocument, ScipIndex
+_TRAVERSABLE_OWNER_DESCRIPTOR_KINDS = frozenset({"type", "term", "method"})
 @frozen
 class CrossSourceSymbol:
     """A definition, with the coordinates a citation needs."""
@@ -147,6 +152,31 @@ def build_edges(index: 'ScipIndex', *, source_name: str, language: str,
     unresolved = 0
     unattributed = 0
     for document in index.documents:
+        metadata = {info.symbol: info for info in document.symbols}
+        ownership_seen = set()
+        for occurrence in document.definitions():
+            child_id = occurrence.symbol
+            info = metadata.get(child_id)
+            parent_id = (
+                (info.enclosing_symbol if info is not None else "")
+                or _enclosing_symbol_from_symbol(child_id)
+            )
+            if not parent_id:
+                continue
+            if _symbol_descriptor_kind(parent_id) not in _TRAVERSABLE_OWNER_DESCRIPTOR_KINDS:
+                continue
+            parent = symbols.get(parent_id)
+            child = symbols.get(child_id)
+            if parent is None or child is None or parent.canonical_id == child.canonical_id:
+                continue
+            ownership = (parent.canonical_id, child.canonical_id)
+            if ownership in ownership_seen:
+                continue
+            ownership_seen.add(ownership)
+            edges.append(CrossSourceEdge(
+                caller=parent, callee=child, edge_type="contains",
+                file=child.file, line=child.line_start,
+            ))
         # A call belongs to the callable it sits in. Locals are held in a SEPARATE
         # candidate list and consulted only when no named definition encloses the site,
         # because a local is not something that calls anything.

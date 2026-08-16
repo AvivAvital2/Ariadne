@@ -24,13 +24,13 @@ _TYPE_PARAM_RE = re.compile(r'\[[^\]]*\]')
 # (parenthesized for methods) + suffix indicating the descriptor kind.
 #   '/' = package, '#' = type, '.' = term/object/method, ':' = typealias.
 _DESC_RE = re.compile(
-    r'''
-    (?:`(?P<bt>[^`]+)`              # backtick-escaped identifier (handles `<init>`, etc.)
+    r"""
+    (?:`(?P<bt>(?:``|[^`])+)`          # escaped identifier; doubled backticks are literal
         | (?P<plain>[^/.\#():\[\]`]+)  # plain identifier — no SCIP delimiters
     )
-    (?:\((?P<disambig>[^)]*)\))?    # optional method disambiguator (JVM signature on Java)
-    (?P<suffix>[/\#.:])             # one of the four kind suffixes
-    ''',
+    (?:\((?P<disambig>[^)]*)\))?    # optional method disambiguator
+    (?P<suffix>[/\#.:])             # descriptor kind suffix
+    """,
     re.VERBOSE,
 )
 
@@ -40,12 +40,12 @@ _DESC_RE = re.compile(
 # parser must recognize this form, otherwise parameter symbols silently
 # collapse to the same qualified_name as their enclosing method.
 _PARAM_RE = re.compile(
-    r'''
+    r"""
     \(
-    (?:`(?P<bt>[^`]+)`              # backtick-escaped param name
-        | (?P<plain>[^)]+))          # plain param name
+    (?:`(?P<bt>(?:``|[^`])+)`          # escaped parameter name
+        | (?P<plain>[^)]+))          # plain parameter name
     \)
-    ''',
+    """,
     re.VERBOSE,
 )
 
@@ -78,7 +78,7 @@ def _parse_descriptors(s: str) -> list[tuple[str, str, str]]:
         # char). Handle them here so the parser can continue past them.
         pm = _PARAM_RE.match(s, pos)
         if pm:
-            name = pm.group('bt') or pm.group('plain')
+            name = pm.group('bt').replace('``', '`') if pm.group('bt') is not None else pm.group('plain')
             out.append((name, 'parameter', ''))
             pos = pm.end()
             # SCIP wire format doesn't chain past a parameter in
@@ -95,7 +95,7 @@ def _parse_descriptors(s: str) -> list[tuple[str, str, str]]:
             # whatever we've accumulated so far.
             break
 
-        name = m.group('bt') or m.group('plain')
+        name = m.group('bt').replace('``', '`') if m.group('bt') is not None else m.group('plain')
         sfx = m.group('suffix')
         disambig = m.group('disambig')
 
@@ -166,53 +166,145 @@ def _decode_java_descriptor(d: str) -> str:
     return '(' + ','.join(types) + ')'
 
 
+_SIMPLE_IDENTIFIER_RE = re.compile(r"[_+$A-Za-z0-9-]+")
+
+
+def _canonical_descriptor_spans(text: str) -> tuple[tuple[int, int, str], ...]:
+    """Return exact spans for one complete SCIP descriptor chain.
+
+    This parser is intentionally stricter than qualified-name rendering: plain
+    identifiers follow SCIP's ASCII grammar, while escaped identifiers may contain
+    spaces and doubled backticks. An incomplete parse returns no spans, allowing a
+    caller to distinguish package metadata from the descriptor suffix.
+    """
+    spans = []
+    position = 0
+    while position < len(text):
+        start = position
+        if text[position] == "[":
+            end = text.find("]", position + 1)
+            if end < 0:
+                return ()
+            position = end + 1
+            spans.append((start, position, "type-parameter"))
+            continue
+        if text[position] == "(":
+            end = text.find(")", position + 1)
+            if end < 0:
+                return ()
+            position = end + 1
+            spans.append((start, position, "parameter"))
+            continue
+        if text[position] == "`":
+            cursor = position + 1
+            while cursor < len(text):
+                if text[cursor] != "`":
+                    cursor += 1
+                    continue
+                if cursor + 1 < len(text) and text[cursor + 1] == "`":
+                    cursor += 2
+                    continue
+                break
+            if cursor >= len(text):
+                return ()
+            name_end = cursor + 1
+        else:
+            match = _SIMPLE_IDENTIFIER_RE.match(text, position)
+            if match is None:
+                return ()
+            name_end = match.end()
+        if name_end < len(text) and text[name_end] == "(":
+            close = text.find(")", name_end + 1)
+            if close < 0 or close + 1 >= len(text) or text[close + 1] != ".":
+                return ()
+            position = close + 2
+            kind = "method"
+        elif name_end < len(text) and text[name_end] in "/#.:!":
+            suffix = text[name_end]
+            position = name_end + 1
+            kind = {
+                "/": "package", "#": "type", ".": "term",
+                ":": "meta", "!": "macro",
+            }[suffix]
+        else:
+            return ()
+        spans.append((start, position, kind))
+    return tuple(spans)
+
+
+def _descriptor_suffix(symbol: str) -> tuple[int, tuple[tuple[int, int, str], ...]] | None:
+    """Locate the canonical descriptor suffix without assuming package token count."""
+    if symbol.startswith("local "):
+        return None
+    for offset in range(1, len(symbol)):
+        if symbol[offset - 1] != " ":
+            continue
+        spans = _canonical_descriptor_spans(symbol[offset:])
+        if spans:
+            return offset, spans
+    return None
+
+
+def _symbol_descriptor_kind(symbol: str) -> str | None:
+    """Return the final canonical descriptor kind, or ``None`` if malformed."""
+    located = _descriptor_suffix(symbol)
+    if located is None:
+        return None
+    return located[1][-1][2]
+
+
+def _enclosing_symbol_from_symbol(symbol: str) -> str | None:
+    """Return a global symbol's byte-exact canonical owner.
+
+    SCIP requires global ownership to be encoded in the descriptor chain. Keeping the
+    original prefix and descriptor bytes preserves distinctions such as ``Owner#``
+    (type) versus ``Owner.`` (term/companion) that qualified names deliberately erase.
+    Local symbols require explicit ``SymbolInformation.enclosing_symbol`` metadata.
+    """
+    located = _descriptor_suffix(symbol)
+    if located is None:
+        return None
+    offset, spans = located
+    if len(spans) < 2:
+        return None
+    return symbol[:offset + spans[-1][0]]
 def _qualified_name_from_symbol(
     symbol: str, language: str,
 ) -> tuple[str, str | None]:
     """Turn a SCIP symbol into ``(qualified_name, parent_qualified_name)``.
 
-    SCIP symbols look like ``scip-java maven <group> <artifact> <version> <descriptors>``
-    — six space-separated tokens for Maven artifacts. For ``local <id>``
-    symbols (intra-document references) we just return the raw symbol with
-    no parent.
-
-    The parent is the symbol's enclosing scope: for a method, the enclosing
-    class; for a class, the package; for a top-level package, ``None``.
+    Ownership and display identity consume the same canonical descriptor suffix. This
+    matters for escaped identifiers containing spaces and for package formats with a
+    variable number of metadata tokens.
     """
     if symbol.startswith('local '):
         return symbol, None
 
-    # The descriptors are always the last whitespace-separated token of a
-    # well-formed SCIP symbol, regardless of how many "package" tokens
-    # precede it. Falling back to the raw symbol on malformed input keeps
-    # the caller's logging useful.
-    parts = symbol.split(' ')
-    descriptors = parts[-1] if parts else ''
-    if not descriptors:
+    located = _descriptor_suffix(symbol)
+    if located is None:
         return symbol, None
-
+    descriptors = symbol[located[0]:]
     desc = _parse_descriptors(descriptors)
     if not desc:
         return symbol, None
 
-    pkgs = [n for n, k, _ in desc if k == 'package']
-    others = [(n, k, d) for n, k, d in desc if k != 'package']
+    pkgs = [name for name, kind, _ in desc if kind == 'package']
+    others = [item for item in desc if item[1] != 'package']
     pkg_qn = '.'.join(pkgs)
 
     if not others:
-        # Symbol IS a package — qn is the package, no parent.
         return pkg_qn, None
 
-    def render(n: str, k: str, d: str) -> str:
-        if k == 'method' and language == 'java' and d:
-            return f'{n}{_decode_java_descriptor(d)}'
-        return n
+    def render(name: str, kind: str, disambiguator: str) -> str:
+        if kind == 'method' and language == 'java' and disambiguator:
+            return f'{name}{_decode_java_descriptor(disambiguator)}'
+        return name
 
-    chain = [render(*o) for o in others]
-    qn = f"{pkg_qn}.{'.'.join(chain)}" if pkg_qn else '.'.join(chain)
+    chain = [render(*item) for item in others]
+    qualified = f"{pkg_qn}.{'.'.join(chain)}" if pkg_qn else '.'.join(chain)
 
     if len(others) > 1:
-        parent_chain = [render(*o) for o in others[:-1]]
+        parent_chain = [render(*item) for item in others[:-1]]
         parent = (
             f"{pkg_qn}.{'.'.join(parent_chain)}"
             if pkg_qn else '.'.join(parent_chain)
@@ -220,39 +312,23 @@ def _qualified_name_from_symbol(
     else:
         parent = pkg_qn or None
 
-    return qn, parent
-
-
+    return qualified, parent
 def _parent_descriptor_kind(symbol: str) -> str | None:
-    """Return the kind of the second-to-last descriptor in the chain.
-
-    Used for Python/JavaScript subtype dispatch: a SCIP ``Method`` symbol
-    is a class method if the descriptor immediately before it is a type
-    (``#``); otherwise it's a top-level function.
-
-    Examples:
-      - ``... licensing/LicenseService#validate_token().`` → ``'type'``
-        (parent is the class)
-      - ``... utils/compute_score().`` → ``'package'``
-        (parent is the package; this is a top-level function)
-      - ``local 1`` → None (intra-document refs have no chain)
-    """
-    if symbol.startswith('local '):
+    """Return the kind of the second-to-last canonical descriptor."""
+    located = _descriptor_suffix(symbol)
+    if located is None:
         return None
-    parts = symbol.split(' ')
-    descriptors = parts[-1] if parts else ''
-    if not descriptors:
+    descriptors = _parse_descriptors(symbol[located[0]:])
+    if len(descriptors) < 2:
         return None
-    desc = _parse_descriptors(descriptors)
-    if len(desc) < 2:
-        return None
-    _, parent_kind, _ = desc[-2]
-    return parent_kind
+    return descriptors[-2][1]
 
 
 __all__ = [
     '_decode_java_descriptor',
+    '_enclosing_symbol_from_symbol',
     '_parent_descriptor_kind',
     '_parse_descriptors',
     '_qualified_name_from_symbol',
+    '_symbol_descriptor_kind',
 ]

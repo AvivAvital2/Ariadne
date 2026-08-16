@@ -1,0 +1,102 @@
+[
+  {
+    "id": 4,
+    "question": "When I MERGE INTO a Delta table versus a plain Spark V2 table, in what order does each run its join relative to deciding each row's insert/update/delete fate, and how does each emit the resulting rows?"
+  },
+  {
+    "id": 6,
+    "question": "A MERGE starts as the same SQL whether the target is Delta or a plain V2 table. Why does the Delta one end up NOT going through Spark's normal row-level rewrite, and what does Delta do during analysis to divert it onto its own path?"
+  },
+  {
+    "id": 8,
+    "question": "When a MERGE inserts rows into a Delta table that has generated or identity columns, who computes those column values as part of the merge, and how does that differ from a plain V2 table handling the same assignments?"
+  },
+  {
+    "id": 10,
+    "question": "If I build a merge with the Scala DeltaTable API instead of SQL, does it run a different path \u2014 and if not, where do the programmatic and SQL forms converge, versus Spark's own programmatic merge?"
+  },
+  {
+    "id": 12,
+    "question": "When I run an UPDATE on a Delta table, how does it turn my SET assignments into executed changes, and how does that differ from an UPDATE on a plain V2 table (which Spark compiles into its own executable plans Delta doesn't use)?"
+  },
+  {
+    "id": 13,
+    "question": "Spark's group-based row-level ops can skip whole groups of data at runtime before touching them. When Delta runs a MERGE, does it have an equivalent way to avoid reading files it doesn't need, and is that pruning owned by Delta or Spark?"
+  },
+  {
+    "id": 15,
+    "question": "Delta appears to run a forked version of Spark's file-writing machinery rather than the stock writer. What capability \u2014 about what actually gets written into the data files \u2014 would Delta need that the stock writer doesn't provide, justifying the fork?"
+  },
+  {
+    "id": 16,
+    "question": "After a Delta write I don't see the rename-into-final-place or the `_SUCCESS` marker a normal Spark file write leaves \u2014 what does Delta change about the commit lifecycle, and which part of the usual committer behavior does it deliberately skip?"
+  },
+  {
+    "id": 17,
+    "question": "During a Delta write the usual Spark commit steps still fire (make a temp file, commit the task, commit the job), but Delta records metadata about new files instead of moving them into place. How is the 'make a temp file' step in particular repurposed versus stock Spark?"
+  },
+  {
+    "id": 18,
+    "question": "When a Delta write's plan is adaptively optimized at runtime, what does Delta's writer reuse from Spark's write path, and why must it inspect the plan's output ordering early?"
+  },
+  {
+    "id": 23,
+    "question": "A Delta write marks every output column nullable before writing, so the Parquet files carry no NOT NULL info \u2014 yet the table still rejects nulls in a NOT NULL column. If the files don't encode it, where is NOT NULL actually enforced?"
+  },
+  {
+    "id": 27,
+    "question": "When I CREATE TABLE ... USING delta through the default session catalog I get real Delta semantics, but a plain CREATE TABLE just goes to the metastore. How does the same catalog do both \u2014 what does it intercept for Delta and what does it pass straight through?"
+  },
+  {
+    "id": 31,
+    "question": "When I load an existing Delta table by name I get back something richer than a plain metastore table (time travel, snapshots). Where in the catalog chain does that enrichment happen, and what does it hand back that a plain session catalog wouldn't?"
+  },
+  {
+    "id": 33,
+    "question": "Delta's data-source returns an empty schema when Spark asks it to infer one, yet Delta tables obviously have schemas. Why is that empty stub harmless \u2014 where does the real schema come from, and why must the method exist at all?"
+  },
+  {
+    "id": 62,
+    "question": "A Delta streaming source hands Spark a (version, position) pair as the end of each micro-batch rather than just the table version. Why isn't a plain version number enough \u2014 what does the position let it express?"
+  },
+  {
+    "id": 66,
+    "question": "When one large Delta commit is spread across several micro-batches, how does the streaming source guarantee Spark always sees strictly increasing offsets, even partway through that single commit?"
+  },
+  {
+    "id": 67,
+    "question": "My Delta streaming write needs exactly-once even if a micro-batch is replayed after a crash. How does the sink detect it already committed a given batch and skip re-writing it, and what identifier does that rely on that survives a restart?"
+  },
+  {
+    "id": 84,
+    "question": "When I create a Delta table with a generated column through the catalog, the generation expression travels in the column's metadata. Which side actually validates it, and how does Delta stop a generation expression from ending up on a table whose format version doesn't support generated columns?"
+  },
+  {
+    "id": 87,
+    "question": "Identity columns on a Delta table seem gated in two independent places \u2014 once at create time and once at write time. Why two separate gates, and what situation could pass one but fail the other?"
+  },
+  {
+    "id": 88,
+    "question": "When a Delta table has a GENERATED ALWAYS AS IDENTITY column and I try to INSERT my own explicit value, it's rejected. Given Delta reuses Spark's parser for most of the DDL, which side actually owns enforcing that you can't supply your own identity value?"
+  },
+  {
+    "id": 89,
+    "question": "When I INSERT into a Delta table and omit a nullable column that was added later via ALTER TABLE ADD COLUMN with a DEFAULT, what value gets written \u2014 and how does that interact with the difference between the default for brand-new rows and the default backfilled for rows that predate the column?"
+  },
+  {
+    "id": 107,
+    "question": "When I INSERT data whose column types don't exactly match a Delta table, both Delta and Spark can inject casts \u2014 Delta early, Spark later during its ordering/distribution prep. Which one has the final say over the written types, and why does the order they inject casts in matter?"
+  },
+  {
+    "id": 147,
+    "question": "On a Delta table with deletion vectors, deleted rows are dropped at read time without rewriting files. That filtering is split between a query-plan step and the physical Parquet reader \u2014 how do the two agree on which rows are deleted, and which one actually evaluates the drop?"
+  },
+  {
+    "id": 156,
+    "question": "A deletion vector marks deleted rows by their position within a file. On read, how does Delta line up that positional mark with the actual rows the Parquet reader produces, so exactly the right rows get dropped?"
+  },
+  {
+    "id": 187,
+    "question": "Delta ships its own fork of Spark's file-format writer. What single capability \u2014 about writing partition values into the data files \u2014 justified forking rather than configuring the stock writer, and how does the fork still fall back to Spark's normal write path where it can?"
+  }
+]

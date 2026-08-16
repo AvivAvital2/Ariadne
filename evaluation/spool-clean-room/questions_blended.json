@@ -1,0 +1,209 @@
+[
+  {
+    "id": 1,
+    "tier": "A",
+    "family": "type-widening",
+    "anchor": "Delta widened the *table* to match wider incoming data instead of downcasting; a plain V2 table just casts",
+    "question": "On this runtime, when I INSERT data whose column is wider than the table's, Delta sometimes widens the *table* to match instead of downcasting my data \u2014 but only for some type pairs, while a plain Spark V2 table just store-assignment-casts. What decides widen-vs-cast, which widenings does THIS version allow automatically vs only manually, and why doesn't Spark's own ANSI cast rule get the final say on the stored types?",
+    "version_hinge": "At delta 4.0.0 the STABLE typeWidening feature allows integer\u2192integer, integer/decimal\u2192decimal, float\u2192double, date\u2192timestampNTZ; but AUTOMATIC schema evolution excludes integer\u2192decimal/double (manual ALTER only). Spark 4.0 defaults ansi.enabled=true and storeAssignmentPolicy=ANSI.",
+    "wrong_if": "Cites the Delta 3.2 PREVIEW subset (byte\u2192short/int only), or claims int\u2192double/decimal happens automatically, or says ansi.enabled defaults false (pre-4.0), or omits that automatic\u2260manual widening sets differ.",
+    "rubric": [
+      "Delta declares ACCEPT_ANY_SCHEMA so Spark's TableOutputResolver/resolveOutputColumns is skipped; Delta injects its own casts in DeltaAnalysis.addCastToColumn (getCastFunction keyed on storeAssignmentPolicy, default ANSI)",
+      "TypeWideningMode: when delta.enableTypeWidening is on and the change is a supported widening, Delta WIDENS the table (alters schema, no data rewrite) instead of casting the data",
+      "supported automatic widenings at 4.0.0: int\u2192int, int/decimal\u2192decimal, float\u2192double (int\u2192decimal/double and date\u2192timestampNTZ are manual-only); requires reader3/writer7 typeWidening feature",
+      "Delta casts BEFORE Spark's DistributionAndOrderingUtils.prepareQuery, so Spark's ANSI TypeCoercion sees final types and can't override \u2014 that's why Spark's own ansi rule doesn't decide the stored type"
+    ]
+  },
+  {
+    "id": 2,
+    "tier": "A",
+    "family": "coordinated-commits",
+    "anchor": "I want writes arbitrated by an external service instead of the object store's put-if-absent; I've seen it under more than one name across Delta versions",
+    "question": "I want commits to this table arbitrated by an external service instead of relying on the object store's atomic put-if-absent \u2014 I've seen this called different things across Delta versions. At THIS runtime, what is the feature called in the actual code, what interface does a writer talk to, and what other writer feature must be enabled for its timestamps to be trustworthy?",
+    "version_hinge": "At delta 4.0.0 the code is Coordinated Commits (package coordinatedcommits, interface CommitCoordinatorClient: registerTable/commit/getCommits/backfillToVersion), evolving toward catalog-owned (UC coordinator). The earlier protocol name was Managed Commits (delta.managedCommit.commitOwner, writer feature managedCommit). It depends on the inCommitTimestamp writer feature.",
+    "wrong_if": "Calls it only 'Managed Commits' (the superseded name) with no mention of the coordinatedcommits/CommitCoordinatorClient rename, or misses the inCommitTimestamp dependency, or misses the backfilled vs un-backfilled (_delta_log/_commits/<v>.<uuid>.json) split.",
+    "rubric": [
+      "current name at 4.0.0 is Coordinated Commits (io.delta...coordinatedcommits, CommitCoordinatorClient); the RFC's older name was Managed Commits \u2014 the rename is the trap",
+      "writer talks to CommitCoordinatorClient: registerTable (one-time convert), commit (logical accept, may defer physical write), getCommits (discover un-backfilled), backfillToVersion",
+      "un-backfilled commits live at _delta_log/_commits/<version>.<uuid>.json; only the coordinator knows which uuid won; backfill copies to _delta_log/<version>.json strictly in order",
+      "depends on the inCommitTimestamp writer feature (async backfill makes filesystem mtime unreliable); needs Writer Version 7 + feature in writerFeatures"
+    ]
+  },
+  {
+    "id": 3,
+    "tier": "A",
+    "family": "deletion-vectors",
+    "anchor": "DELETE rewrote files on this runtime when I expected it to just mark rows",
+    "question": "On this runtime I ran a DELETE expecting it to mark rows rather than rewrite Parquet files, but it rewrote them. Under what condition does this version mark-instead-of-rewrite, what's the exact table property and its default, and once rows are only marked, which part of the engine actually drops them at read time?",
+    "version_hinge": "At delta 4.0.0 delta.enableDeletionVectors defaults to FALSE (ENABLE_DELETION_VECTORS_CREATION, DeltaConfig.scala). So DELETE rewrites files unless the property was explicitly set true; requires the deletionVectors table feature (reader3/writer7).",
+    "wrong_if": "Claims deletion vectors are ON by default at this version, or omits the delta.enableDeletionVectors opt-in, or says DELETE always soft-marks.",
+    "rubric": [
+      "delta.enableDeletionVectors table property, default FALSE at 4.0.0 \u2014 without it, DELETE rewrites files (copy-on-write); with it, a RoaringBitmap DV marks rows (merge-on-read)",
+      "requires the deletionVectors table feature (reader v3 / writer v7)",
+      "read side: DeltaParquetFileFormat builds a rowIndexFilter from the DeletionVectorDescriptor, keyed by Spark's row index (_metadata.row_index)",
+      "PreprocessTableWithDVs injects an IS_ROW_DELETED column + Filter; a Spark filter operator (FilterExec/pushed into scan) does the actual drop"
+    ]
+  },
+  {
+    "id": 4,
+    "tier": "A",
+    "family": "engine-free-access",
+    "anchor": "I need to read/write Delta from a JVM service that doesn't run Spark",
+    "question": "I need to read and write Delta tables from a JVM service that doesn't run Spark. On this runtime's Delta version, is the standalone library the right path or is it on its way out \u2014 and what's the current recommended way to do engine-free Delta access?",
+    "version_hinge": "At delta 4.0.0, Delta Standalone is DEPRECATED; Delta Kernel is the successor for engine-free read/write.",
+    "wrong_if": "Recommends Delta Standalone as the current/right path with no deprecation note, or is unaware Kernel superseded it, or (older prior) doesn't know Kernel exists.",
+    "rubric": [
+      "Delta Standalone is deprecated at 4.0.0 (delta-standalone.md is titled 'Delta Standalone (deprecated)')",
+      "the recommended successor is Delta Kernel (engine-free read/write, JVM + rust)",
+      "correct 17.3 answer notes the deprecation status explicitly rather than presenting either library as simply 'current'"
+    ]
+  },
+  {
+    "id": 5,
+    "tier": "A",
+    "family": "protocol-features",
+    "anchor": "I was told identity columns need a minimum table protocol on this runtime",
+    "question": "I want identity columns on this runtime and I'm told the table needs a minimum protocol. At this Delta version, what reader/writer protocol does the table-FEATURES mechanism itself require, how does an identity column declare its own requirement, and how would I reason about whether a feature is even available at this version without spinning up a cluster?",
+    "version_hinge": "At delta 4.0.0 the table-features mechanism requires reader v3 / writer v7 (TABLE_FEATURES_MIN_READER_VERSION). Identity columns are gated by the IdentityColumnsTableFeature (writer feature). The SET of supported features is fixed at this version and grows in later releases.",
+    "wrong_if": "Gives a protocol pair from a different version, invents a feature list that includes post-4.0 features, or treats feature availability as version-independent.",
+    "rubric": [
+      "table features require reader v3 / writer v7 (TABLE_FEATURES_MIN_READER_VERSION / TABLE_FEATURES_MIN_WRITER_VERSION)",
+      "an identity column requires the IdentityColumnsTableFeature; satisfiesIdentityColumnProtocol checks it (or legacy writer v6)",
+      "cross-repo: Spark parses GENERATED ALWAYS AS IDENTITY to IdentityColumnSpec; Delta enforces via IdentityInfo + the table feature",
+      "availability = whether the pinned 4.0.0 protocol/feature registry lists it; the feature set is version-pinned (this is what memory can't know for dbr17.3)"
+    ]
+  },
+  {
+    "id": 6,
+    "tier": "B",
+    "family": "merge",
+    "anchor": "MERGE INTO Delta looks nothing like the ReplaceData/WriteDelta plan I get on a plain V2 table",
+    "question": "When I MERGE INTO a Delta table the physical plan looks nothing like the ReplaceData/WriteDelta nodes I get MERGE-ing into a plain V2 table \u2014 Delta runs its own command. What path does Delta take instead, and where does it peel MERGE away from Spark's built-in row-level rewrite?",
+    "rubric": [
+      "Spark's RewriteMergeIntoTable rewrites MergeIntoTable -> ReplaceData(COW)/WriteDelta(MOR) for SupportsRowLevelOperations",
+      "Delta produces DeltaMergeInto via DeltaAnalysis (not MergeIntoTable), bypassing RewriteMergeIntoTable",
+      "PreprocessTableMerge lowers DeltaMergeInto -> MergeIntoCommand",
+      "ClassicMergeExecutor: findTouchedFiles then writeAllChanges (its own join+write)"
+    ]
+  },
+  {
+    "id": 7,
+    "tier": "B",
+    "family": "write",
+    "anchor": "no _SUCCESS marker after a Delta write and files are already at final paths",
+    "question": "After a Delta write I don't see a _SUCCESS marker and the data files are already at their final paths mid-job. How is the write atomic without the staging-and-rename a Hadoop committer does?",
+    "rubric": [
+      "DelayedCommitProtocol: newTaskTempFile returns FINAL path (no staging), records AddFile; commitJob writes no _SUCCESS and does no rename",
+      "atomicity comes from the log commit: OptimisticTransaction commits AddFile actions to _delta_log via LogStore put-if-absent",
+      "contrast Spark's HadoopMapReduceCommitProtocol/FileOutputCommitter (rename + _SUCCESS)",
+      "orphaned data files on abort are reaped by VACUUM"
+    ]
+  },
+  {
+    "id": 8,
+    "tier": "B",
+    "family": "data-skipping",
+    "anchor": "a filter on a long string column skipped fewer files than expected despite per-file min/max stats",
+    "question": "My query with a filter on a long string column skipped fewer files than expected even though Delta keeps per-file min/max stats. Why would a long string column cause over-reading, and what does Delta do to stay correct rather than wrong?",
+    "version_hinge": "CONFIRMED (DeltaSQLConf catalog desc): Delta truncates string min/max stats to a leading-character prefix (DATA_SKIPPING_STRING_PREFIX_LENGTH). The truncation MECHANISM is the graded fact; the exact default char-count is not asserted (body unreadable offline) and is not required to score the chain.",
+    "rubric": [
+      "string min/max stats are TRUNCATED to a bounded prefix length (config-controlled)",
+      "a truncated max is only a LOWER bound of the true max, so the [min,max] range is no longer tight",
+      "the data-skipping predicate must WIDEN (treat truncated bounds inclusively) to keep a file-keeping SUPERSET; Spark post-filters",
+      "over-read (extra files kept) is the safe direction; the alternative would wrongly prune valid files"
+    ]
+  },
+  {
+    "id": 9,
+    "tier": "B",
+    "family": "streaming",
+    "anchor": "one big commit split across several micro-batches",
+    "question": "My Delta streaming source split one large commit across several micro-batches. How does it track position WITHIN a single commit so it never re-reads or skips, and why can't it just use the table version as the offset?",
+    "rubric": [
+      "offset is (reservoirVersion, index): index is the per-file-action position within a commit (IndexedFile)",
+      "AdmissionLimits consumes the ReadLimit (files/bytes), admitting whole IndexedFiles until the cap, ending mid-commit",
+      "DeltaSourceOffset is ordered by (version,index) => strictly increasing even mid-commit (Spark requires end offsets never go backward)",
+      "table version alone can't express 'consumed first N files of version V'; the index is the intra-commit cursor"
+    ]
+  },
+  {
+    "id": 10,
+    "tier": "B",
+    "family": "streaming",
+    "anchor": "streaming write that must be exactly-once across a crash/restart",
+    "question": "I have a streaming job writing to Delta and I need exactly-once even if a micro-batch is replayed after a crash. How does the sink dedupe a replayed batch, and what identifier does it rely on that survives a query restart?",
+    "rubric": [
+      "queryId (StreamExecution.QUERY_ID_KEY, the stable id, not runId) survives restart via the checkpoint",
+      "before writing, checks txn.txnVersion(queryId) vs batchId; if >= batchId it already committed -> no-op",
+      "else commits data + a SetTransaction(queryId, batchId) atomically in the same log commit",
+      "the SetTransaction (appId->version) map is how a replayed batchId is deduped"
+    ]
+  },
+  {
+    "id": 11,
+    "tier": "A",
+    "family": "deletion-vectors",
+    "anchor": "filter pushdown / file splitting behaves differently on a table that has deletion vectors",
+    "question": "I noticed filter pushdown and file splitting behave differently on a Delta table that HAS deletion vectors versus one without. Why would enabling DVs change whether the Parquet reader can split files or push filters, and how does Delta pick between the two modes?",
+    "version_hinge": "CONFIRMED (DeltaSQLConf catalog desc): DELETION_VECTORS_USE_METADATA_ROW_INDEX defaults TRUE at 4.0.0 -> metadata-row-index mode is the DEFAULT, so file splitting + predicate pushdown stay ENABLED even with deletion vectors; the legacy from-0 counter mode that disables them is the NON-default fallback.",
+    "rubric": [
+      "at 4.0.0 the DEFAULT is metadata-row-index mode (DELETION_VECTORS_USE_METADATA_ROW_INDEX=true): reader uses Spark's _metadata.row_index, so file splitting + predicate pushdown stay ENABLED even with DVs",
+      "the legacy mode is the NON-default: a from-0 counter column requires optimizationsEnabled=false, which DISABLES splitting + pushdown so row 0 arrives first in order",
+      "so 'having DVs' does not by itself disable pushdown at this version \u2014 the mode does; the correct answer corrects the premise",
+      "cross-repo: Delta DeltaParquetFileFormat/DMLWithDeletionVectorsHelper + Spark's _metadata.row_index / Parquet reader"
+    ],
+    "wrong_if": "Claims deletion vectors inherently disable predicate pushdown / file splitting -- that is the legacy from-0-counter mode, NOT the 4.0.0 default (metadata-row-index mode is default, and it keeps pushdown+splitting on)."
+  },
+  {
+    "id": 12,
+    "tier": "B",
+    "family": "catalog",
+    "anchor": "CREATE TABLE USING delta via the default spark_catalog gives Delta semantics but plain tables go to the metastore",
+    "question": "CREATE TABLE ... USING delta through the default spark_catalog gives me real Delta semantics (time travel etc.), but a plain CREATE TABLE just goes to the metastore. How does one catalog do both, and what does it hand back for a Delta table that an ordinary session catalog wouldn't?",
+    "rubric": [
+      "DeltaCatalog extends DelegatingCatalogExtension, registered as spark_catalog, WRAPS V2SessionCatalog (the delegate)",
+      "for a delta provider it intercepts createTable -> CreateDeltaTableCommand; non-delta falls through super.* to the delegate",
+      "loadTable re-wraps the delegate's V1Table as a DeltaTableV2 (DeltaLog/snapshot, capabilities, time travel) \u2014 a plain V1Table can't",
+      "cross-repo: Spark DelegatingCatalogExtension/V2SessionCatalog + Delta DeltaCatalog/DeltaTableV2"
+    ]
+  },
+  {
+    "id": 13,
+    "tier": "B",
+    "family": "optimize",
+    "anchor": "OPTIMIZE ZORDER BY",
+    "question": "When I run OPTIMIZE ... ZORDER BY on a Delta table, how does multi-column clustering become a Spark shuffle, and how does it decide how many output files to produce?",
+    "rubric": [
+      "MultiDimClustering.cluster computes a space-filling-curve value (interleave_bits) then df.repartitionByRange(approxNumPartitions, ...)",
+      "approxNumPartitions ~ totalSize / maxFileSize drives the target file count",
+      "repartitionByRange lowers to Spark's RepartitionByExpression -> RangePartitioning (RangePartitioner)",
+      "cross-repo: Delta MultiDimClustering/OptimizeExecutor + Spark RepartitionByExpression/RangePartitioning"
+    ]
+  },
+  {
+    "id": 14,
+    "tier": "B",
+    "family": "generated-columns",
+    "anchor": "table partitioned by a column generated from a timestamp; filtering the timestamp still prunes partitions",
+    "question": "My Delta table is partitioned by a column that's generated from a timestamp column. When I filter on the timestamp (not the partition column), I still get partition pruning. How does a filter on a non-partition column end up pruning partitions?",
+    "rubric": [
+      "generated partition columns: Delta derives EXTRA partition filters from data filters via the generation expression (GeneratedColumn)",
+      "PrepareDeltaScan/optimizeGeneratedColumns injects the equivalent partition filter into the plan AND uses it in filesForScan",
+      "so a timestamp filter is translated to a filter on the generated date partition column, enabling pruning Spark alone wouldn't do",
+      "cross-repo: Delta GeneratedColumn/PrepareDeltaScan + Spark partition pruning / Catalyst"
+    ]
+  },
+  {
+    "id": 15,
+    "tier": "B",
+    "family": "streaming",
+    "anchor": "stream stopped a micro-batch exactly at a schema change, then resumed",
+    "question": "My Delta streaming read stopped a micro-batch exactly at a point where the table schema changed, then resumed. How does it land a batch boundary precisely on a schema change inside a commit rather than reading past it under a stale schema?",
+    "rubric": [
+      "sentinel index values (METADATA_CHANGE_INDEX / POST_METADATA_CHANGE_INDEX) ride in the offset's index field (newer sourceVersion)",
+      "latestOffset ends the micro-batch AT the metadata-change index; MicroBatchExecution persists it; next batch starts at POST_METADATA_CHANGE_INDEX after re-analysis",
+      "DeltaSourceMetadataTrackingLog detects the schema/protocol/config change to decide it's safe to continue",
+      "cross-repo: Delta DeltaSource/DeltaSourceOffset + Spark MicroBatchExecution offset/checkpoint contract"
+    ]
+  }
+]

@@ -1,0 +1,6 @@
+# Whitelist: ONLY the entrypoint may enter an image layer. Everything else in
+# this directory (the questions, run.sh, README, answers) stays out of the
+# image — the questions reach the container solely as a runtime /work mount,
+# never baked in. Defense in depth on top of an already-artifact-free context.
+*
+!entrypoint.py

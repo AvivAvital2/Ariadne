@@ -90,6 +90,8 @@ class TestParseDescriptors:
 # collapsed to the same parsed structure → same qualified_name → the
 # graph resolver reported "ambiguous" with N identical-looking
 # candidates that the user couldn't tell apart.
+#
+# See ``designs/directional-closure-scoping.md`` Phase 5 fix-up.
 # ---------------------------------------------------------------------------
 
 
@@ -441,3 +443,78 @@ class TestAdversarial:
         # contract is "no exception, no None for qn".
         assert isinstance(qn, str)
         assert parent is None
+class TestCanonicalEnclosingSymbol:
+    def test_parent_preserves_exact_descriptor_identity(self) -> None:
+        from docgen.scip_descriptors import _enclosing_symbol_from_symbol
+
+        prefix = "semanticdb maven org.example artifact 1.0 "
+        assert _enclosing_symbol_from_symbol(
+            prefix + "pkg/Owner#run(+1).") == prefix + "pkg/Owner#"
+        assert _enclosing_symbol_from_symbol(
+            prefix + "pkg/Owner.run(+1).") == prefix + "pkg/Owner."
+        assert _enclosing_symbol_from_symbol(
+            prefix + "pkg/`Outer Name`#`inner name`().") == (
+                prefix + "pkg/`Outer Name`#")
+
+    def test_local_without_explicit_metadata_has_no_invented_parent(self) -> None:
+        from docgen.scip_descriptors import _enclosing_symbol_from_symbol
+
+        assert _enclosing_symbol_from_symbol("local 17") is None
+class TestCanonicalDescriptorFunctionalPaths:
+    def test_qualified_name_uses_the_same_exact_escaped_suffix(self) -> None:
+        from docgen.scip_descriptors import _qualified_name_from_symbol
+
+        prefix = "semanticdb maven org.example artifact 1.0 "
+        symbol = prefix + "pkg/`Outer Name`#`inner name`()."
+
+        qualified, parent = _qualified_name_from_symbol(symbol, "scala")
+
+        assert qualified == "pkg.Outer Name.inner name"
+        assert parent == "pkg.Outer Name"
+
+    def test_every_descriptor_shape_is_consumed_without_normalizing_bytes(self) -> None:
+        from docgen.scip_descriptors import _canonical_descriptor_spans
+
+        spans = _canonical_descriptor_spans(
+            "pkg/[T](arg)`escaped``tick`#metadata:macro!")
+
+        assert [kind for _start, _end, kind in spans] == [
+            "package", "type-parameter", "parameter", "type", "meta", "macro"]
+
+    def test_malformed_descriptor_shapes_fail_closed(self) -> None:
+        from docgen.scip_descriptors import _canonical_descriptor_spans
+
+        for malformed in (
+                "[unterminated", "(unterminated", "`unterminated",
+                "?", "name(", "name()", "name"):
+            assert _canonical_descriptor_spans(malformed) == ()
+
+    def test_malformed_symbols_have_no_kind_or_invented_parent(self) -> None:
+        from docgen.scip_descriptors import (
+            _enclosing_symbol_from_symbol,
+            _symbol_descriptor_kind,
+        )
+
+        assert _symbol_descriptor_kind("malformed") is None
+        assert _enclosing_symbol_from_symbol(
+            "semanticdb maven . . Only#") is None
+class TestCanonicalEscapedDescriptorRoundTrip:
+    def test_doubled_backticks_round_trip_into_qualified_identity(self) -> None:
+        from docgen.scip_descriptors import _qualified_name_from_symbol
+
+        prefix = "semanticdb maven . . "
+        symbol = prefix + "pkg/`Owner``Name`#`run``now`()."
+
+        qualified, parent = _qualified_name_from_symbol(symbol, "scala")
+
+        assert qualified == "pkg.Owner`Name.run`now"
+        assert parent == "pkg.Owner`Name"
+
+    def test_parent_kind_uses_the_canonical_suffix_locator(self) -> None:
+        from docgen.scip_descriptors import _parent_descriptor_kind
+
+        prefix = "semanticdb maven org.example artifact 1.0 "
+        assert _parent_descriptor_kind(
+            prefix + "pkg/`Owner Name`#run().") == "type"
+        assert _parent_descriptor_kind(prefix + "Only#") is None
+        assert _parent_descriptor_kind("malformed") is None

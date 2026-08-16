@@ -395,6 +395,8 @@ class SpoolRegistration:
     spool: str
     manifest: SpoolManifest
     kind: str = 'spool'
+    # User projects this spool serves; empty preserves legacy global scope.
+    projects: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -403,14 +405,25 @@ class SpoolResolution:
     registered: dict
     gaps: tuple
 
-    def scope_sources(self) -> frozenset[str]:
-        """The reserved spool source ids eligible for query-scope inclusion.
+    def narrowed_to(self, project: 'str | None') -> 'SpoolResolution':
+        """Return only spools serving project; undeclared scope remains global."""
+        if project is None:
+            return self
+        kept = {
+            name: registration
+            for name, registration in self.registered.items()
+            if not registration.projects or project in registration.projects
+        }
+        if len(kept) == len(self.registered):
+            return self
+        return SpoolResolution(registered=kept, gaps=self.gaps)
 
-        Namespaced (``spool:<name>``, CRIT-9) so a spool never shares a
-        source namespace with real user code. The scope union + the
-        origin-axis gate + the ask fence all key on these ids.
-        """
-        return frozenset(spool_source_id(name) for name in self.registered)
+    def scope_sources(self, *, for_project: 'str | None' = None) -> frozenset:
+        """Reserved spool source ids eligible for the requested project scope."""
+        return frozenset(
+            spool_source_id(name)
+            for name in self.narrowed_to(for_project).registered
+        )
 
     def fingerprint(self) -> str:
         """A stable fingerprint of this registered set (CRIT-11), folded into
@@ -548,10 +561,11 @@ def spool_scope_fingerprint(config, *, cache_dir=None) -> str:
     return resolve_spools(config, cache_dir=cache_dir).fingerprint()
 
 
-def active_spool_sources(config, *, cache_dir=None) -> 'frozenset[str]':
-    """The reserved source ids of the registered spools — the one-call form
-    of the ``resolve_spools(...).scope_sources()`` idiom (CRIT-9 scope)."""
-    return resolve_spools(config, cache_dir=cache_dir).scope_sources()
+def active_spool_sources(config, *, cache_dir=None,
+                         for_project=None) -> 'frozenset[str]':
+    """Registered spool source ids, optionally narrowed to one project."""
+    return resolve_spools(config, cache_dir=cache_dir).scope_sources(
+        for_project=for_project)
 
 
 def resolve_spools(config, *, cache_dir=None) -> SpoolResolution:
@@ -619,7 +633,7 @@ def resolve_spools(config, *, cache_dir=None) -> SpoolResolution:
                 ),
             ))
             continue
-        registered[name] = SpoolRegistration(spool=name, manifest=manifest)
+        registered[name] = SpoolRegistration(spool=name, manifest=manifest, projects=setting.projects)
     return SpoolResolution(registered=registered, gaps=tuple(gaps))
 
 

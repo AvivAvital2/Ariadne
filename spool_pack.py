@@ -213,6 +213,8 @@ def _copy_source_scip(src, dest, source_name, *, dest_source_name=None,
                 'VALUES (?,?,?,?,?,?)',
                 edge_rows,
             )
+        from docgen.scip_store import backfill_canonical_ownership
+        backfill_canonical_ownership(dconn, target_source)
         # The remaining source-scoped SCIP layers, copied uniformly
         # (runs even when the corpus has no symbols).
         for table in _SCIP_SOURCE_SCOPED_LAYERS:
@@ -618,6 +620,10 @@ def install_pack(library, pack_path, *, cache_dir,
                 or (manifest.embedding_model
                     and manifest.embedding_model != embedding.DEFAULT_MODEL)
             )
+        # Open a disposable copy because schema migrations must not mutate
+        # the checksum-verified artifact later written to the cache.
+        working_db = Path(staging) / 'working-pack.db'
+        shutil.copyfile(staged_db, working_db)
 
         # CRIT-4: copy the docs into the store FIRST, and only write the cache
         # files (which register the spool) AFTER the copy fully succeeds — so a
@@ -631,7 +637,7 @@ def install_pack(library, pack_path, *, cache_dir,
         install_source = spool_source_id(manifest.environment)
         newly_inserted: list[str] = []
         try:
-            with Library(staged_db) as pack:
+            with Library(working_db) as pack:
                 pack_docs = pack.list_documents()
                 # CRIT-10 fallback: on a model mismatch, re-embed the docs
                 # that carried a vector — with the consumer's model — so the

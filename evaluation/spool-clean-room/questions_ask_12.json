@@ -1,0 +1,50 @@
+[
+  {
+    "id": 2,
+    "question": "I want commits to this table arbitrated by an external service instead of relying on the object store's atomic put-if-absent \u2014 I've seen this called different things across Delta versions. At THIS runtime, what is the feature called in the actual code, what interface does a writer talk to, and what other writer feature must be enabled for its timestamps to be trustworthy?"
+  },
+  {
+    "id": 3,
+    "question": "On this runtime I ran a DELETE expecting it to mark rows rather than rewrite Parquet files, but it rewrote them. Under what condition does this version mark-instead-of-rewrite, what's the exact table property and its default, and once rows are only marked, which part of the engine actually drops them at read time?"
+  },
+  {
+    "id": 4,
+    "question": "I need to read and write Delta tables from a JVM service that doesn't run Spark. On this runtime's Delta version, is the standalone library the right path or is it on its way out \u2014 and what's the current recommended way to do engine-free Delta access?"
+  },
+  {
+    "id": 6,
+    "question": "When I MERGE INTO a Delta table the physical plan looks nothing like the ReplaceData/WriteDelta nodes I get MERGE-ing into a plain V2 table \u2014 Delta runs its own command. What path does Delta take instead, and where does it peel MERGE away from Spark's built-in row-level rewrite?"
+  },
+  {
+    "id": 7,
+    "question": "After a Delta write I don't see a _SUCCESS marker and the data files are already at their final paths mid-job. How is the write atomic without the staging-and-rename a Hadoop committer does?"
+  },
+  {
+    "id": 8,
+    "question": "My query with a filter on a long string column skipped fewer files than expected even though Delta keeps per-file min/max stats. Why would a long string column cause over-reading, and what does Delta do to stay correct rather than wrong?"
+  },
+  {
+    "id": 9,
+    "question": "My Delta streaming source split one large commit across several micro-batches. How does it track position WITHIN a single commit so it never re-reads or skips, and why can't it just use the table version as the offset?"
+  },
+  {
+    "id": 10,
+    "question": "I have a streaming job writing to Delta and I need exactly-once even if a micro-batch is replayed after a crash. How does the sink dedupe a replayed batch, and what identifier does it rely on that survives a query restart?"
+  },
+  {
+    "id": 11,
+    "question": "I noticed filter pushdown and file splitting behave differently on a Delta table that HAS deletion vectors versus one without. Why would enabling DVs change whether the Parquet reader can split files or push filters, and how does Delta pick between the two modes?"
+  },
+  {
+    "id": 12,
+    "question": "CREATE TABLE ... USING delta through the default spark_catalog gives me real Delta semantics (time travel etc.), but a plain CREATE TABLE just goes to the metastore. How does one catalog do both, and what does it hand back for a Delta table that an ordinary session catalog wouldn't?"
+  },
+  {
+    "id": 13,
+    "question": "When I run OPTIMIZE ... ZORDER BY on a Delta table, how does multi-column clustering become a Spark shuffle, and how does it decide how many output files to produce?"
+  },
+  {
+    "id": 14,
+    "question": "My Delta table is partitioned by a column that's generated from a timestamp column. When I filter on the timestamp (not the partition column), I still get partition pruning. How does a filter on a non-partition column end up pruning partitions?"
+  }
+]

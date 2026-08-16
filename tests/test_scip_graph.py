@@ -107,7 +107,7 @@ class TestEdges:
             _occ(HELPER, 15),   # inside inner(), which is inside run()
         )))
 
-        callers = {e.caller.canonical_id for e in rows.edges}
+        callers = {edge.caller.canonical_id for edge in rows.edges if edge.edge_type == 'call'}
         assert callers == {inner}
 
     def test_a_callee_defined_outside_the_corpus_is_counted_not_invented(self):
@@ -291,3 +291,77 @@ class TestCallSitesAttributeToACallable:
             'with no callable enclosing the site the local is the only owner left, so '
             f'it keeps the edge: {calls[0].caller.canonical_id}'
         )
+def test_canonical_owner_materializes_one_exact_contains_edge():
+    owner_type = "semanticdb maven . . pkg/Owner#"
+    owner_term = "semanticdb maven . . pkg/Owner."
+    member = "semanticdb maven . . pkg/Owner#run()."
+    rows = _rows(ScipDocument(
+        "Owner.scala",
+        occurrences=(
+            _occ(owner_type, 1, definition=True, enclosing=(1, 0, 10, 0)),
+            _occ(owner_term, 12, definition=True, enclosing=(12, 0, 16, 0)),
+            _occ(member, 4, definition=True, enclosing=(4, 0, 8, 0))),
+        symbols=(ScipSymbolInfo(
+            symbol=member, kind="Method",
+            enclosing_symbol=owner_type),)))
+
+    contains = [edge for edge in rows.edges if edge.edge_type == "contains"]
+
+    assert [
+        (edge.caller.canonical_id, edge.callee.canonical_id)
+        for edge in contains
+    ] == [(owner_type, member)]
+def test_global_descriptor_ownership_needs_no_symbol_information():
+    owner_type = "semanticdb maven . . pkg/Owner#"
+    owner_term = "semanticdb maven . . pkg/Owner."
+    type_member = "semanticdb maven . . pkg/Owner#run()."
+    term_member = "semanticdb maven . . pkg/Owner.make()."
+    rows = _rows(ScipDocument(
+        "Owner.scala",
+        occurrences=(
+            _occ(owner_type, 1, definition=True, enclosing=(1, 0, 10, 0)),
+            _occ(type_member, 4, definition=True, enclosing=(4, 0, 8, 0)),
+            _occ(owner_term, 12, definition=True, enclosing=(12, 0, 20, 0)),
+            _occ(term_member, 15, definition=True, enclosing=(15, 0, 18, 0))),
+    ))
+
+    contains = {
+        (edge.caller.canonical_id, edge.callee.canonical_id)
+        for edge in rows.edges if edge.edge_type == "contains"
+    }
+
+    assert contains == {
+        (owner_type, type_member),
+        (owner_term, term_member),
+    }
+def test_package_descriptor_is_not_a_traversable_owner_hub():
+    package = "semanticdb maven . . pkg/"
+    left = "semanticdb maven . . pkg/left()."
+    right = "semanticdb maven . . pkg/right()."
+    rows = _rows(ScipDocument(
+        "package.scala",
+        occurrences=(
+            _occ(package, 1, definition=True, enclosing=(1, 0, 30, 0)),
+            _occ(left, 4, definition=True, enclosing=(4, 0, 8, 0)),
+            _occ(right, 14, definition=True, enclosing=(14, 0, 18, 0))),
+    ))
+
+    assert [
+        edge for edge in rows.edges
+        if edge.edge_type == "contains" and edge.caller.canonical_id == package
+    ] == []
+def test_duplicate_definition_occurrences_emit_one_ownership_edge():
+    owner = "semanticdb maven . . pkg/Owner#"
+    member = "semanticdb maven . . pkg/Owner#run()."
+    rows = _rows(ScipDocument(
+        "Owner.scala",
+        occurrences=(
+            _occ(owner, 1, definition=True, enclosing=(1, 0, 12, 0)),
+            _occ(member, 4, definition=True, enclosing=(4, 0, 8, 0)),
+            _occ(member, 4, definition=True, enclosing=(4, 0, 8, 0))),
+    ))
+
+    assert [
+        (edge.caller.canonical_id, edge.callee.canonical_id)
+        for edge in rows.edges if edge.edge_type == "contains"
+    ] == [(owner, member)]

@@ -124,6 +124,45 @@ def _seed(library):
         embedding=_unit_vec(1),
         metadata={},
     )
+def _seed_chain(library):
+    """A retrievable document over a file SCIP knows, so ``ask`` actually has a chain.
+
+    ``_seed`` alone cannot exercise the chain path: its document names no source file, so
+    nothing localizes into the graph and the walk has no seed.
+    """
+    from docgen.catalog_writer import _element_doc_id
+    from library.scip import init_scip_schema
+
+    with library._conn_provider.acquire() as conn:
+        init_scip_schema(conn)
+        for canonical_id, qualified_name, line in (
+            ('sym-run', 'w.Widget.run', 5),
+            ('sym-flush', 'w.Widget.flush', 20),
+        ):
+            conn.execute(
+                'INSERT INTO scip_symbols (canonical_id, source_name, language, file, '
+                'line_start, line_end, kind, display_name, qualified_name, '
+                'parent_qualified_name) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (canonical_id, 'test', 'python', 'w.py', line, line + 8, '', '',
+                 qualified_name, 'w.Widget'))
+        conn.execute(
+            'INSERT INTO scip_edges (caller_canonical_id, callee_canonical_id, edge_type, '
+            "file, line, confidence) VALUES ('sym-run','sym-flush','call','w.py',7,'exact')")
+        conn.commit()
+    for qualified_name, description in (
+        ('w.Widget.run', 'Runs the widget end to end.'),
+        ('w.Widget.flush', 'Flushes the batch to storage.'),
+    ):
+        library.add_document(
+            content_type='catalog', title=qualified_name.rsplit('.', 1)[-1],
+            content=f'python_method {qualified_name} in w [python] w.py'
+                    f'\n\nDescription: {description}',
+            source_files=['w.py'], doc_id=_element_doc_id('test', qualified_name),
+            embedding=_unit_vec(3), metadata={})
+    library.add_document(
+        content_type='explanation', title='Widget Guide',
+        content='The widget subsystem batches records before flush.',
+        source_files=['w.py'], embedding=_unit_vec(1), metadata={})
 
 
 @pytest.mark.asyncio
@@ -236,3 +275,93 @@ async def test_ask_synthesizes_on_an_anthropic_only_install(
 
     fake.assert_called_once()
     assert 'SYNTHESIZED-BY-ANTHROPIC' in result.answer
+@pytest.mark.asyncio
+async def test_ask_offers_a_menu_then_answers_from_what_was_chosen(
+    service, library, monkeypatch,
+):
+    """Two calls: the chain is offered, the model picks, only those bodies travel.
+
+    Measured at production width, sending the whole bundle in one call is 240,945 tokens
+    and $1.20 a question, 68% of it coordinates for hops the answer never mentions. The
+    menu of the same chain is $0.19, and the second call carries the handful chosen.
+
+    This also puts the question into a path that had never seen it: the walk expands from
+    wherever retrieval landed, with no notion of what was asked.
+    """
+    _seed_chain(library)
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+    service.config._config['ask_synthesis'] = True
+    calls: list = []
+
+    async def fake_cc(messages, *, model=None, max_tokens=2048, timeout=60.0):
+        prompt = '\n'.join(m['content'] for m in messages if m['role'] == 'user')
+        calls.append(prompt)
+        return '1' if len(calls) == 1 else 'ANSWER'
+
+    monkeypatch.setattr('llm.chat_complete', fake_cc)
+
+    result = await service.ask(question='How does the widget subsystem work?',
+                               source='test')
+
+    assert 'ANSWER' in result.answer
+    assert len(calls) == 2, f'expected a menu call then an answer call, got {len(calls)}'
+    assert 'DEFINITIONS' in calls[0], 'the first call offers the chain'
+    assert 'DEFINITIONS' not in calls[1], 'the second call carries bodies, not the menu'
+
+
+@pytest.mark.asyncio
+async def test_ask_falls_back_to_the_whole_chain_when_nothing_is_chosen(
+    service, library, monkeypatch,
+):
+    """A pick that resolves to nothing must cost tokens, never evidence.
+
+    The selection is additive: if the model names nothing the menu recognises, the answer
+    call carries the chain as it did before the menu existed, rather than an empty prompt.
+    """
+    _seed_chain(library)
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+    service.config._config['ask_synthesis'] = True
+    calls: list = []
+
+    async def fake_cc(messages, *, model=None, max_tokens=2048, timeout=60.0):
+        prompt = '\n'.join(m['content'] for m in messages if m['role'] == 'user')
+        calls.append(prompt)
+        return 'nothing looks relevant' if len(calls) == 1 else 'ANSWER'
+
+    monkeypatch.setattr('llm.chat_complete', fake_cc)
+
+    result = await service.ask(question='How does the widget subsystem work?',
+                               source='test')
+
+    assert 'ANSWER' in result.answer
+    assert len(calls) == 2
+    assert 'Call chain:' in calls[1], 'the full chain travels when nothing was chosen'
+@pytest.mark.asyncio
+async def test_ask_expands_a_bare_line_reference_in_the_answer(
+    service, library, monkeypatch,
+):
+    """The caller receives `MergeIntoCommand.scala:166`, not `:166`.
+
+    Done after the fact rather than by prompting: repeating the file name costs tokens on
+    every answer and relies on the model complying. It also matters for correctness — a bare
+    line reference does not match the location pattern, so before this it was neither checked
+    nor returned as a citation.
+    """
+    _seed_chain(library)
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+    service.config._config['ask_synthesis'] = True
+    calls: list = []
+
+    async def fake_cc(messages, *, model=None, max_tokens=2048, timeout=60.0):
+        calls.append(messages)
+        if len(calls) == 1:
+            return '1'
+        return 'Runs at w.py:5 (and again at :20).'
+
+    monkeypatch.setattr('llm.chat_complete', fake_cc)
+
+    result = await service.ask(question='How does the widget subsystem work?',
+                               source='test')
+
+    assert 'w.py:20' in result.answer, result.answer
+    assert '(and again at :20)' not in result.answer

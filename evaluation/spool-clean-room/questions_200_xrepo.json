@@ -1,0 +1,1602 @@
+[
+  {
+    "id": 1,
+    "question": "Trace how a SQL MERGE INTO on a Delta table diverges from Spark-native MERGE: which Catalyst analyzer rule does Delta substitute for Spark's RewriteMergeIntoTable, and what single executable node does that Delta rule emit instead of the AppendData/ReplaceData/WriteDelta plans RewriteMergeIntoTable produces?",
+    "family": "A",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "PreprocessTableMerge \u2192 MergeIntoCommand vs RewriteMergeIntoTable \u2192 AppendData/ReplaceData/WriteDelta"
+  },
+  {
+    "id": 2,
+    "question": "When Delta's ClassicMergeExecutor.writeAllChanges builds the merged output DataFrame, which Spark write machinery does TransactionalWrite.writeFiles hand it to, and how does that whole-file rewrite path differ from Spark-native MERGE's per-row MergeRowsExec node?",
+    "family": "A",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "writeAllChanges \u2192 TransactionalWrite.writeFiles \u2192 DeltaFileFormatWriter vs MergeRowsExec physical node"
+  },
+  {
+    "id": 3,
+    "question": "Why does Delta's ResolveDeltaMergeInto implement clause-aware resolution by hand rather than relying on Spark's Analyzer.ResolveReferences, and which specific visibility property of WHEN NOT MATCHED vs WHEN NOT MATCHED BY SOURCE clauses breaks Spark's single-attribute-set resolver?",
+    "family": "A",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Spark resolves against one set of visible attributes; NOT MATCHED sees only source, NOT MATCHED BY SOURCE only target"
+  },
+  {
+    "id": 4,
+    "question": "Spark's native MERGE compiles each clause into a MergeRows Instruction (Keep/Discard/Split) that MergeRowsExec evaluates downstream of a join it does not perform; where does Delta's ClassicMergeExecutor place its join relative to row classification, and what is Delta's analogous per-row output mechanism?",
+    "family": "A",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "MergeRowsExec Keep/Discard/Split downstream of join vs writeAllChanges outer join + clause output in ClassicMergeExecutor"
+  },
+  {
+    "id": 5,
+    "question": "When PreprocessTableMerge needs current_timestamp()/now() to evaluate to a single instant across a Delta merge, why can't it rely on Spark's ComputeCurrentTime optimizer rule, and what does it call instead with a once-captured Instant.now()?",
+    "family": "A",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "source/target are not children of MergeIntoCommand so ComputeCurrentTime never rewrites them; transformTimestamps called three times with one Instant.now"
+  },
+  {
+    "id": 6,
+    "question": "Which Spark logical-plan node does Delta's DeltaMergeInto parallel, and which Spark analyzer rule \u2014 that Delta bypasses entirely by routing through PreprocessTableMerge \u2014 would normally rewrite that node into DataSource V2 row-level operations?",
+    "family": "A",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "MergeIntoTable \u2194 DeltaMergeInto; RewriteMergeIntoTable bypassed"
+  },
+  {
+    "id": 7,
+    "question": "Spark's RewriteMergeIntoTable has an insert-only fast path that emits a plain AppendData via anti-join; which optimized executor trait does Delta's MergeIntoCommand compose alongside ClassicMergeExecutor to handle the insert-only case instead?",
+    "family": "A",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "InsertOnlyMergeExecutor (Delta) vs AppendData anti-join fast path (Spark RewriteMergeIntoTable)"
+  },
+  {
+    "id": 8,
+    "question": "When a Delta MERGE assigns to generated or IDENTITY columns, which Delta preprocessing rule computes those values, and how does that responsibility differ from what Spark's ResolveRowLevelCommandAssignments does for column assignments on a native V2 table?",
+    "family": "A",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "PreprocessTableMerge computes generation-expression/value-generator vs ResolveRowLevelCommandAssignments alignment+type coercion"
+  },
+  {
+    "id": 9,
+    "question": "Delta's DeltaMergeActionResolver offers both an individual (one-column-at-a-time) and a batched resolution strategy against the target/source plans; what property of Spark's expression-resolution analyzer pass motivates keeping both strategies rather than one?",
+    "family": "A",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaMergeActionResolver individual vs batched; Spark analyzer resolution precision-vs-performance tradeoff"
+  },
+  {
+    "id": 10,
+    "question": "Where does the delegation boundary sit for a programmatic Scala merge: which immutable builder does DeltaTable.merge(...) return, and at which call does it converge onto the same DeltaMergeInto/PreprocessTableMerge path as SQL MERGE \u2014 versus Spark's own MergeIntoWriter which assembles a Catalyst MergeIntoTable?",
+    "family": "A",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaMergeBuilder.execute \u2192 DeltaMergeInto vs Spark MergeIntoWriter \u2192 MergeIntoTable"
+  },
+  {
+    "id": 11,
+    "question": "Spark's MergeRowsExec enforces MERGE cardinality (a target row matched by at most one source row) at physical execution via checkCardinality/BitmapCardinalityValidator; in which phase and join of Delta's ClassicMergeExecutor is that same correctness rule enforced instead?",
+    "family": "A",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Delta findTouchedFiles Phase-1 inner join cardinality check vs Spark MergeRowsExec checkCardinality/BitmapCardinalityValidator"
+  },
+  {
+    "id": 12,
+    "question": "Delta's PreprocessTableUpdate turns a DeltaUpdateTable into an UpdateCommand using the UpdateExpressionsSupport trait; which Spark analyzer rule performs the analogous assignment alignment for a native V2 UpdateTable, and which executable DSv2 plans does the Spark path target that Delta's UpdateCommand does not?",
+    "family": "A",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "PreprocessTableUpdate \u2192 UpdateCommand vs ResolveRowLevelCommandAssignments \u2192 ReplaceData/WriteDelta"
+  },
+  {
+    "id": 13,
+    "question": "When Spark rewrites a group-based row-level MERGE it may inject RowLevelOperationRuntimeGroupFiltering (SupportsRuntimeV2Filtering) to prune groups at runtime; what is the corresponding file-pruning step inside Delta's ClassicMergeExecutor, and which repo owns each pruning mechanism?",
+    "family": "A",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Delta findTouchedFiles + data skipping vs Spark RowLevelOperationRuntimeGroupFiltering/SupportsRuntimeV2Filtering"
+  },
+  {
+    "id": 14,
+    "question": "In Spark's row-level framework, RewriteRowLevelCommand builds ReplaceDataProjections/WriteDeltaProjections over ProjectingInternalRow for connectors implementing SupportsDelta; why does Delta's ClassicMergeExecutor never produce row-id WriteDelta deltas, and what does writeAllChanges emit for touched files instead?",
+    "family": "A",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Delta rewrites whole touched files (or DVs), not SupportsDelta row-id deltas; Spark WriteDeltaProjections/ReplaceDataProjections"
+  },
+  {
+    "id": 15,
+    "question": "Trace what happens after TransactionalWrite.writeFiles produces a SparkPlan: which Spark class does DeltaFileFormatWriter reimplement as a fork, and what single capability, gated by DeltaOptions.WRITE_PARTITION_COLUMNS, did Delta fork it to add?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaFileFormatWriter is a fork of Spark FileFormatWriter; adds writing partition-column values into data files via WRITE_PARTITION_COLUMNS"
+  },
+  {
+    "id": 16,
+    "question": "What does Delta's DelayedCommitProtocol change about Spark's FileCommitProtocol commit lifecycle, and which stock Spark committer's rename-plus-_SUCCESS behavior (e.g. HadoopMapReduceCommitProtocol) does it deliberately refuse to perform?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DelayedCommitProtocol defers commit to the Delta log, tracks files instead of renaming; avoids HadoopMapReduceCommitProtocol rename/_SUCCESS"
+  },
+  {
+    "id": 17,
+    "question": "When DeltaFileFormatWriter drives a write job, which FileCommitProtocol callbacks (setupTask/newTaskTempFile/commitTask/commitJob) does DelayedCommitProtocol implement to capture AddFile actions, and how is newTaskTempFile repurposed compared to stock Spark's file-moving semantics?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DelayedCommitProtocol lifecycle callbacks record written files (addedFiles/addedStatuses) rather than move them"
+  },
+  {
+    "id": 18,
+    "question": "Delta's DeltaFileFormatWriter reuses Spark's WriteJobDescription bundle; when writeFilesOpt is empty but the plan contains an AdaptiveSparkPlanExec, what does the forked writer's materializeAdaptiveSparkPlan borrow from Spark's write path, and why does it inspect outputOrdering early?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "WriteJobDescription reuse; materializeAdaptiveSparkPlan forces AQE finalization to read outputOrdering before the write"
+  },
+  {
+    "id": 19,
+    "question": "Where do a Delta write's AddFile statistics originate: which Spark abstraction does DeltaFileFormatWriter collect stats from during the job, and by what route do those per-file stats end up populating the AddFile entries that TransactionalWrite commits to the transaction log?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Spark WriteJobStatsTracker/BasicWriteJobStatsTracker collected by DeltaFileFormatWriter \u2192 TransactionalWrite AddFile stats"
+  },
+  {
+    "id": 20,
+    "question": "TransactionalWrite is mixed into OptimisticTransactionImpl via a self-type; trace how the FileAction set produced by a Spark-driven DeltaFileFormatWriter job travels through DelayedCommitProtocol.commitJob back into OptimisticTransaction.commit.",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DelayedCommitProtocol.commitJob aggregates TaskCommitMessages \u2192 addedStatuses \u2192 AddFile \u2192 OptimisticTransaction.commit"
+  },
+  {
+    "id": 21,
+    "question": "When df.write.format(\"delta\") runs, which Delta LeafRunnableCommand backs it, and at which method does that command hand its DataFrame to the shared TransactionalWrite.writeFiles before Spark's DeltaFileFormatWriter physically executes the write?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "WriteIntoDelta.run \u2192 writeAndReturnCommitData \u2192 TransactionalWrite.writeFiles \u2192 DeltaFileFormatWriter"
+  },
+  {
+    "id": 22,
+    "question": "Delta's DelayedCommitProtocol has Change-Data-Capture-specific handling; how does it translate a task's output into a different transaction-log action type than a normal data file, and which Spark FileCommitProtocol concept carries that per-task result back to the driver?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "CDC virtual partition columns \u2192 AddCDCFile (not AddFile); TaskCommitMessage carries per-task results"
+  },
+  {
+    "id": 23,
+    "question": "Why does TransactionalWrite.makeOutputNullable force every output attribute to nullable=true before handing the plan to DeltaFileFormatWriter, given the Parquet schema Spark writes then loses NOT NULL information \u2014 and where are those NOT NULL constraints actually enforced instead?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "makeOutputNullable widens nullability before Spark write; NOT NULL enforced via Delta Constraints/invariants, not the written schema"
+  },
+  {
+    "id": 24,
+    "question": "DeltaFileFormatWriter was forked so partition-column values can be written into the data files themselves via WRITE_PARTITION_COLUMNS; what does stock Spark FileFormatWriter do with partition columns instead, and why does Delta need them inside the files rather than only in the directory layout?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Spark FileFormatWriter strips partition cols to directory path; Delta forks to persist them in-file"
+  },
+  {
+    "id": 25,
+    "question": "Trace how WriteIntoDelta's replaceWhere overwrite reaches physical files: which trait's writeAndReturnCommitData produces the TaggedCommitData, and where does the Spark file write (via TransactionalWrite.writeFiles) occur relative to generating the RemoveFile actions for the replaced data?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "WriteIntoDeltaLike.writeAndReturnCommitData returns TaggedCommitData; writeFiles produces AddFiles then RemoveFile diff"
+  },
+  {
+    "id": 26,
+    "question": "Both Spark's FileFormatWriter and Delta's forked DeltaFileFormatWriter keep object-level mutable vars (executedPlan/outputOrderingMatched) gated on isTesting; what output-ordering detail does the write path inspect there, and why does the required sort ordering matter before the Delta commit?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "executedPlan/outputOrderingMatched inspect AQE outputOrdering; required sort satisfied before write/commit; forked from Spark FileFormatWriter"
+  },
+  {
+    "id": 27,
+    "question": "DeltaCatalog extends Spark's DelegatingCatalogExtension \u2014 which underlying Spark catalog does it wrap and pass non-Delta operations through to, and what does it intercept and return for a CREATE TABLE ... USING delta that the delegate would not?",
+    "family": "C",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaCatalog wraps V2SessionCatalog; intercepts Delta CREATE, builds Delta transaction and loads DeltaTableV2"
+  },
+  {
+    "id": 28,
+    "question": "DeltaTableV2 implements Spark's Table, SupportsWrite, and V2TableWithV1Fallback; why does it fall back to a legacy V1 relation for read execution rather than a DSv2 Scan, and which DeltaTableV2 method produces that fallback relation?",
+    "family": "C",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "V2TableWithV1Fallback read fallback; DeltaTableV2.toBaseRelation yields a V1 BaseRelation"
+  },
+  {
+    "id": 29,
+    "question": "Which five Spark provider interfaces does DeltaDataSource implement simultaneously, and what two arguments does its TableProvider.getTable deliberately discard even though Spark's contract passes them in?",
+    "family": "C",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "RelationProvider/StreamSourceProvider/StreamSinkProvider/CreatableRelationProviderShim/TableProvider; getTable ignores schema and partitioning"
+  },
+  {
+    "id": 30,
+    "question": "When Spark plans a write against a DeltaTableV2 obtained via SupportsWrite, does the write execute through Spark's native V2 write operators or route back into Delta's WriteIntoDelta command \u2014 and which interface (V2TableWithV1Fallback) makes that redirection possible?",
+    "family": "C",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "SupportsWrite on DeltaTableV2 routes back to WriteIntoDelta via V2TableWithV1Fallback rather than Spark V2 write exec"
+  },
+  {
+    "id": 31,
+    "question": "V2SessionCatalog adapts Spark's V2 TableCatalog onto the V1 SessionCatalog, wrapping CatalogTable into a V2 Table; where does DeltaCatalog sit relative to V2SessionCatalog in the delegation chain, and what does it return for a Delta table load that V2SessionCatalog on its own would not?",
+    "family": "C",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaCatalog (DelegatingCatalogExtension) wraps V2SessionCatalog; returns DeltaTableV2 instead of the delegate's V1-backed Table"
+  },
+  {
+    "id": 32,
+    "question": "For CTAS/RTAS on a Delta table Spark uses a two-phase staged-table protocol; which Spark staged-table mechanism does DeltaCatalog implement to participate, and why must Delta defer the physical data write until the commit phase rather than at stage time?",
+    "family": "C",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaCatalog stage-then-commit StagedTable protocol; side-effecting writes only after validation succeeds"
+  },
+  {
+    "id": 33,
+    "question": "DeltaDataSource.inferSchema always returns an empty StructType regardless of options; why is that stub harmless given how DeltaTableV2 actually resolves schema, and which Spark provider contract forces the method to exist at all?",
+    "family": "C",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "TableProvider requires inferSchema; real schema resolved by DeltaTableV2/getTable from the snapshot, not inferSchema"
+  },
+  {
+    "id": 34,
+    "question": "When a user queries delta.`/path`, trace how DeltaDataSource resolves the path identifier into a DeltaTableV2: which Delta method parses embedded time-travel and partition-filter syntax, and how does that differ from the fast path taken when a Spark CatalogTable is already present?",
+    "family": "C",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaDataSource.parsePathIdentifier parses path syntax; catalogTable.location fast path skips re-parsing (PathInfo)"
+  },
+  {
+    "id": 35,
+    "question": "DeltaTableV2's pathInfo lazy val must reconcile path-based and catalog-based identity; how does it choose between catalogTable.location and DeltaDataSource.parsePathIdentifier, and where in the Spark catalog chain does the CatalogTable that triggers the fast path get supplied?",
+    "family": "C",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "pathInfo picks catalogTable.location vs parsePathIdentifier; CatalogTable supplied by DeltaCatalog/V2SessionCatalog loadTable"
+  },
+  {
+    "id": 36,
+    "question": "Given DeltaTableV2 uses V2TableWithV1Fallback, does a resolved Delta read flow through Spark's DataSourceV2Strategy as a DSv2 Scan or through the V1 relation path \u2014 and which DeltaTableV2 method determines that routing?",
+    "family": "C",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "V1 fallback via DeltaTableV2.toBaseRelation bypasses DataSourceV2Strategy's V2 Scan planning"
+  },
+  {
+    "id": 37,
+    "question": "DeltaCatalog implements ALTER TABLE by translating Spark's TableChange operations (add/drop/rename column, set/unset property, change location) into Delta commands; which of those does it intercept for a Delta table, and what does it hand to the delegate catalog for a non-Delta table?",
+    "family": "C",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaCatalog interprets Spark TableChange types into Delta ALTER commands; delegates non-Delta alterTable to V2SessionCatalog"
+  },
+  {
+    "id": 38,
+    "question": "When DeltaCatalog creates a Delta table, how does it split table properties between Delta's own _delta_log metadata and the Spark metastore entry stored via the delegate V2SessionCatalog, and which provider marker does it write into the catalog entry?",
+    "family": "C",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaCatalog writes schema/properties to _delta_log; catalog entry carries provider=delta via the V2SessionCatalog delegate"
+  },
+  {
+    "id": 39,
+    "question": "DeltaTableV2 bridges Spark's DSv2 Table to Delta's DeltaLog; when a SupportsWrite build proceeds, how does DeltaTableV2 obtain an OptimisticTransaction from the DeltaLog, and which half of that handoff belongs to Spark versus Delta?",
+    "family": "C",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Spark SupportsWrite/WriteBuilder triggers; DeltaTableV2 \u2192 DeltaLog.startTransaction/withNewTransaction \u2192 OptimisticTransaction (Delta)"
+  },
+  {
+    "id": 40,
+    "question": "Where does the read boundary between Spark and Delta actually sit for a catalog-registered Delta table: after DeltaCatalog.loadTable returns a DeltaTableV2, which Spark interface method does the planner call to obtain a relation, and why does DeltaTableV2 answer with a V1 relation built from its DeltaLog snapshot instead of a V2 Scan?",
+    "family": "C",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaCatalog.loadTable \u2192 DeltaTableV2; V2TableWithV1Fallback.toBaseRelation returns a V1 relation from the DeltaLog snapshot instead of a DSv2 Scan"
+  },
+  {
+    "id": 41,
+    "question": "When Spark's FileSourceStrategy splits a WHERE clause and hands the data filters to a Delta table's TahoeFileIndex.listFiles, how does Delta's DataSkippingReader/DataSkippingPredicateBuilder.ColumnBuilder turn an `a = 5` predicate into a file-keeping expression over MIN/MAX stat columns, and why must Spark still re-evaluate that filter per row afterward?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "FileSourceStrategy categorizes filters into partition/bucket/data/post-scan and delegates listing to TahoeFileIndex.listFiles(partitionFilters, dataFilters); Delta's ColumnBuilder.equalTo builds `min <= value && value <= max` over stat columns, which is only a file-level (over-approximate) keep predicate, so Spark keeps the original data filter as a post-scan FilterExec."
+  },
+  {
+    "id": 42,
+    "question": "Why does DataSkippingPredicateBuilder.ColumnBuilder.notEqualTo build `min < value || value < max` rather than the logical negation of equalTo, and how does that diverge from how Spark's Catalyst predicates.scala evaluates a Not(EqualTo(...)) at the row level?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "notEqualTo is an intentionally weaker over-approximation for safe file-level skipping (a file is kept unless min==max==value), NOT !equalTo; Spark's Catalyst Not(EqualTo) is an exact per-row three-valued evaluation \u2014 the divergence is file-keeping superset vs exact row filtering."
+  },
+  {
+    "id": 43,
+    "question": "Trace the snapshot-pinning path PrepareDeltaScan.getDeltaScanGenerator takes when a Delta table is referenced twice in one Spark query: how does it use OptimisticTransaction.getActive() and scannedSnapshots.computeIfAbsent, and which Spark query-planning invariant (multiple scans over one LogicalRelation) is it protecting?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "PrepareDeltaScan is a Catalyst rule whose getDeltaScanGenerator resolves in three tiers (time-travel index.getSnapshot -> active OptimisticTransaction -> scannedSnapshots.computeIfAbsent per deltaLog.compositeId), pinning one Snapshot so all Spark scans of the same table in a query see consistent files (snapshot isolation)."
+  },
+  {
+    "id": 44,
+    "question": "Where in Spark's optimizer pipeline does Delta's data skipping actually run \u2014 the PrepareDeltaScan preCBO rule injected via DeltaSparkSessionExtension vs FileSourceStrategy physical planning \u2014 and what does PrepareDeltaScan replace a TahoeLogFileIndex with so Spark's CBO sees accurate row/byte estimates before costing?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaSparkSessionExtension.injectPreCBORule registers PrepareDeltaScan, which runs filter/limit-based file resolution once and swaps the TahoeLogFileIndex for a PreparedDeltaFileIndex holding the precomputed DeltaScan (with DataSize) so CBO/metrics reflect post-skipping volume, distinct from FileSourceStrategy's later physical scan planning."
+  },
+  {
+    "id": 45,
+    "question": "When a Delta scan reports its data volume to Spark's cost-based optimizer, how do the three DataSize slots (total / partition-filtered / scanned) inside DeltaScan get populated, and how does that differ in kind from the column statistics Spark's own AnalyzeColumnCommand persists for CBO?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaScan carries three DataSize(bytesCompressed, rows, files, logicalRows) values forming a total->partition->scanned funnel derived per-query from AddFile stats, whereas Spark's AnalyzeColumnCommand computes/persists durable per-column stats (min/max/distinct/nullCount/histogram) into the catalog for selectivity estimation."
+  },
+  {
+    "id": 46,
+    "question": "Explain why Delta does not implement Spark's DataSource V2 SupportsPushDownFilters (pushFilters/pushedFilters) contract for skipping, and instead prunes through the V1 HadoopFsRelation/TahoeFileIndex + DataSkippingReader path; what does the FileIndex seam give Delta that the V2 ScanBuilder pushdown would not?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "SupportsPushDownFilters is a V2 ScanBuilder mixin returning pushed/leftover sources.Filters; Delta plugs in as a V1 file source (HadoopFsRelation wrapping TahoeFileIndex) so it prunes via listFiles + stats-based DataSkippingReader, retaining Catalyst Expression filters and per-file stat access rather than the coarser V2 sources.Filter dialect."
+  },
+  {
+    "id": 47,
+    "question": "Which stat fields must Delta have collected (via StatisticsCollection/DeltaStatistics) for DataSkippingPredicateBuilder to emit a predicate for `WHERE a > 10`, and how does the StatsColumn/referencedStats bookkeeping in DataSkippingPredicate keep the answer correct for a file whose stats are missing when Spark consumes the result?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "The `>` predicate needs the MAX stat; DataSkippingPredicate bundles the Column expr with referencedStats (Set[StatsColumn] of pathToStatType/pathToColumn); when a referenced stat is NULL the Column expression must coalesce to true (keep the file) so Spark never skips a file with absent stats."
+  },
+  {
+    "id": 48,
+    "question": "When a string column is filtered, how does Delta's StatisticsCollection truncation controlled by DATA_SKIPPING_STRING_PREFIX_LENGTH change the MIN/MAX it stores, and what must the data-skipping predicate widen so Spark still receives a superset of matching files rather than a wrong pruning?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "String min/max are truncated to a prefix length (DATA_SKIPPING_STRING_PREFIX_LENGTH), so stored MAX is a truncated lower bound of the true max; the builder must widen comparisons (treat truncated bounds inclusively) to avoid dropping files, preserving the file-keeping superset Spark then post-filters."
+  },
+  {
+    "id": 49,
+    "question": "How does the tightBounds flag in Delta's stats schema \u2014 present only when deletion vectors are supported \u2014 change what a data-skipping predicate can safely conclude, and how does that interact with the __skip_row filter that PreprocessTableWithDVs injects into the Spark logical plan?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "With deletion vectors, min/max can become 'wide' (tightBounds=false) because logically-deleted rows may still contribute to a file's stats, so skipping must be conservative; PreprocessTableWithDVs adds an IS_ROW_DELETED_STRUCT_FIELD column plus a Catalyst Filter(__skip_row==0)+Project so deleted rows are hidden at read time rather than trusted to stats."
+  },
+  {
+    "id": 50,
+    "question": "Contrast how Spark's DataSourceStrategy.selectFilters/translateFilter splits top-level conjuncts before translating a Catalyst And into sources.Filters with how Delta ANDs together per-column DataSkippingPredicates; why can a nested And/Or fail to translate in Spark yet still contribute partial skipping in Delta?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "translateFilterWithMapping returns None for a whole And/Or branch if either side is untranslatable (partial pushdown only at the top-level conjunct split done by selectFilters); Delta compiles each supported comparison into a DataSkippingPredicate and ANDs/ORs the file-keeping expressions, so an untranslatable subexpression just contributes a 'keep' rather than killing the whole predicate."
+  },
+  {
+    "id": 51,
+    "question": "When Delta must evaluate a pushed-down org.apache.spark.sql.sources.Filter from Spark's public data-source API against its own engine (e.g., for a DELETE/UPDATE condition or file skipping), which Delta utility converts that Filter back into a Catalyst Expression, and why is the Expression->Filter->Expression round-trip needed across the spark/delta boundary?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaSourceUtils.translateFilters converts Spark's public sources.Filter tree into a Catalyst Expression that Delta's file-skipping/DML code evaluates; the round-trip exists because Spark hands connectors the source-agnostic Filter dialect (produced by DataSourceStrategy.translateFilter) while Delta's internal engine reasons in Catalyst Expressions."
+  },
+  {
+    "id": 52,
+    "question": "How does TahoeFileIndex satisfy Spark's FileIndex.listFiles(partitionFilters, dataFilters) contract by translating Delta AddFile actions into PartitionDirectory/FileStatus objects, and what does getPartitionValuesRow's `orNull` behavior mean for a Spark partition column whose value is absent in the transaction log?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "TahoeFileIndex is the FileIndex bridge that maps AddFile entries (from a Snapshot) into PartitionDirectory(InternalRow partition values, FileStatus[]); getPartitionValuesRow uses partitionValues.get(colName).orNull, so a missing key silently becomes a null literal in the partition InternalRow Spark consumes, masking bugs instead of erroring."
+  },
+  {
+    "id": 53,
+    "question": "Why can TahoeLogFileIndex.version, metadata, and protocol disagree with the files returned by matchingFiles within a single Spark scan, and what does that inconsistency mean for Spark planning code that assumes a FileIndex exposes one coherent snapshot?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "version reads deltaLog.unsafeVolatileSnapshot (can change between calls) and metadata/protocol are pinned to snapshotAtAnalysis, while matchingFiles/getSnapshot may use a newer getSnapshotToScan; Spark's FileIndex consumers assume schema/protocol match the listed files, so the mismatch requires going through getSnapshot with checkSchemaOnRead."
+  },
+  {
+    "id": 54,
+    "question": "Trace what DeltaScanGenerator.filesForScan returns to the Spark planner and why the two overloads \u2014 (filters, keepNumRecords) vs (limit, partitionFilters) \u2014 can silently mis-prune; how does keepNumRecords=false degrade the row-count estimate Spark's optimizer relies on?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "The two overloads differ in filter semantics (any filters+keepNumRecords vs limit+partition-only filters) and Scala resolves by arity, so passing data filters to the partition-only overload under/over-prunes; keepNumRecords defaults to false, stripping AddFile.numRecords so Spark's CBO row-count estimate goes to None/stale."
+  },
+  {
+    "id": 55,
+    "question": "When a LIMIT sits above a Delta scan, how does Delta's filesForScan(limit, partitionFilters) short-circuit file selection, and how does that interplay with Spark's own limit handling \u2014 what does Delta do that Spark's generic file-source limit pushdown does not?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "The limit overload uses per-file numRecords stats to stop accumulating files once enough rows are guaranteed (partition filters only), pruning at file-listing time before Spark reads anything, which generic FileSourceStrategy limit handling (a post-scan LocalLimit/GlobalLimit) cannot achieve without file-level row counts."
+  },
+  {
+    "id": 56,
+    "question": "How does StatsProvider.getPredicateWithStatTypes decouple 'look up the Column that accesses MIN/MAX of column c' from 'build the skipping predicate,' and how does the resulting Spark Column expression get evaluated against the per-file stats rather than against the table's data rows?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "StatsProvider centralizes 'resolve the stat Column, check presence, apply a user function, track referencedStats' behind getPredicateWithStatType(s), producing a DataSkippingPredicate whose Spark Column expression is applied to the stats DataFrame (the parsed AddFile.stats), so file selection runs over metadata not data."
+  },
+  {
+    "id": 57,
+    "question": "When Delta rewrites the logical plan to make deletion vectors transparent, PreprocessTableWithDVs adds a synthetic IS_ROW_DELETED_STRUCT_FIELD column, a Catalyst Filter(__skip_row == 0), and a Project to strip it back out \u2014 trace which of these are pure Spark Catalyst constructs and which depend on Delta's DeltaParquetFileFormat to populate the column at read time.",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "The Filter and Project nodes are ordinary Catalyst logical-plan operators Spark plans/optimizes normally; the synthetic column's per-row value (0=keep, non-zero=skip) is populated by Delta's DeltaParquetFileFormat reader using the file's deletion vector, so correctness spans a Spark plan-surgery rule and a Delta physical reader."
+  },
+  {
+    "id": 58,
+    "question": "How does Delta's file-level stats pruning compose with Spark's row-group/page-level Parquet predicate pushdown for the same WHERE clause \u2014 which filters does FileSourceStrategy still push into the FileFormat reader after Delta has already dropped whole files via DataSkippingReader?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Delta prunes whole files up front via min/max stats (TahoeFileIndex/DataSkippingReader), then FileSourceStrategy still categorizes the surviving query as data filters and pushes them into the FileFormat (Parquet) reader for row-group/page skipping \u2014 two independent tiers of pruning over one predicate."
+  },
+  {
+    "id": 59,
+    "question": "Explain how the `partition = null` value inside a DeltaScan produced by filesForScan(limit, ...) can surface as an NPE, and where in the Spark planning path a DeltaScan's fields are consumed to build the physical scan node.",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "filesForScan(limit, partitionFilters) constructs DeltaScan with partition = null (a raw null, not None/empty DataSize); any downstream code (including planner code turning the PreparedDeltaFileIndex/DeltaScan into a FileSourceScanExec) that pattern-matches or calls methods on DeltaScan.partition without a null-check NPEs."
+  },
+  {
+    "id": 60,
+    "question": "When a query filters on a Delta partition column versus a data column, how does the work divide between Spark's FileSourceStrategy partition-key-filter directory pruning and Delta's DataSkippingReader stats-based file pruning, and why does Delta express partition filters differently from data-skipping predicates?",
+    "family": "D",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Partition-column filters are handled as partition pruning against the partition values Delta materializes in PartitionDirectory (no stats needed), while data-column filters go through DataSkippingReader/DataSkippingPredicateBuilder over min/max stats; partition filters are exact on partition values, data-skipping predicates are over-approximate file-keeping expressions."
+  },
+  {
+    "id": 61,
+    "question": "When a Delta streaming query restarts, how does DeltaSource reconstruct its position from a persisted DeltaSourceOffset, and what does Spark's MicroBatchExecution.populateStartOffsets / OffsetSeqLog expect the deserialized Offset to provide so the batch resumes without gaps or duplicates?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "On restart MicroBatchExecution.populateStartOffsets reads the last OffsetSeq from OffsetSeqLog and validates it (validateOffsetLogAndGetPrevOffset); DeltaSource deserializes the JSON DeltaSourceOffset back into (reservoirVersion, index, isInitialSnapshot) and resumes emitting IndexedFiles after that (version,index), relying on Spark's Offset contract for a durable, comparable bookmark."
+  },
+  {
+    "id": 62,
+    "question": "Trace how MicroBatchExecution asks DeltaSource.latestOffset for the end of the next micro-batch: how does Delta's AdmissionLimits translate the ReadLimit Spark passes in into a bounded (reservoirVersion, index) DeltaSourceOffset, and why does the index field exist at all rather than just a version?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Spark calls latestOffset(startOffset, readLimit); AdmissionLimits consumes the ReadLimit (files/bytes) admitting whole IndexedFiles until the cap, returning a DeltaSourceOffset at the last admitted (version,index); the per-file index lets a single large commit be split across micro-batches instead of forcing whole-version granularity."
+  },
+  {
+    "id": 63,
+    "question": "How does DeltaSource.getBatch(start, end) turn a pair of DeltaSourceOffsets into the DataFrame Spark executes, and what does Spark's Source.getBatch contract require about replayability if MicroBatchExecution calls it again for the same offset range after a crash?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "getBatch materializes the IndexedFiles in the exclusive/inclusive (start,end) (version,index) range into a DataFrame over those AddFiles; Spark's Source.getBatch must be deterministic/replayable because MicroBatchExecution re-invokes it for the same range on recovery, so DeltaSource resolves the same files from the log for identical offsets."
+  },
+  {
+    "id": 64,
+    "question": "Delta encodes special positions in DeltaSourceOffset.index using sentinels like BASE_INDEX (-100) and END_INDEX (Long.MaxValue-100). Which of these must never be written to Spark's OffsetSeqLog, and how does that constrain what latestOffset may return to MicroBatchExecution?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "END_INDEX (Long.MaxValue-100) is an in-memory-only marker ('version exhausted, move to next') that must never be serialized, whereas BASE_INDEX (-100, or legacy -1) is a legitimate persisted 'before any change in this version' position; latestOffset must normalize END_INDEX to a real (version,index) before returning it for OffsetSeqLog persistence."
+  },
+  {
+    "id": 65,
+    "question": "Why does DeltaSourceOffset carry a sourceVersion (VERSION_1 vs VERSION_3) inside its JSON, and how does that versioning let a checkpoint written by one Delta release deserialize correctly when Spark's OffsetSeqLog replays it under a different release?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "sourceVersion drives interpretation of index: VERSION_1 uses BASE_INDEX_V1=-1 and VERSION_3 uses -100 plus METADATA_CHANGE_INDEX sentinels; custom Jackson serializers via DeltaSourceOffsetForSerialization also map isInitialSnapshot to the legacy isStartingVersion, so long-lived OffsetSeqLog checkpoints stay forward/backward compatible across Delta versions."
+  },
+  {
+    "id": 66,
+    "question": "When DeltaSource splits one large Delta commit across several micro-batches, how do the (reservoirVersion, index) coordinate in DeltaSourceOffset and the (version, index) pair in IndexedFile cooperate so Spark's MicroBatchExecution always observes monotonically increasing offsets?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "IndexedFile(version,index,add/remove/cdc) assigns each file action a position within its commit; DeltaSourceOffset is Comparable ordered by (reservoirVersion,index), so successive latestOffset calls hand MicroBatchExecution strictly increasing offsets even mid-commit, satisfying Spark's requirement that end offsets never go backward."
+  },
+  {
+    "id": 67,
+    "question": "How does DeltaSink.addBatch(batchId, data) achieve exactly-once against Spark's Structured Streaming replay guarantee \u2014 trace how it derives queryId from StreamExecution.QUERY_ID_KEY and compares txn.txnVersion(queryId) against batchId before committing a SetTransaction?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaSink lazily reads queryId from the StreamExecution.QUERY_ID_KEY local property, then before writing checks currentVersion = txn.txnVersion(queryId); if currentVersion >= batchId the batch was already committed and addBatch no-ops, otherwise it commits the data plus a SetTransaction(queryId, batchId) so a Spark replay of the same batchId is deduped."
+  },
+  {
+    "id": 68,
+    "question": "Contrast Delta's per-sink idempotency (SetTransaction + txnVersion(queryId) >= batchId) with Spark's own commit-log mechanism in MicroBatchExecution: why does Delta need its own dedup even though Spark already records batch completion in its commit log?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Spark's commit log records that a batch finished at the query level, but a crash can occur after DeltaSink's transaction commits yet before Spark writes the commit-log entry, so on restart Spark re-runs the batch; Delta's SetTransaction(queryId,batchId) in its own transaction log is what makes the replayed addBatch a no-op, closing the window Spark's commit log alone cannot."
+  },
+  {
+    "id": 69,
+    "question": "When MicroBatchExecution records a batch's offsets, it writes an OffsetSeq (one Option[OffsetV2] per source) to OffsetSeqLog. Where does a DeltaSourceOffset sit in that structure for a multi-source query, and how does the SERIALIZED_VOID_OFFSET (\"-\") sentinel interact with a source that has no offset yet?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "OffsetSeq holds a positional Seq[Option[OffsetV2]] (one slot per source) plus OffsetSeqMetadata; the Delta source's DeltaSourceOffset JSON occupies its source's slot, while a source with no offset serializes as SERIALIZED_VOID_OFFSET (\"-\") which OffsetSeqLog.deserialize reads back as None, preserving per-source alignment across restart."
+  },
+  {
+    "id": 70,
+    "question": "How does DeltaSource implement admission control by returning Delta-specific ReadLimit subtypes (ReadMaxBytes, ReadMinFiles, CompositeLimit) that extend Spark's org.apache.spark.sql.connector.read.streaming.ReadLimit marker trait, and how does MicroBatchExecution decide which limit applies per trigger?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Delta's limits.scala defines ReadMaxBytes (soft-max bytes), ReadMinFiles (floor), and CompositeLimit (bytes+maxFiles+minFiles, folding in Spark's built-in ReadMaxFiles) as ReadLimit subtypes; DeltaSource.getDefaultReadLimit returns one and MicroBatchExecution passes it to latestOffset, where AdmissionLimits pattern-matches the concrete type to throttle the batch."
+  },
+  {
+    "id": 71,
+    "question": "Trace what happens across the delta/spark boundary when a streamed Delta table undergoes a non-additive schema change: how does DeltaSourceMetadataEvolutionSupport deliberately fail the stream so Spark's MicroBatchExecution/StreamExecution re-analyzes the query with the new schema, and where is the new schema persisted first?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaSourceMetadataEvolutionSupport detects the schema/config/protocol change, persists the new schema into a metadata tracking log at the boundary, then throws to fail the stream; Spark's StreamExecution restarts the query, forcing MicroBatchExecution to rebuild logicalPlan against the newly persisted schema \u2014 non-additive changes are gated behind explicit opt-in."
+  },
+  {
+    "id": 72,
+    "question": "Delta marks a schema-change boundary inside its offset stream with METADATA_CHANGE_INDEX (-20) / POST_METADATA_CHANGE_INDEX (-19) sentinels in DeltaSourceOffset.index. How does this let DeltaSource stop a micro-batch exactly at the boundary before handing control back to Spark's MicroBatchExecution?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "These sentinel index values ride in the same index field (only under sourceVersion VERSION_3) to mark the IndexedFile carrying a metadata change and the position just after it, so latestOffset can end a micro-batch at METADATA_CHANGE_INDEX; MicroBatchExecution then persists that offset and the next batch begins at POST_METADATA_CHANGE_INDEX after the stream re-analyzes."
+  },
+  {
+    "id": 73,
+    "question": "When Trigger.AvailableNow drives a Delta stream, how does MicroBatchExecution repeatedly pull bounded batches to completion, and what must DeltaSource.latestOffset / AdmissionLimits do differently from a ProcessingTime trigger so the stream terminates after draining the table?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Under Trigger.AvailableNow MicroBatchExecution loops constructing rate-limited batches (honoring AdmissionLimits) until latestOffset stops advancing, rather than waiting for new data as under ProcessingTime; DeltaSource must report a stable terminal offset once the initial snapshot and tailed commits are exhausted so Spark's loop halts."
+  },
+  {
+    "id": 74,
+    "question": "How does AsyncProgressTrackingMicroBatchExecution change the durability contract for a Delta stream by writing AsyncOffsetSeqLog / AsyncCommitLog off the critical path, and what does that mean for DeltaSink's idempotency guarantee if a batch's offset lives only in batchCache when the driver crashes?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "AsyncProgressTrackingMicroBatchExecution dispatches offset/commit-log writes to a single-threaded async executor (AsyncOffsetSeqLog/AsyncCommitLog), so a batch may only exist in the in-memory batchCache; on crash Spark replays that batch, and DeltaSink's SetTransaction(queryId,batchId) dedup is what still prevents duplicate data despite the weaker Spark-side durability."
+  },
+  {
+    "id": 75,
+    "question": "Explain how DeltaSource transitions from replaying the initial Snapshot (isInitialSnapshot=true, serialized as isStartingVersion) to tailing the change log, and why Spark's MicroBatchExecution is unaware of this internal phase change because both phases flow through the same Offset contract.",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaSource first breaks the current Snapshot into batches (offsets flagged isInitialSnapshot / isStartingVersion), then switches to tailing incremental commits; both phases emit DeltaSourceOffset (version,index) values via latestOffset/getBatch, so MicroBatchExecution treats them uniformly and a batch query over the same version yields the same result."
+  },
+  {
+    "id": 76,
+    "question": "For change-feed (readChangeFeed) streaming, how does DeltaSourceCDCSupport preserve the atomicity of a commit's pre/post-image pairs while still honoring AdmissionLimits, and what does that force latestOffset to do differently when handing an end offset to Spark's MicroBatchExecution?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaSourceCDCSupport turns AddCDCFile/AddFile/RemoveFile IndexedFiles into pre/post-image rows via CDCReader; because an update's pre/post pair cannot be split across batches, AdmissionLimits must admit whole CDC commits atomically, so latestOffset returns an end offset aligned to a commit boundary rather than mid-commit for Spark's MicroBatchExecution."
+  },
+  {
+    "id": 77,
+    "question": "Where does DeltaSourceOffset's Comparable[DeltaSourceOffset] ordering matter to Spark's streaming engine \u2014 which MicroBatchExecution checks rely on comparing two Delta offsets, and why is that comparison only valid within one reservoirId?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaSourceOffset implements Comparable ordering by (reservoirVersion,index); MicroBatchExecution relies on offset comparison to ensure the new end offset is not behind the committed start and that progress is monotonic; comparison is only meaningful within one reservoirId (table id) because versions/indexes from different tables are unrelated coordinate spaces."
+  },
+  {
+    "id": 78,
+    "question": "When DeltaFormatSharingSource streams a shared table it wraps a real DeltaSource over a synthetic local log; which parts of Spark's Source contract (latestOffset, getBatch, commit) does it delegate to DeltaSource, and which does it implement itself for the sharing RPC layer?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaFormatSharingSource is a Spark Source that materializes remote getFiles/getTableVersion RPC results into a synthetic _delta_log (via DeltaSharingLogFileSystem) and delegates offset comparison, getBatch file resolution, schema tracking and checkpointing to a wrapped DeltaSource, adding only its own throttling/offset-bookkeeping/caching for the sharing protocol on top of the Spark contract."
+  },
+  {
+    "id": 79,
+    "question": "How does DeltaSink's handling of OutputMode (e.g., Complete enabling canOverwriteSchema) reflect what Spark's MicroBatchExecution supplies at sink construction, and why is queryId fetched lazily from StreamExecution.QUERY_ID_KEY rather than at Sink construction time?",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaSink is a case class carrying the OutputMode Spark passes at sink creation; in Complete mode it rewrites the whole table each batch so canOverwriteSchema is allowed (vs canMergeSchema for appends), both from ImplicitMetadataOperation; queryId must be a lazy val because StreamExecution.QUERY_ID_KEY is a thread-local set only once the query starts running, not at construction."
+  },
+  {
+    "id": 80,
+    "question": "Trace the full offset lifecycle for one Delta micro-batch across both repos \u2014 MicroBatchExecution.constructNextBatch -> DeltaSource.latestOffset -> OffsetSeqLog write -> DeltaSource.getBatch -> DeltaSink.addBatch -> commit log \u2014 and identify at which step Delta's own SetTransaction commit happens relative to Spark's commit-log write, and why that ordering is load-bearing for exactly-once.",
+    "family": "E",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "constructNextBatch calls latestOffset (AdmissionLimits->DeltaSourceOffset), persists the OffsetSeq to OffsetSeqLog, materializes data via getBatch, then DeltaSink.addBatch commits data+SetTransaction to the Delta log; that Delta commit lands before Spark writes its commit-log entry, so a crash in between is safe because SetTransaction(queryId,batchId) dedups the replayed batch, giving exactly-once."
+  },
+  {
+    "id": 81,
+    "question": "How does Delta's ColumnWithDefaultExprUtils.addDefaultExprsOrReturnConstraints decide, field-by-field, whether to project a generated column's expression inline versus fall back to Spark's ResolveDefaultColumns.getDefaultValueExprOrNullLit for an ordinary DEFAULT column, and what makes that hand-off to Spark necessary rather than Delta re-deriving the default itself?",
+    "family": "F",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta ColumnWithDefaultExprUtils.addDefaultExprsOrReturnConstraints branching to spark ResolveDefaultColumns.getDefaultValueExprOrNullLit for the DEFAULT-column case only"
+  },
+  {
+    "id": 82,
+    "question": "When a user explicitly supplies a value for a GENERATED column on a Delta INSERT, addDefaultExprsOrReturnConstraints does not overwrite it \u2014 trace how it instead emits a Constraints.Check built on EqualNullSafe comparing the user value to the generation expression, and explain why this is Delta's substitute for the column-materialization Spark's ResolveDefaultColumns would otherwise perform.",
+    "family": "F",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta Constraints.Check + EqualNullSafe on a user-supplied generated column vs spark ResolveDefaultColumns materialization"
+  },
+  {
+    "id": 83,
+    "question": "Delta's GeneratedColumn.validateGeneratedColumns builds a throwaway LocalRelation plus a Project of the generation expressions and runs Spark's analyzer to typecheck them. Contrast this with Spark's own catalyst GeneratedColumn.analyzeAndVerifyExpression, which restricts resolution to built-in functions only and extracts the result via a Project(Seq(Alias), LocalRelation) pattern \u2014 where do the two same-named modules diverge in what they accept?",
+    "family": "F",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta GeneratedColumn.validateGeneratedColumns (LocalRelation+Project) vs spark catalyst GeneratedColumn.analyzeAndVerifyExpression built-in-only analyzer"
+  },
+  {
+    "id": 84,
+    "question": "Both Delta and Spark encode a generated column's expression under GENERATION_EXPRESSION_METADATA_KEY in StructField.metadata. When a table is created through the DataSource V2 catalog path into DeltaCatalog, which side validates the expression, and how does Delta's protocol-aware isGeneratedColumn(protocol, field) guard against Spark's metadata-preserving plan transforms leaking a generation expression onto a table whose protocol lacks GeneratedColumnsTableFeature?",
+    "family": "F",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "shared GENERATION_EXPRESSION_METADATA_KEY; delta isGeneratedColumn(protocol,field)/GeneratedColumnsTableFeature vs spark metadata propagation through StructField"
+  },
+  {
+    "id": 85,
+    "question": "Trace how Delta's IdentityColumn.createIdentityColumnGenerationExpr produces a GenerateIdentityValues(start, step, highWaterMark) Catalyst expression that continues the sequence from the stored high-water mark, and explain why an IDENTITY column cannot reuse Spark's ResolveDefaultColumns constant-fold-and-substitute machinery the way an ordinary DEFAULT column does.",
+    "family": "F",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta IdentityColumn.createIdentityColumnGenerationExpr \u2192 GenerateIdentityValues expression vs spark ResolveDefaultColumns constant-fold path"
+  },
+  {
+    "id": 86,
+    "question": "Delta's createIdentityColumnStatsTracker resolves its max(col)/min(col) high-water-mark aggregate against the actual output schema by building a throwaway LocalRelation query before physical execution. Why is re-resolving through Spark's analyzer required here \u2014 specifically, what does it protect against regarding attribute IDs that Spark's analyzer can regenerate between logical resolution and the physical write layer?",
+    "family": "F",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta createIdentityColumnStatsTracker resolving max/min aggregate against spark analyzer-regenerated attribute IDs (LocalRelation)"
+  },
+  {
+    "id": 87,
+    "question": "Spark's catalyst IdentityColumn.validateIdentityColumn fails at analysis time unless the target TableCatalog reports TableCatalogCapability.SUPPORTS_CREATE_TABLE_WITH_IDENTITY_COLUMNS. How does DeltaCatalog satisfy that capability gate, and how does Delta's own satisfiesIdentityColumnProtocol (IdentityColumnsTableFeature or writer version 6) form a second, independent write-time gate \u2014 what could pass one gate but fail the other?",
+    "family": "F",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "spark validateIdentityColumn + TableCatalogCapability.SUPPORTS_CREATE_TABLE_WITH_IDENTITY_COLUMNS vs delta satisfiesIdentityColumnProtocol/IdentityColumnsTableFeature"
+  },
+  {
+    "id": 88,
+    "question": "Contrast how Spark and Delta each turn a GENERATED ALWAYS AS IDENTITY DDL clause into metadata: Spark's IdentityColumn/IdentityColumnSpec carries start/step/allowExplicitInsert, while Delta's IdentityInfo adds highWaterMark. Given DeltaSqlParser delegates most parsing to Spark's parser, which side owns enforcing allowExplicitInsert when an INSERT supplies an explicit identity value?",
+    "family": "F",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "spark IdentityColumnSpec(start/step/allowExplicitInsert) vs delta IdentityInfo(+highWaterMark); DeltaSqlParser delegation + allowExplicitInsert enforcement"
+  },
+  {
+    "id": 89,
+    "question": "When an INSERT omits a nullable column, Delta's columnHasDefaultExpr can treat it as having an implicit NULL default via the USE_NULL_AS_DEFAULT_DELTA_OPTION write flag. How does this interact with Spark's ResolveDefaultColumns two-key model \u2014 CURRENT_DEFAULT versus EXISTS_DEFAULT \u2014 for a column that was added later through ALTER TABLE ADD COLUMN with a DEFAULT?",
+    "family": "F",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta USE_NULL_AS_DEFAULT_DELTA_OPTION / columnHasDefaultExpr vs spark CURRENT_DEFAULT vs EXISTS_DEFAULT metadata keys"
+  },
+  {
+    "id": 90,
+    "question": "Delta's GeneratedColumn builds an OptimizablePartitionExpression (e.g. YearPartitionExpr, DatePartitionExpr) so a filter on a base data column can be rewritten into a filter on a generated partition column. Which Spark Catalyst predicate constructs does generatePartitionFilters emit through helpers like lessThan/equalTo/isNull, and at what stage of Delta's scan planning are these injected into the Spark plan?",
+    "family": "F",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta GeneratedColumn OptimizablePartitionExpression/generatePartitionFilters emitting spark Catalyst predicates into the scan"
+  },
+  {
+    "id": 91,
+    "question": "Explain how Delta's ExtractBaseColumn extractor unifies AttributeReference and GetStructField so that both col and struct.nested.col are handled uniformly when matching a generation expression, and why that matters for translating a Spark Catalyst predicate on a nested timestamp field into a partition filter \u2014 where does this diverge from how a data source would push a nested-field predicate through Spark's SupportsPushDownFilters?",
+    "family": "F",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta GeneratedColumn.ExtractBaseColumn unifying AttributeReference/GetStructField vs spark SupportsPushDownFilters nested predicate pushdown"
+  },
+  {
+    "id": 92,
+    "question": "Delta restricts generation expressions via a SupportedGenerationExpressions allow-list and rejects UDFs, non-deterministic, and aggregate expressions. How does Spark's catalyst GeneratedColumn enforce a comparable restriction with its built-in-functions-only analyzer, and what does Delta's validateGeneratedColumns error-translation layer do differently when the same illegal expression triggers a Spark AnalysisException?",
+    "family": "F",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta SupportedGenerationExpressions allow-list + AnalysisException regex retranslation vs spark GeneratedColumn built-in-only analyzer"
+  },
+  {
+    "id": 93,
+    "question": "When Delta's addDefaultExprsOrReturnConstraints re-attaches CDC (_change_type) and Row-Tracking (RowId, RowCommitVersion) metadata columns after projecting to the table schema, it detects them via the analyzed output attributes rather than the nominal StructType. Why does Spark's analyzer make the nominal schema unreliable for this, and what would be dropped if the projection iterated the declared schema alone?",
+    "family": "F",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta re-attaching CDC/RowId/RowCommitVersion via RowId.RowIdMetadataAttribute predicates on spark analyzed output attributes vs nominal StructType"
+  },
+  {
+    "id": 94,
+    "question": "For a streaming write into a Delta table with generated columns, addDefaultExprsOrReturnConstraints routes the projection through DeltaStreamUtils.selectFromStreamingDataFrame instead of a plain data.select. What does this preserve that a normal Spark select would strip when the query is a Spark IncrementalExecution, and how does that connect to Spark's streaming metadata/watermark propagation?",
+    "family": "F",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta DeltaStreamUtils.selectFromStreamingDataFrame preserving spark IncrementalExecution streaming metadata that plain select drops"
+  },
+  {
+    "id": 95,
+    "question": "Delta tables advertise ACCEPT_ANY_SCHEMA, so Spark's built-in TableOutputResolver is bypassed and DeltaAnalysis re-implements output-column resolution. Compare Delta's resolveQueryColumnsByName plus addCastToColumn against Spark's TableOutputResolver.reorderColumnsByName \u2014 what does Delta permit (missing columns backed by defaults, keeping a wider source type) that Spark's resolver would reject with an incompatible-data error?",
+    "family": "G",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta ACCEPT_ANY_SCHEMA + DeltaAnalysis.resolveQueryColumnsByName/addCastToColumn vs spark TableOutputResolver.reorderColumnsByName strictness"
+  },
+  {
+    "id": 96,
+    "question": "Both Delta's addCastToColumn (via getCastFunction) and Spark's TableOutputResolver.checkField insert Cast expressions governed by the session StoreAssignmentPolicy (ANSI/STRICT/LEGACY). Where does Delta's path diverge by consulting its own TypeWideningMode to leave a wider source type uncast before ever building a Spark Cast, and why does the CastFunction alias exist?",
+    "family": "G",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta getCastFunction/CastFunction/TypeWideningMode over StoreAssignmentPolicy vs spark TableOutputResolver.checkField cast decision"
+  },
+  {
+    "id": 97,
+    "question": "Trace how a Delta append with mergeSchema=true reconciles an incoming int column against an existing long table column: which of SchemaMergingUtils.mergeDataTypes' prioritized strategies (typeWideningMode versus allowImplicitConversions) wins, and how does that outcome differ from what Spark's TableOutputResolver would do with the same int-into-long pair under ANSI store assignment?",
+    "family": "G",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta SchemaMergingUtils.mergeDataTypes priority order (typeWideningMode first) vs spark TableOutputResolver ANSI cast for int\u2192long"
+  },
+  {
+    "id": 98,
+    "question": "SchemaMergingUtils.mergeDataTypes freely interchanges ByteType/ShortType/IntegerType because Parquet stores all three as int32. How does this Parquet-safe upcasting shortcut avoid a Cast that Spark's TableOutputResolver would otherwise insert for the same pair, and what correctness or file-compatibility problem would surface if Delta deferred to Spark's coercion here instead?",
+    "family": "G",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta mergeDataTypes Parquet-safe Byte/Short/Integer\u2192int32 interchange vs spark TableOutputResolver Cast insertion"
+  },
+  {
+    "id": 99,
+    "question": "When schema merging hits a decimal precision/scale conflict, SchemaMergingUtils.mergeDataTypes raises DELTA_MERGE_INCOMPATIBLE_DECIMAL_TYPE rather than deferring to Spark. Why does Delta reject at merge time here \u2014 distinguishing a mismatch in only one dimension from a mismatch in both \u2014 instead of letting Spark's type coercion / Cast reconcile the decimals the way it would on a native Spark write?",
+    "family": "G",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta mergeDataTypes decimal precision/scale rejection (DELTA_MERGE_INCOMPATIBLE_DECIMAL_TYPE) vs spark Cast-based decimal coercion"
+  },
+  {
+    "id": 100,
+    "question": "Delta's SchemaMergingUtils sets DELTA_COL_RESOLVER to Spark's Catalyst caseInsensitiveResolution and threads that Resolver through its merge callbacks. How does reusing Spark's resolver keep Delta's case-sensitivity behavior aligned with what Spark's analyzer/TableOutputResolver apply, and where does checkColumnNameDuplication add a Delta-specific DELTA_DUPLICATE_COLUMNS_FOUND check that Spark's SchemaUtils duplicate detection does not?",
+    "family": "G",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta DELTA_COL_RESOLVER = spark caseInsensitiveResolution reuse + checkColumnNameDuplication vs spark SchemaUtils duplicate detection"
+  },
+  {
+    "id": 101,
+    "question": "For INSERT BY POSITION versus INSERT BY NAME into a Delta table, DeltaAnalysis dispatches to resolveQueryColumnsByOrdinal or resolveQueryColumnsByName. How does this mirror the by-position/by-name split inside Spark's TableOutputResolver, and what additional case \u2014 insertIntoByNameMissingColumn \u2014 does Delta accept that only makes sense because generated/default columns can legally be absent from the query?",
+    "family": "G",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta DeltaAnalysis by-ordinal/by-name + insertIntoByNameMissingColumn vs spark TableOutputResolver byName/byPosition"
+  },
+  {
+    "id": 102,
+    "question": "Delta's DeltaAnalysis recurses into nested types via addCastsToStructs / addCastsToArrayStructs / addCastsToMaps. Contrast this with how Spark's TableOutputResolver recursively reconciles StructType/ArrayType/MapType field-by-field and element/key/value-by-element \u2014 where do the two agree on the synthetic element/key/value handling, and where does Delta's type-widening change whether a nested Cast is emitted?",
+    "family": "G",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta addCastsToStructs/ArrayStructs/Maps vs spark TableOutputResolver nested StructType/ArrayType/MapType reconciliation; element/key/value"
+  },
+  {
+    "id": 103,
+    "question": "The AppendDelta / OverwriteDelta / DynamicPartitionOverwriteDelta extractors in DeltaAnalysis match Spark's V2 write nodes (AppendData, OverwriteByExpression, OverwritePartitionsDynamic) wrapping a DataSourceV2Relation. Trace how a plan produced by Spark's analyzer is intercepted and rewritten here, and where this interception sits relative to Spark's V2Writes rule that later attaches the connector Write.",
+    "family": "G",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta DeltaAnalysis AppendDelta/OverwriteDelta extractors over spark AppendData/OverwriteByExpression + ordering vs spark V2Writes rule"
+  },
+  {
+    "id": 104,
+    "question": "Spark's NamedRelation.skipSchemaResolution defaults to false, which makes the analyzer enforce strict output-column matching. How does a Delta table opt out of Spark's automatic output resolution via ACCEPT_ANY_SCHEMA, and what would happen to a schema-evolving Delta append if that opt-out weren't honored and TableOutputResolver's strict column-count/reorder check ran instead?",
+    "family": "G",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta ACCEPT_ANY_SCHEMA opt-out vs spark NamedRelation.skipSchemaResolution default false + TableOutputResolver strict check"
+  },
+  {
+    "id": 105,
+    "question": "SchemaMergingUtils.mergeDataTypes exposes an allowOverride flag ('let the incoming type win') that MERGE INTO final-schema resolution uses more loosely than a plain append does. Where does Delta's MERGE path require these looser semantics, and how does that contrast with the exact store-assignment reconciliation Spark's TableOutputResolver would enforce on a straight INSERT?",
+    "family": "G",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta mergeDataTypes allowOverride for DeltaMergeInto final schema vs spark TableOutputResolver strict store-assignment on INSERT"
+  },
+  {
+    "id": 106,
+    "question": "When Delta needs a schema stripped of default-column semantics it calls removeDefaultExpressions to delete generated/identity metadata keys. Relate this to Spark's TableOutputResolver.isCompatible, which requires exact StructField.metadata equality (not just matching type and name) before it will skip a cast \u2014 could residual generated/default metadata force spurious Cast+alias wrapping on a Delta-driven write?",
+    "family": "G",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta removeDefaultExpressions metadata stripping vs spark TableOutputResolver.isCompatible exact-metadata-equality cast-skip"
+  },
+  {
+    "id": 107,
+    "question": "After DeltaAnalysis.addCastToColumn has already inserted schema-adjustment casts, a Delta write that declares RequiresDistributionAndOrdering still flows through Spark's DistributionAndOrderingUtils.prepareQuery, whose TypeCoercionExecutor bakes ANSI-vs-non-ANSI rules at object initialization. Which repo has the final say on written column types, and why does Delta's cast-injection running before Spark's distribution preparation matter?",
+    "family": "G",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta DeltaAnalysis.addCastToColumn ordering vs spark DistributionAndOrderingUtils.prepareQuery TypeCoercionExecutor init-time frozen rules"
+  },
+  {
+    "id": 108,
+    "question": "For a plain OPTIMIZE compaction, OptimizeExecutor.runOptimizeBinJob builds a DataFrame per bin and reduces it to a single output file. Which Spark repartition/coalesce construct does it use to force one partition, and how does that single-partition write differ from the range-partition request MultiDimClustering issues for a ZORDER bin over the same files?",
+    "family": "H",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta OptimizeExecutor.runOptimizeBinJob coalesce-to-one vs MultiDimClustering range-partition; spark coalesce/repartition"
+  },
+  {
+    "id": 109,
+    "question": "Trace how OPTIMIZE ... ZORDER BY turns multi-column clustering into a Spark shuffle: MultiDimClustering.cluster computes a space-filling-curve value then calls df.repartitionByRange(approxNumPartitions, ...). Which Spark logical node does repartitionByRange lower to, and how does approxNumFiles = totalSize / maxFileSize drive the target partition count that eventually becomes a RangePartitioning?",
+    "family": "H",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta MultiDimClustering.cluster \u2192 df.repartitionByRange(approxNumFiles) \u2192 spark RepartitionByExpression range partitioning"
+  },
+  {
+    "id": 110,
+    "question": "Delta's SpaceFillingCurveClustering injects a random noise expression before repartitionByRange to combat skew when many rows share a clustering value. Given that Spark's RangePartitioner breaks ties by row order, why is the noise needed, and how does this hand-rolled anti-skew step relate to Spark's own RebalancePartitions plus OptimizeSkewInRebalancePartitions handling of skewed shuffle partitions?",
+    "family": "H",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta SpaceFillingCurveClustering noise/randomizationExpressionOpt vs spark RangePartitioner tie-break + RebalancePartitions/OptimizeSkewInRebalancePartitions"
+  },
+  {
+    "id": 111,
+    "question": "Delta defines its own RangePartitionId Catalyst expression (an Unevaluable placeholder) plus a RangePartitionIdRewrite optimizer rule. Why does Delta reimplement range-partition-id assignment as a rewrite-away placeholder instead of just emitting Spark's RangePartitioning through a ShuffleExchangeExec, and what sampling job does the rewrite trigger to fill in the partition boundaries?",
+    "family": "H",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta RangePartitionId (Unevaluable) + RangePartitionIdRewrite rule vs spark RangePartitioning/ShuffleExchangeExec; sampling job"
+  },
+  {
+    "id": 112,
+    "question": "Explain how RangePartitionIdRewrite replaces a RangePartitionId(expr, n) node with a PartitionerExpr that wraps a concrete org.apache.spark.RangePartitioner. What does this reuse from Spark Core's partitioner sampling, and how does the result differ from the RangePartitioning that Spark's EnsureRequirements would normally realize via a ShuffleExchangeExec?",
+    "family": "H",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta RangePartitionIdRewrite \u2192 PartitionerExpr wrapping spark Core RangePartitioner sampling vs spark EnsureRequirements-inserted exchange"
+  },
+  {
+    "id": 113,
+    "question": "MultiDimClusteringFunctions exposes interleave_bits and hilbert_index as Spark SQL Column-returning functions via the withExpr(expr) = Column(expr) idiom. How does wrapping a Delta Catalyst Expression as a Spark Column let Delta's Z-order math ride Spark's normal expression codegen and evaluation, and why does hilbert_index fall back to Z-order (ZOrderClustering) when only one column is supplied?",
+    "family": "H",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta MultiDimClusteringFunctions withExpr=Column(expr) riding spark expression codegen; hilbert\u2192zorder single-column fallback"
+  },
+  {
+    "id": 114,
+    "question": "OptimizeExecutor.groupFilesIntoBins packs files up to optimizeStrategy.maxBinSize, then runOptimizeBinJob writes each bin via txn.writeFiles(..., isOptimize = true). Trace how that write reaches Spark's FileFormatWriter, and how flagging the write as isOptimize suppresses the ordinary distribution/ordering requirements a normal Delta write would ask Spark to satisfy.",
+    "family": "H",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta OptimizeExecutor writeFiles(isOptimize=true) \u2192 spark FileFormatWriter, suppressing normal distribution/ordering"
+  },
+  {
+    "id": 115,
+    "question": "REORG TABLE is implemented as OPTIMIZE with a DeltaOptimizeContext of minFileSize=0 / maxDeletedRowsRatio=0 plus a custom reorgOperation.filterFilesToReorg. When such a bin is rewritten, what forces Spark to physically re-serialize files that are already large (bypassing the small-file bin filter), and where does that intersect the same txn.writeFiles \u2192 FileFormatWriter path a normal write uses?",
+    "family": "H",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta DeltaOptimizeContext(minFileSize=0)/reorgOperation.filterFilesToReorg forcing rewrite through the shared spark FileFormatWriter path"
+  },
+  {
+    "id": 116,
+    "question": "ZCubeInfo stamps a zCubeID plus zOrderBy onto each AddFile.tags (keys ZCUBE_ID_KEY / ZORDER_BY_KEY) so a later OPTIMIZE knows which files were already clustered together. When the next OPTIMIZE ZORDER runs, how does the executor use these tags to decide which files to feed into the Spark range-partition shuffle versus leave alone, and what does ZOrderMetrics count in its matchingCube bucket?",
+    "family": "H",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta ZCubeInfo AddFile.tags (ZCUBE_ID_KEY/ZORDER_BY_KEY) gating which files enter the spark repartitionByRange shuffle; ZOrderMetrics matchingCube"
+  },
+  {
+    "id": 117,
+    "question": "AutoCompact is a Delta post-commit hook (extending PostCommitHook) that runs a lightweight compaction after a qualifying commit \u2014 for example after a streaming micro-batch produces many small files. Trace how the small files from a Spark MicroBatchExecution write trigger the same OptimizeExecutor compaction and single-partition Spark coalesce path that a manual OPTIMIZE would take.",
+    "family": "H",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta AutoCompact PostCommitHook reusing OptimizeExecutor compaction/coalesce after a spark micro-batch write"
+  },
+  {
+    "id": 118,
+    "question": "Delta's optimizeWrite option (parsed in DeltaOptions) shrinks a write's file count by shuffling data to fewer, larger partitions before it lands, in contrast to a post-hoc OPTIMIZE compaction. Which Spark rebalancing construct does this pre-write shuffle correspond to, and how does relying on Spark's RebalancePartitions (rather than a fixed repartition) let it adapt partition sizes at write time?",
+    "family": "H",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta DeltaOptions.optimizeWrite pre-write shuffle mapping to spark RebalancePartitions (advisory-size adaptive) vs fixed repartition"
+  },
+  {
+    "id": 119,
+    "question": "When OPTIMIZE compaction reduces a bin's DataFrame to one partition, that redistribution goes through Spark's ShuffleExchangeExec. How does ShuffleExchangeExec decide whether a defensive copy of the reused mutable InternalRow is required on this path, and what determinism concern (its round-robin pre-shuffle sort) would matter if a compaction task retried mid-shuffle?",
+    "family": "H",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta OPTIMIZE single-partition redistribution through spark ShuffleExchangeExec mutable-InternalRow defensive copy + round-robin determinism"
+  },
+  {
+    "id": 120,
+    "question": "Once MultiDimClustering hands the range-partitioned (repartitionByRange) DataFrame to Delta's write, does Spark's EnsureRequirements insert an additional ShuffleExchangeExec, or is the existing RangePartitioning recognized as already satisfying the write's distribution? Trace the partitioning.satisfies(distribution) check that determines whether a second shuffle is avoided.",
+    "family": "H",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta repartitionByRange output RangePartitioning vs spark EnsureRequirements partitioning.satisfies(distribution) avoiding a second ShuffleExchangeExec"
+  },
+  {
+    "id": 121,
+    "question": "When a MERGE built with the Spark Connect client DeltaMergeBuilder.execute() is serialized into a proto.DeltaRelation carrying the merge spec, which server-side Spark Connect extension point deserializes it and turns it back into a Catalyst/Delta LogicalPlan, and what does that hook return when the payload is not a Delta message?",
+    "family": "I",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta connect DeltaMergeBuilder -> proto.DeltaRelation MergeIntoTable; server DeltaRelationPlugin.transform(raw, planner: SparkConnectPlanner): Optional[LogicalPlan] (RelationPlugin extension point), returns Optional.empty() on non-Delta payloads"
+  },
+  {
+    "id": 122,
+    "question": "Delta Connect defines its own protobuf schema (io.delta.connect.spark.proto) that structurally mirrors Spark Connect's spark.connect.proto; which utility converts a Delta Relation/Command/Expression message into the equivalent Spark Connect message, by what physical mechanism, and why is the Delta->Spark direction bounded by recursionLimit=1024 while the reverse is not?",
+    "family": "I",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "ImplicitProtoConversions.convertRelationToSpark/convertCommandToSpark/convertExpressionToSpark/convertDataTypeToSpark serialize via toByteArray then re-parse into the target proto; asymmetric recursionLimit=1024 vs unlimited Spark->Delta"
+  },
+  {
+    "id": 123,
+    "question": "Trace how Spark Connect's server planner decides that a Delta-specific relation should be handled by Delta rather than core Spark: where are DeltaRelationPlugin and DeltaCommandPlugin registered so SparkConnectPlanner consults them, and how does the Optional.empty()/false return contract let the planner fall through between plugins?",
+    "family": "I",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "spark.connect.extensions.relation.classes / command.classes registration; SparkConnectPlanner plugin dispatch; DeltaRelationPlugin.transform returns Optional.empty(), DeltaCommandPlugin.process returns Boolean=false when unrecognized"
+  },
+  {
+    "id": 124,
+    "question": "On the client, DeltaMergeMatchedActionBuilder.updateAll()/delete() append merge actions; on the server DeltaRelationPlugin.transformMergeWhenMatchedAction switches on proto getActionTypeCase. Which proto action-type cases are legal in a matched clause, and which Catalyst MergeAction subclasses does the server construct from them?",
+    "family": "I",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta connect DeltaMergeMatchedActionBuilder action encoding; DeltaRelationPlugin.transformMergeWhenMatchedAction on getActionTypeCase (DELETE_ACTION/UPDATE_ACTION) -> Catalyst DeleteAction/UpdateAction; INSERT_ACTION invalid in matched clause -> MatchError gotcha"
+  },
+  {
+    "id": 125,
+    "question": "Why does a Delta Connect VACUUM travel through DeltaCommandPlugin.process while a MERGE travels through DeltaRelationPlugin.transform, and how does each map onto Spark Connect's two dispatch families (command execution vs relation-to-LogicalPlan)?",
+    "family": "I",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaCommandPlugin (CommandPlugin, google.protobuf.Any -> proto.DeltaCommand, process returns Boolean) for side-effecting maintenance vs DeltaRelationPlugin (RelationPlugin -> LogicalPlan) for MERGE; SparkConnectPlanner command vs transformRelation paths"
+  },
+  {
+    "id": 126,
+    "question": "Both DeltaRelationPlugin and DeltaCommandPlugin mix in DeltaPlannerBase to resolve which table the client meant; how does DeltaPlannerBase.transformDeltaTable turn a proto.DeltaTable into a live io.delta.tables.DeltaTable, which oneof cases of the proto does it accept, and which SparkConnectPlanner-provided object supplies the session?",
+    "family": "I",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaPlannerBase.transformDeltaTable resolving proto.DeltaTable AccessTypeCase (path vs table_or_view_name) using planner.session from SparkConnectPlanner; ACCESSTYPE_NOT_SET -> MatchError"
+  },
+  {
+    "id": 127,
+    "question": "Spark's own Connect MERGE serializes to proto.MergeIntoTableCommand handled natively by SparkConnectPlanner, whereas Delta's Connect MERGE serializes to proto.DeltaRelation handled by a plugin; contrast the two proto messages and explain why Delta cannot simply reuse Spark's MergeIntoTableCommand path.",
+    "family": "I",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "spark connect MergeIntoWriter -> proto.MergeIntoTableCommand (native SparkConnectPlanner) vs delta connect DeltaMergeBuilder -> proto.DeltaRelation (DeltaRelationPlugin); Delta semantics (WHEN NOT MATCHED BY SOURCE, schema evolution) not expressible in Spark's native command"
+  },
+  {
+    "id": 128,
+    "question": "Spark Connect's MergeIntoWriter appends each MergeAction onto MatchActions/NotMatchedActions/NotMatchedBySourceActions of a proto.MergeIntoTableCommand and ships it with SparkSession.execute; on the server, how are those proto MergeAction messages turned back into the Catalyst UpdateAction/InsertAction/DeleteAction expressions the classic MergeIntoWriter would have built in-process?",
+    "family": "I",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "connect MergeIntoWriter proto.MergeIntoTableCommand (MatchActions/NotMatchedActions/NotMatchedBySourceActions) via SparkSession.execute; SparkConnectPlanner rebuilds Catalyst MergeAction subclasses (UpdateAction/UpdateStarAction/DeleteAction/InsertAction/InsertStarAction)"
+  },
+  {
+    "id": 129,
+    "question": "Follow a DeltaTableBuilder.create() over Spark Connect: how does the client encode the create-table request into a proto.DeltaCommand, and where does DeltaCommandPlugin translate the CreateDeltaTable.Mode into a call against the local io.delta.tables API \u2014 including the spot where an unknown Mode is thrown with a plain Exception instead of InvalidPlanInput?",
+    "family": "I",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta connect DeltaTableBuilder -> proto.DeltaCommand CreateDeltaTable; DeltaCommandPlugin.process unpacks Any -> proto.DeltaCommand and maps CreateDeltaTable.Mode; unknown Mode throws new Exception not InvalidPlanInput"
+  },
+  {
+    "id": 130,
+    "question": "When a Delta Connect client sends a malformed plan, the intended server-side error is InvalidPlanInput so the client sees a clean Connect error; identify two places in the Delta plugins where an unmatched proto case instead surfaces as a scala.MatchError or a plain Exception, and explain how that defeats Spark Connect's client-side error translation.",
+    "family": "I",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "spark connect InvalidPlanInput as the expected error surface; DeltaPlannerBase.transformDeltaTable ACCESSTYPE_NOT_SET MatchError and DeltaCommandPlugin unknown CreateDeltaTable.Mode plain Exception break Connect error mapping"
+  },
+  {
+    "id": 131,
+    "question": "A Delta Connect OPTIMIZE/Z-ORDER built with the client DeltaOptimizeBuilder must run compaction on the server; which Delta Connect server plugin receives it, how does that path differ from the MERGE path through DeltaRelationPlugin, and what does the client need from the server response to report OPTIMIZE metrics?",
+    "family": "I",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta connect DeltaOptimizeBuilder serializes OPTIMIZE/Z-order into a Delta proto handled by the Delta Connect plugins; contrast with DeltaRelationPlugin MERGE; client decodes ExecutePlanResponse metrics"
+  },
+  {
+    "id": 132,
+    "question": "After a Delta Connect command executes remotely, how do the client-side PlanMetrics/ExecutionInfo structures reconstruct operation metrics from the ExecutePlanResponse/ObservedMetrics protobufs that Spark Connect streams back, closing the loop from proto plan construction to result interpretation?",
+    "family": "I",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "pyspark.sql.metrics PlanMetrics/CollectedMetrics/ObservedMetrics/ExecutionInfo decode ExecutePlanResponse.ObservedMetrics returned by SparkConnectPlanner-executed Delta commands"
+  },
+  {
+    "id": 133,
+    "question": "In the Python client, delta.connect.tables DeltaTable.merge produces a plan node rather than executing locally; how does that plan node reuse pyspark.sql.connect.plan's LogicalPlan contract (plan_id, plan()) to become a Spark Connect proto Relation, and what keeps its docstrings identical to the non-Connect DeltaTable API?",
+    "family": "I",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "delta connect Python plan nodes subclass pyspark.sql.connect.plan LogicalPlan (plan_id, plan()); X.__doc__ = LocalY.X.__doc__ docstring-sharing shim keeps Connect/local APIs consistent"
+  },
+  {
+    "id": 134,
+    "question": "DeltaLogicalPlan wraps a DeltaRelation into a Spark Connect proto plan via wrap_delta_relation; explain how it embeds a Delta-specific message inside Spark Connect's generic proto.Relation tree while still satisfying the base LogicalPlan's plan_id/child-handling contract from pyspark's connect plan layer.",
+    "family": "I",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaLogicalPlan.wrap_delta_relation embeds proto.DeltaRelation into spark.connect proto.Relation; inherits plan_id/child relationship contract from pyspark.sql.connect.plan LogicalPlan"
+  },
+  {
+    "id": 135,
+    "question": "After DeltaRelationPlugin.transform rebuilds a Catalyst MERGE plan on the server, what actually runs it, and why does the file's dual import of org.apache.spark.sql.Dataset and org.apache.spark.sql.classic.Dataset mean the Dataset.ofRows(planner.session, merge) call binds to the classic implementation rather than the api one?",
+    "family": "I",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaRelationPlugin executes the built LogicalPlan via classic.Dataset.ofRows(planner.session, merge); shadowed import (org.apache.spark.sql.Dataset vs org.apache.spark.sql.classic.Dataset) binds unqualified Dataset to classic"
+  },
+  {
+    "id": 136,
+    "question": "Delta Kernel and Spark both push predicates down into parquet-mr, but from opposite front-ends. Trace where Kernel's ParquetFilterUtils.toParquetFilter and Spark's ParquetFilters each convert their own filter representation into the shared parquet-mr FilterPredicate, and name the distinct intermediate filter types each starts from.",
+    "family": "J",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Kernel ParquetFilterUtils.toParquetFilter converts io.delta.kernel.expressions.Predicate/Column -> parquet-mr FilterPredicate; Spark ParquetFilters converts org.apache.spark.sql.sources.Filter -> the same parquet FilterPredicate; both meet at parquet-mr FilterApi"
+  },
+  {
+    "id": 137,
+    "question": "Kernel's DefaultExpressionEvaluator evaluates a predicate by interpreting it with an ExpressionVisitor across each ColumnarBatch, whereas Spark Catalyst evaluates the same predicate through Expression.eval / whole-stage codegen. Contrast the two mechanisms and explain why Kernel's engine-agnostic design deliberately avoids generating code.",
+    "family": "J",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Kernel DefaultExpressionEvaluator two-phase visitor (ExpressionTransformer compile-once + ExpressionEvalVisitor per ColumnarBatch) producing a ColumnVector, no codegen; Spark Catalyst Expression.eval/whole-stage codegen; engine-agnostic Kernel cannot emit JVM bytecode"
+  },
+  {
+    "id": 138,
+    "question": "Both systems insert casts to reconcile operand types, but at different times. Where does Kernel add an ImplicitCastExpression versus where Spark Catalyst inserts a Cast, and why does Kernel do it once during DefaultExpressionEvaluator's compile phase while Catalyst does it during analysis?",
+    "family": "J",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Kernel ImplicitCastExpression inserted in DefaultExpressionEvaluator compile/transform phase (once, not per batch); Spark Catalyst Cast inserted by type-coercion analyzer rules before physical planning"
+  },
+  {
+    "id": 139,
+    "question": "Kernel's ParquetFileReader and Spark's VectorizedParquetRecordReader both hand back a ColumnarBatch, but reach it by opposite routes. Contrast Kernel driving row-oriented parquet-mr through a RecordMaterializer and buffering into batches, versus Spark bypassing parquet-mr record assembly to decode column chunks straight into writable vectors.",
+    "family": "J",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Kernel ParquetFileReader implements parquet-mr ReadSupport/RecordMaterializer (RowRecordCollector) buffering rows into ColumnarBatch after maxBatchSize; Spark VectorizedParquetRecordReader decodes column chunks directly into WritableColumnVector (OnHeap/OffHeap) via ParquetColumnVector"
+  },
+  {
+    "id": 140,
+    "question": "To index a deletion vector, both stacks need a row's ordinal position within a Parquet file. How does Kernel's ParquetFileReader surface the physical row index for DV/CDC, and how does that compare to Spark's _metadata.row_index that DeltaParquetFileFormat leans on in the Spark connector?",
+    "family": "J",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Kernel ParquetFileReader tracks physical row index internally for deletion vectors/CDC; Spark exposes _metadata.row_index via its native Parquet reader (useMetadataRowIndex); DeltaParquetFileFormat consumes it instead of counting"
+  },
+  {
+    "id": 141,
+    "question": "SQL three-valued boolean logic for AND/OR shows up in both engines. Contrast how Kernel's DefaultExpressionEvaluator visitAnd/visitOr compute null-aware results over ColumnVector operands with how Spark Catalyst's And/Or expressions handle nulls, given one interprets column vectors and the other evaluates per InternalRow or via codegen.",
+    "family": "J",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Kernel DefaultExpressionEvaluator visitAnd/visitOr implement three-valued logic over ColumnVector; Spark Catalyst And/Or Expression.eval on InternalRow / codegen implement the same SQL null semantics on a different substrate"
+  },
+  {
+    "id": 142,
+    "question": "Kernel's default column vectors (DefaultStructVector, DefaultViewVector, DefaultGenericVector) are read-only lazy views, while Spark's WritableColumnVector is a pre-allocated mutable buffer written by the vectorized reader. Why does Kernel's expression engine favor wrapping existing vectors in anonymous lazy ColumnVectors instead of materializing writable ones like Spark does?",
+    "family": "J",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Kernel Default*Vector read-only + evaluators return lazy anonymous ColumnVector (compute getX on demand); Spark WritableColumnVector (OnHeapColumnVector/OffHeapColumnVector) pre-allocated and mutated by VectorizedParquetRecordReader"
+  },
+  {
+    "id": 143,
+    "question": "Kernel's DefaultEngine is a factory that supplies ExpressionHandler, ParquetHandler, JsonHandler and FileSystemClient to keep Kernel engine-agnostic. Which of these handlers would a Spark-hosted engine replace with Catalyst/Spark machinery, and specifically how does the DefaultEngine's ExpressionHandler differ from delegating evaluation to Catalyst?",
+    "family": "J",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Kernel Engine interface handlers (ExpressionHandler/ParquetHandler/JsonHandler/FileSystemClient/MetricsReporter) via DefaultEngine; a Spark engine would back ExpressionHandler with Catalyst instead of DefaultExpressionEvaluator's interpreter, ParquetHandler with Spark's reader"
+  },
+  {
+    "id": 144,
+    "question": "Kernel's ExpressionVisitor dispatches a ScalarExpression by uppercasing getName() (Locale.ENGLISH) and string-matching, throwing UnsupportedOperationException on a miss, whereas Spark Catalyst resolves functions to typed Expression subclasses via the analyzer. Contrast name-based string dispatch with typed resolution and the divergent failure modes each produces for an unknown function.",
+    "family": "J",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Kernel ExpressionVisitor scalar dispatch via getName().toUpperCase(Locale.ENGLISH) string switch -> UnsupportedOperationException on unmatched name; Spark Catalyst resolves to concrete Expression subclasses in analysis -> AnalysisException"
+  },
+  {
+    "id": 145,
+    "question": "When a comparison is written literal-first (5 < col), Kernel's ParquetFilterUtils.convertComparatorToParquetFilter swaps operands so the Column comes first; what latent bug does that swap have, and how does Spark's ParquetFilters normalize the same literal-on-left comparison before emitting a parquet-mr FilterApi predicate?",
+    "family": "J",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Kernel ParquetFilterUtils.convertComparatorToParquetFilter swaps child0/child1 but does not flip < <-> > (bug -> wrong FilterApi.lt/gt); Spark ParquetFilters handles operand orientation to build the correct parquet FilterPredicate"
+  },
+  {
+    "id": 146,
+    "question": "DeltaParquetFileFormat extends Spark's ParquetFileFormat and its buildReaderWithPartitionValues first delegates to Spark's reader. Trace how a ColumnarBatch emitted by Spark's VectorizedParquetRecordReader is then augmented with the synthetic __delta_internal_is_row_deleted column, and which method performs that augmentation.",
+    "family": "K",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaParquetFileFormat.buildReaderWithPartitionValues delegates to Spark ParquetFileFormat then wraps the iterator with iteratorWithAdditionalMetadataColumns to populate __delta_internal_is_row_deleted (IS_ROW_DELETED_COLUMN_NAME) on the ColumnarBatch/InternalRow"
+  },
+  {
+    "id": 147,
+    "question": "Deletion-vector filtering is split between a Catalyst rule and the physical reader. How do Delta's PreprocessTableWithDVs (which adds IS_ROW_DELETED_STRUCT_FIELD, a Filter on __delta_internal_is_row_deleted == 0, and a Project) and DeltaParquetFileFormat (which populates that column) agree on the column name, and which Spark operator evaluates the Filter?",
+    "family": "K",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "PreprocessTableWithDVs plan surgery: augments scan schema with IS_ROW_DELETED_STRUCT_FIELD, adds Spark Filter(__delta_internal_is_row_deleted==0) + Project; DeltaParquetFileFormat physically fills IS_ROW_DELETED_COLUMN_NAME; Spark FilterExec evaluates it"
+  },
+  {
+    "id": 148,
+    "question": "DeltaParquetFileFormat can obtain a per-file row index two ways. When does it use the manually counted __delta_internal_row_index versus Spark's native _metadata.row_index, and why does the manual path require predicate pushdown and file splitting to be turned off?",
+    "family": "K",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "__delta_internal_row_index (manual counting in iteratorWithAdditionalMetadataColumns) vs _metadata.row_index (Spark native, useMetadataRowIndex=true); manual count is only correct if the file is not split and no rows skipped by pushdown"
+  },
+  {
+    "id": 149,
+    "question": "Per file, DeltaParquetFileFormat selects a row-index filter \u2014 DropMarkedRowsFilter, KeepMarkedRowsFilter, or KeepAllRowsFilter. How does the chosen filter mark rows when the underlying Spark reader emits a columnar ColumnarBatch versus a ColumnarBatchRow/InternalRow inside iteratorWithAdditionalMetadataColumns?",
+    "family": "K",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaParquetFileFormat resolves rowIndexFilter (DropMarkedRowsFilter/KeepMarkedRowsFilter/KeepAllRowsFilter) and applies it across ColumnarBatch vs ColumnarBatchRow/InternalRow forms produced by Spark's VectorizedParquetRecordReader"
+  },
+  {
+    "id": 150,
+    "question": "PreprocessTableWithDVsStrategy only matches a ScanOperation over a LogicalRelationWithTable(HadoopFsRelation) and hands off to Spark's FileSourceStrategy. What breaks if a DV-enabled Delta table is planned as a DataSourceV2 relation instead, and why is the silent case _ => Nil fallthrough a correctness hazard rather than just a missed optimization?",
+    "family": "K",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "PreprocessTableWithDVsStrategy matches ScanOperation over LogicalRelationWithTable(HadoopFsRelation) -> Spark FileSourceStrategy; V2 relation hits case _ => Nil, Spark plans it without DV filtering -> deleted rows leak"
+  },
+  {
+    "id": 151,
+    "question": "DeltaParquetFileFormat inherits Spark's supportBatch to decide between vectorized ColumnarBatch output and row output. How does injecting the extra __delta_internal_is_row_deleted (and possibly __delta_internal_row_index) metadata column influence whether Spark keeps the columnar fast path, and what does that imply for SupportsColumnarReads?",
+    "family": "K",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Spark ParquetFileFormat.supportBatch / SupportsColumnarReads gate ColumnarBatch output; DeltaParquetFileFormat's added synthetic columns affect the batch-vs-row decision and whether Spark returns ColumnarBatch"
+  },
+  {
+    "id": 152,
+    "question": "With column mapping active, DeltaParquetFileFormat rewrites both the read schema and the pushdown filters to physical names before handing them to Spark. Why must prepareFiltersForRead/translateFilterForColumnMapping run before Spark's ParquetFilters converts predicates to parquet-mr FilterPredicate, rather than after?",
+    "family": "K",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaParquetFileFormat.prepareSchemaForRead + prepareFiltersForRead/translateFilterForColumnMapping rewrite logical->physical names for NameMapping/IdMapping before Spark ParquetFilters builds the parquet FilterPredicate against physical columns"
+  },
+  {
+    "id": 153,
+    "question": "DeltaParquetFileFormat overrides supportFieldName to relax Parquet's naming restrictions when column mapping is on. How does that override interact with Spark's ParquetFileFormat field-name validation, and why does IdMapping additionally depend on Spark's PARQUET_FIELD_ID_READ_ENABLED?",
+    "family": "K",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaParquetFileFormat.supportFieldName relaxes Spark's Parquet name checks because physical names are always safe; IdMapping requires Spark PARQUET_FIELD_ID_READ_ENABLED/WRITE_ENABLED for field-ID resolution"
+  },
+  {
+    "id": 154,
+    "question": "DeltaParquetFileFormat.equals ignores tablePath and isCDCRead and its hashCode is a class-name constant. Given Spark's ParquetFileFormat already treats all instances as equal, how can this broken equals contract mislead Spark's plan-node replacement or scan caching into reusing a reader configured for a different table or CDC mode?",
+    "family": "K",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaParquetFileFormat.equals compares only columnMappingMode/referenceSchema/nullableRowTrackingConstantFields/optimizationsEnabled (ignores tablePath/isCDCRead), constant hashCode; Spark relies on FileFormat equals for plan-node identity/replacement"
+  },
+  {
+    "id": 155,
+    "question": "Row tracking needs a constant like RowId.BASE_ROW_ID attached to every row of a file. How does DeltaParquetFileFormat feed such per-file constants through Spark's PartitionedFile.otherConstantMetadataColumnValues so that FileScanRDD injects them into each row, and what null-vs-None gotcha does its extractor introduce?",
+    "family": "K",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaParquetFileFormat.fileConstantMetadataExtractors supply RowId.BASE_ROW_ID/DefaultRowCommitVersion via Spark PartitionedFile.otherConstantMetadataColumnValues injected by FileScanRDD; extractors return raw null (not Option) when nullableRowTrackingConstantFields"
+  },
+  {
+    "id": 156,
+    "question": "Deletion vectors are produced at DELETE/UPDATE time and consumed at read time. How does the RoaringBitmap DV that DMLWithDeletionVectorsHelper/DeletionVectorBitmapGenerator write get aligned, on read, with the per-row ordinal that Spark's Parquet reader provides, so DeltaParquetFileFormat's rowIndexFilter tests the correct bit for each row?",
+    "family": "K",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "write side DMLWithDeletionVectorsHelper/DeletionVectorBitmapGenerator produce RoaringBitmap DV keyed by in-file row index; read side DeltaParquetFileFormat builds rowIndexFilter from DeletionVectorDescriptor and indexes it using Spark's row index (_metadata.row_index/__delta_internal_row_index)"
+  },
+  {
+    "id": 157,
+    "question": "To flag a row as deleted on the vectorized path, DeltaParquetFileFormat must place values into a column of a Spark ColumnarBatch. Which Spark ColumnVector/WritableColumnVector type holds the injected __delta_internal_is_row_deleted values, and how is that vector attached to the batch produced by VectorizedParquetRecordReader?",
+    "family": "K",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaParquetFileFormat writes the synthetic __delta_internal_is_row_deleted column into a Spark WritableColumnVector (OnHeap/OffHeapColumnVector) and appends it to the ColumnarBatch emitted by VectorizedParquetRecordReader"
+  },
+  {
+    "id": 158,
+    "question": "Spark's VectorizedParquetRecordReader corrupts state if row-based and batch-based APIs are interleaved (enableReturningBatches vs getCurrentValue). Given DeltaParquetFileFormat's iterator handles ColumnarBatch, ColumnarBatchRow, and InternalRow, what determines which form Spark's reader emits, and why must the DV wrapper commit to one mode per file?",
+    "family": "K",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "VectorizedParquetRecordReader mode interlock (enableReturningBatches/resultBatch vs getCurrentValue); DeltaParquetFileFormat's iteratorWithAdditionalMetadataColumns must consistently consume ColumnarBatch vs ColumnarBatchRow/InternalRow chosen by supportBatch"
+  },
+  {
+    "id": 159,
+    "question": "Spark's buildReaderWithPartitionValues appends partition-column values and pads missing columns onto each output row. How does Delta's added __delta_internal_is_row_deleted synthetic column coexist with Spark's partition-value appending and requested-schema ordering without colliding with real or partition columns?",
+    "family": "K",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Spark VectorizedParquetRecordReader/ParquetFileFormat handle missing columns + partition value appending in buildReaderWithPartitionValues; DeltaParquetFileFormat inserts __delta_internal_is_row_deleted via ColumnMetadata(index, structField) so it slots alongside data/partition columns"
+  },
+  {
+    "id": 160,
+    "question": "DeltaParquetFileFormat prefers useMetadataRowIndex=true to reuse Spark's _metadata.row_index. Which specific Spark reader capability populates _metadata.row_index, and why does relying on it let Delta re-enable the predicate pushdown and file splitting that the manual __delta_internal_row_index counting path had to disable?",
+    "family": "K",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Spark's native Parquet reader populates the _metadata.row_index file-source metadata column efficiently; useMetadataRowIndex=true lets DeltaParquetFileFormat keep pushdown/splitting on, unlike the split-and-pushdown-disabling manual __delta_internal_row_index path"
+  },
+  {
+    "id": 161,
+    "question": "When a Delta write touches an s3a:// path, how does DelegatingLogStore resolve which concrete LogStore to use from the Spark configuration key spark.delta.logStore.<scheme>.impl, and why does caching the result in schemeToLogStoreMap mean a later SparkConf change to that key is silently ignored for the lifetime of the DeltaLog?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DelegatingLogStore.schemeToLogStoreMap + LogStoreProvider.logStoreSchemeConfKey; invalidateCache never clears the map, so a spark.delta.logStore.<scheme>.impl change is ignored after first resolution"
+  },
+  {
+    "id": 162,
+    "question": "Why does HadoopFileSystemLogStore.getHadoopConfiguration prefer SparkSession.getActiveSession.map(_.sessionState.newHadoopConf()) over the Configuration captured at construction time, and what per-session Spark behavior (e.g. reader/writer credential options) would break if it froze the constructor config instead?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "HadoopFileSystemLogStore.getHadoopConfiguration reaches into the active SparkSession's sessionState.newHadoopConf() so per-call/per-session Hadoop options are honored"
+  },
+  {
+    "id": 163,
+    "question": "Trace how HDFSLogStore achieves an atomic Delta commit using Hadoop's FileContext.rename with Options.Rename.NONE rather than the FileSystem API, and why that specific rename mode is the linchpin of Delta's write-once (overwrite=false) commit against _delta_log.",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "HDFSLogStore uses FileContext (not FileSystem) because FileContext.rename with Options.Rename.NONE fails atomically if the destination exists, backing Delta's mutual-exclusion commit"
+  },
+  {
+    "id": 164,
+    "question": "HDFSLogStore writes commit files through FileContext but reads them back through FileSystem; on an HDFS Observer NameNode setup, what consistency gap does this split open and how does the msync call close it before a log read?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "HDFSLogStore writes via FileContext, reads via FileSystem; on Observer NameNode the two clients can diverge, so msync forces the reading FileSystem client to sync NameNode state"
+  },
+  {
+    "id": 165,
+    "question": "Which Hadoop-level side effect (HADOOP-16255) forces HDFSLogStore to call tryRemoveCrcFile after its write-then-rename, and what stale artifact would otherwise be left next to a committed _delta_log JSON file?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "HDFSLogStore.tryRemoveCrcFile deletes the leftover .crc checksum sidecar that HADOOP-16255 misassociates with the temp name after rename"
+  },
+  {
+    "id": 166,
+    "question": "Why does S3SingleDriverLogStore emulate mutual exclusion with a JVM-local static PathLock instead of relying on the filesystem, and how does that make its safety guarantee strictly weaker than HDFSLogStore's FileContext.rename-based one when two separate Spark drivers write the same table?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "S3SingleDriverLogStore uses a static per-JVM PathLock because S3 lacks put-if-absent; it only serializes writers inside one JVM, unlike HDFSLogStore's cross-process atomic rename"
+  },
+  {
+    "id": 167,
+    "question": "How does S3LogStoreUtil bypass Hadoop's public FileSystem.listStatus to reach S3AFileSystem internals (Listing, S3ListRequest) and push S3's startAfter down into ListObjectsV2, and why is this utility deliberately isolated as its own compilation unit relative to the hadoop-aws dependency?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "S3LogStoreUtil reaches S3AFileSystem internals to use ListObjectsV2 startAfter for incremental log listing, kept as a separate unit so core code needn't pull hadoop-aws transitively"
+  },
+  {
+    "id": 168,
+    "question": "Why does the internal org.apache.spark.sql.delta.storage.LogStore trait carry two generations of each method (legacy read(path) versus read(path, hadoopConf)), and what silently happens when a subclass overrides only the legacy signature but a caller passes per-call Hadoop options from a DataFrame writer?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "LogStore dual API: new hadoopConf-threaded methods default-delegate to legacy ones, so a legacy-only subclass silently falls back to construction-time config and ignores per-call options"
+  },
+  {
+    "id": 169,
+    "question": "What role do LogStoreAdaptor and LogStoreInverseAdaptor play in bridging Delta's internal Scala LogStore trait and the public Java io.delta.storage.LogStore API, and why are both directions of adaptor needed when Delta resolves a user-configured custom LogStore class?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "LogStoreAdaptor/LogStoreInverseAdaptor bridge the two parallel API generations (internal Scala trait vs public Java io.delta.storage.LogStore) so either style of implementation can be plugged in"
+  },
+  {
+    "id": 170,
+    "question": "Walk through the prepare/commit/acknowledge protocol in BaseExternalLogStore: how does staging T(N), writing an incomplete ExternalCommitEntry with an exclusive (overwrite=false) conditional put, and later copying into N.json reconstruct the atomic put-if-absent semantics that S3 alone doesn't offer?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "BaseExternalLogStore two-phase protocol: temp T(N) + exclusive external entry E(N, complete=false) then copy to N.json; the external strongly-consistent store supplies mutual exclusion S3 lacks"
+  },
+  {
+    "id": 171,
+    "question": "How does S3DynamoDBLogStore use a DynamoDB conditional putItem keyed by (tablePath, fileName) to serialize the same log version that S3's flat overwrite semantics would let two writers clobber, and what does the entry's complete flag track across a writer crash?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "S3DynamoDBLogStore extends BaseExternalLogStore; conditional putItem on (tablePath,fileName) claims a version slot, and ExternalCommitEntry.complete tracks whether the copy into N.json finished"
+  },
+  {
+    "id": 172,
+    "question": "Spark's SparkPath guarantees one URL-encoded canonical string; when Delta records a file's relative path from DelayedCommitProtocol.newTaskTempFile into an AddFile, why does mixing Hadoop Path.toString and URL-encoded forms risk corruption, and which SparkPath factory distinction (fromPathString versus fromUrlString) captures that hazard?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "SparkPath stores a URL-encoded canonical form; fromPathString (raw Hadoop) vs fromUrlString (percent-encoded) both take String, so feeding one into the other corrupts paths written by DelayedCommitProtocol into AddFile"
+  },
+  {
+    "id": 173,
+    "question": "When DelegatingLogStore.read/write is passed a per-call hadoopConf, why is that argument only forwarded to the already-resolved delegate and never used to pick which scheme delegate to use, and what surprising behavior does that produce when a later confB overrides delta.logStore.s3a.impl?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DelegatingLogStore resolves the delegate solely from constructor-time hadoopConf via schemeBasedLogStore; the per-call hadoopConf is forwarded but ignored for selection, so a confB override of delta.logStore.s3a.impl has no effect"
+  },
+  {
+    "id": 174,
+    "question": "Explain the writeWithRename pattern in HadoopFileSystemLogStore and how isPartialWriteVisible lets Delta decide whether a given filesystem can expose a half-written commit file, distinguishing HDFS from stores that must write in place.",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "HadoopFileSystemLogStore.writeWithRename (temp file then atomic Hadoop rename); isPartialWriteVisible reports whether partial writes are observable, driving the choice of commit strategy per backend"
+  },
+  {
+    "id": 175,
+    "question": "Why do LogStore.readAsIterator / listFrom return a ClosableIterator[String] rather than a materialized Seq, and how does Delta's log-replay path depend on that laziness \u2014 and on closing the underlying Hadoop file handle \u2014 when reading long _delta_log histories?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "LogStore returns ClosableIterator so _delta_log lines stream on demand and the Hadoop file handle closes explicitly, avoiding materializing large commit histories in memory during replay"
+  },
+  {
+    "id": 176,
+    "question": "How does LogStoreProvider decide between a global default LogStore class and a per-scheme override, and what precedence does logStoreSchemeConfKey (spark.delta.logStore.<scheme>.impl) take over the class-level default when both are set in the Spark configuration?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "LogStoreProvider factory: per-scheme logStoreSchemeConfKey (spark.delta.logStore.<scheme>.impl) overrides the global default LogStore class when instantiating for a given path scheme"
+  },
+  {
+    "id": 177,
+    "question": "What does LogStore.resolvePathOnPhysicalStorage compute, and why must Delta resolve a _delta_log path to its physical form via the underlying Hadoop FileSystem before using it as a commit target on stores where logical and physical paths diverge?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "LogStore.resolvePathOnPhysicalStorage maps a logical path to its physical storage form (symlinks/normalization) so commit and listing operate on the canonical Hadoop FileSystem path"
+  },
+  {
+    "id": 178,
+    "question": "Why does S3SingleDriverLogStore normalize an S3 path (stripping scheme, host, and embedded user-info) before using it as a PathLock key, and what correctness bug appears if two textual spellings of the same s3:// location took different locks?",
+    "family": "L",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "S3SingleDriverLogStore normalizes paths before locking so aliases like s3:// vs s3a:// or user-info-embedded URIs map to one PathLock key; otherwise two spellings serialize on different locks and both writers could commit"
+  },
+  {
+    "id": 179,
+    "question": "How does DelayedCommitProtocol override Spark's FileCommitProtocol lifecycle (setupJob, newTaskTempFile, commitTask, commitJob) so it records AddFile metadata instead of doing Hadoop's rename-into-place, and why must it make setupJob a no-op that bypasses Spark's usual _temporary staging directory?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DelayedCommitProtocol subclasses FileCommitProtocol but its hooks only bookkeep FileActions; setupJob is a no-op with no OutputCommitter/_temporary staging because the Delta transaction log, not Hadoop, performs the commit"
+  },
+  {
+    "id": 180,
+    "question": "When DelayedCommitProtocol.newTaskTempFile is called by a Spark write task, how does it rewrite the dir argument for the synthetic __is_cdc=true partition into Delta's physical _change_data (CDC_LOCATION) folder and switch getFileName's prefix from part- to cdc-, and how does that differ from Spark's stock committer which would treat __is_cdc as a real partition column?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DelayedCommitProtocol.newTaskTempFile strips __is_cdc=true and redirects to CDC_LOCATION (_change_data) with a cdc- filename prefix; Spark's stock FileCommitProtocol would materialize __is_cdc=... as an ordinary partition directory"
+  },
+  {
+    "id": 181,
+    "question": "Why does DelayedCommitProtocol.newTaskTempFileAbsPath throw DeltaErrors.unsupportedAbsPathAddFile where Spark's HadoopMapReduceCommitProtocol would happily stage a file at an arbitrary absolute path, and what Delta table invariant does that restriction protect?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DelayedCommitProtocol.newTaskTempFileAbsPath throws unsupportedAbsPathAddFile; Delta forbids files outside the table directory to keep AddFile paths table-relative, unlike Spark's absolute-path-capable committer"
+  },
+  {
+    "id": 182,
+    "question": "Trace how DelayedCommitProtocol.commitTask turns the executor-side addedFiles buffer into a TaskCommitMessage: how does it look up each file's FileStatus on the Hadoop FileSystem, and how does buildActionFromAddedFile decide between emitting an AddFile and an AddCDCFile based on CDC_PARTITION_COL?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "commitTask resolves each recorded (partitionValues, relativePath) to a Hadoop FileStatus (size/mtime) then buildActionFromAddedFile emits AddCDCFile when CDC_PARTITION_COL==true else AddFile, wrapped in a TaskCommitMessage"
+  },
+  {
+    "id": 183,
+    "question": "Why are DelayedCommitProtocol.addedFiles (executor-side) and addedStatuses/changeFiles (driver-side) all @transient, and how does Spark's driver/executor serialization of the FileCommitProtocol cause an NPE if commitJob or newTaskTempFile runs without setupTask re-initializing the buffer?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "@transient buffers aren't serialized across the driver/executor boundary; setupTask re-creates addedFiles on the executor, so calling newTaskTempFile/commitTask without setupTask (or touching a @transient val post-deserialization) NPEs"
+  },
+  {
+    "id": 184,
+    "question": "How does TransactionalWrite get per-file min/max/null-count statistics computed as a side effect of the write by wrapping getStatsColExpr in a DeltaJobStatisticsTracker and injecting it as one of Spark's WriteJobStatsTrackers into FileFormatWriter, and why does this avoid a second pass over the data compared with reading Spark's own BasicWriteJobStatsTracker output?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "TransactionalWrite builds a Catalyst stats expr (getStatsColExpr), wraps it in DeltaJobStatisticsTracker, and registers it as a WriteJobStatsTracker on FileFormatWriter so stats are collected inline, unlike Spark's row-count/size BasicWriteJobStatsTracker"
+  },
+  {
+    "id": 185,
+    "question": "Why does TransactionalWrite compute two stats schemas \u2014 outputStatsCollectionSchema (from the DataFrame's actual output) and tableStatsCollectionSchema (from the table's logical schema) \u2014 and what does the second let Delta record for columns present in the table but absent from a given write's Spark output?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "outputStatsCollectionSchema vs tableStatsCollectionSchema: the table-schema variant lets Delta record NULL_COUNT for columns in the logical schema that the write's Spark output omits"
+  },
+  {
+    "id": 186,
+    "question": "Why does TransactionalWrite.convertEmptyToNullIfNeeded run before DeltaInvariantCheckerExec and ahead of FileFormatWriter's own empty-to-null conversion for partition columns, and what NOT NULL constraint outcome would diverge if Delta relied on Spark's later conversion instead?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "convertEmptyToNullIfNeeded coerces empty strings in string partition columns to null before DeltaInvariantCheckerExec so NOT NULL checks reject them consistently, rather than after FileFormatWriter's own later conversion"
+  },
+  {
+    "id": 187,
+    "question": "DeltaFileFormatWriter is a vendored fork of Spark's FileFormatWriter; which single capability (DeltaOptions.WRITE_PARTITION_COLUMNS \u2014 writing partition values into the data files) motivated the fork rather than configuring stock Spark, and how does it still defer to Spark's WriteFiles operator path detected via V1WritesUtils.getWriteFilesOpt?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "DeltaFileFormatWriter forks Spark 3.5 FileFormatWriter only to support DeltaOptions.WRITE_PARTITION_COLUMNS; it still branches to the WriteFiles operator path when V1WritesUtils.getWriteFilesOpt finds a planned-write node, else legacy plan.execute"
+  },
+  {
+    "id": 188,
+    "question": "How does the WriteJobDescription bundle built by DeltaFileFormatWriter carry the OutputWriterFactory, partition/data column split, and the list of WriteJobStatsTrackers to every executor, and where in Spark's FileFormatWriter lifecycle is Delta's DelayedCommitProtocol invoked as the opaque FileCommitProtocol?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "WriteJobDescription (serializable, broadcast) holds OutputWriterFactory, partition vs data columns, and WriteJobStatsTrackers; DelayedCommitProtocol is driven opaquely through setupJob/setupTask/newTaskTempFile/commitTask/commitJob in the write job"
+  },
+  {
+    "id": 189,
+    "question": "In ConflictChecker.checkConflicts, why is the fixed pipeline ordered so checkProtocolCompatibility, checkNoMetadataUpdates, and checkForUpdatedApplicationTransactionIdsThatCurrentTxnDependsOn all run before the expensive checkForAddedFilesThatShouldHaveBeenReadByCurrentTxn, and what does each early check let Delta abort on cheaply?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "checkConflicts orders cheap serial checks (protocol, metadata, SetTransaction app-id dependency) before the costly file-level read/add checks so conflicts abort early without scanning file lists"
+  },
+  {
+    "id": 190,
+    "question": "When the losing transaction recorded readPredicates/readFiles, how does ConflictChecker.checkForAddedFilesThatShouldHaveBeenReadByCurrentTxn use the isolation level (SnapshotIsolation vs WriteSerializable vs Serializable) and the winning commit's blindAppendAddedFiles vs changedDataAddedFiles split to decide whether a concurrently-added file is a real conflict?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "Isolation level gates the added-files check: SnapshotIsolation skips it, WriteSerializable ignores winning blind appends unless the current txn changed metadata, Serializable checks both blindAppendAddedFiles and changedDataAddedFiles against readPredicates"
+  },
+  {
+    "id": 191,
+    "question": "Why does ConflictCheckerPredicateElimination rewrite any non-deterministic or subquery Catalyst Expression in a read predicate to TRUE (producing PredicateElimination.eliminatedPredicates) before replaying it for file-skipping during conflict detection, and why must the rewrite only ever widen \u2014 matching more files, never fewer?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "ConflictCheckerPredicateElimination widens non-deterministic/subquery Catalyst expressions to TRUE so replayed file-skipping is conservatively over-inclusive; narrowing could miss files and hide a real conflict"
+  },
+  {
+    "id": 192,
+    "question": "Where do the readPredicates in CurrentTransactionInfo originate in the Spark scan/read plan, and how does ConflictChecker replay them against the winning commit's AddFiles (using data-skipping stats) to determine whether the losing transaction should have read those files?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "CurrentTransactionInfo.readPredicates come from the Catalyst filters of the txn's scan; ConflictChecker replays them (after predicate elimination) against winning AddFile stats to test whether those files fall inside the read set"
+  },
+  {
+    "id": 193,
+    "question": "Contrast checkForDeletedFilesAgainstCurrentTxnReadFiles and checkForDeletedFilesAgainstCurrentTxnDeletedFiles in ConflictChecker: which concurrent scenario does each guard against \u2014 a winning RemoveFile deleting a file the current txn read versus one it also tried to delete \u2014 and why does each abort the retry rather than silently rebasing the losing transaction?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "checkForDeletedFilesAgainstCurrentTxnReadFiles catches a winning RemoveFile on a file the losing txn read (concurrent-delete-read); checkForDeletedFilesAgainstCurrentTxnDeletedFiles catches a double-delete; both are unrebasable and abort"
+  },
+  {
+    "id": 194,
+    "question": "Why does ConflictChecker special-case a winning commit that is only an IDENTITY high-water-mark bump (identityOnlyMetadataUpdate) or a RowTrackingBackfill, and how does checkNoMetadataUpdates avoid throwing metadataChangedException for these when the current txn isn't itself changing metadata?",
+    "family": "B",
+    "repo_a": "delta",
+    "repo_b": "spark",
+    "hinges_on": "WinningCommitSummary.identityOnlyMetadataUpdate and isRowTrackingBackfillTxn let checkNoMetadataUpdates skip the metadataChangedException for these common system commits provided the current txn changes no metadata"
+  },
+  {
+    "id": 195,
+    "question": "Conceptually, when a SubmitTask.new_cluster.spark_version carries a Databricks Runtime key like 13.3.x-scala2.12 (parsed by the SDK's SemVer and filtered by ClustersExt.select_spark_version), how does that string determine which Apache Spark version and Scala ABI the submitted task's driver actually runs, given the SDK itself makes no call into Spark?",
+    "family": "M",
+    "repo_a": "databricks-sdk-py",
+    "repo_b": "spark",
+    "hinges_on": "ClustersExt.select_spark_version/SemVer parse DBR keys (e.g. -scala2.12 suffix); the SDK only serializes the version string into the REST payload, and the runtime maps it to a Spark build/Scala ABI \u2014 no code coupling"
+  },
+  {
+    "id": 196,
+    "question": "How does a spark_conf entry set on SubmitTask.new_cluster conceptually reach the SparkConf that Delta's LogStoreProvider later reads to pick a per-scheme LogStore (e.g. spark.delta.logStore.s3a.impl), even though the databricks-sdk-py client only serializes the key/value into a REST payload and never invokes Delta?",
+    "family": "M",
+    "repo_a": "databricks-sdk-py",
+    "repo_b": "delta",
+    "hinges_on": "new_cluster.spark_conf is serialized by the SDK into the cluster spec; the runtime applies it as SparkConf which LogStoreProvider.logStoreSchemeConfKey reads to select a LogStore \u2014 a conceptual config bridge, not a code call"
+  },
+  {
+    "id": 197,
+    "question": "When a job task specifies existing_cluster_id versus a job-scoped new_cluster, how does that SDK choice conceptually map to whether the submitted work shares an already-running Spark driver/SparkContext (and its warm caches) or gets an isolated one, and why does the SDK treat this purely as a configuration field?",
+    "family": "M",
+    "repo_a": "databricks-sdk-py",
+    "repo_b": "spark",
+    "hinges_on": "existing_cluster_id vs new_cluster in Task/SubmitTask conceptually decides shared vs fresh SparkContext; the SDK only records the field and never touches Spark's scheduler"
+  },
+  {
+    "id": 198,
+    "question": "The SDK's select_spark_version can filter runtime keys by a -photon- marker; conceptually, what does choosing a Photon-enabled runtime change about how the cluster executes a Spark physical plan at runtime, and why is that entirely invisible to the databricks-sdk-py layer that merely selects the version string?",
+    "family": "M",
+    "repo_a": "databricks-sdk-py",
+    "repo_b": "spark",
+    "hinges_on": "select_spark_version filters the -photon- key suffix; a Photon runtime conceptually replaces parts of Spark's execution/codegen at runtime, but the SDK only chooses the version key with no knowledge of Spark internals"
+  },
+  {
+    "id": 199,
+    "question": "How does JobsExt.run_now returning a Wait[Run] whose .result() polls wait_get_run_job_terminated_or_skipped conceptually correspond to observing a remote Spark job's driver reaching a terminal state, and why is there no in-process coupling between this waiter and the Spark scheduler that actually drives the run?",
+    "family": "M",
+    "repo_a": "databricks-sdk-py",
+    "repo_b": "spark",
+    "hinges_on": "JobsExt.run_now yields Wait[Run]; .result() polls get_run via wait_get_run_job_terminated_or_skipped until TERMINATED/SKIPPED \u2014 a REST-observed mirror of the remote Spark job, with no direct link to Spark's DAGScheduler"
+  },
+  {
+    "id": 200,
+    "question": "When ClustersExt.select_spark_version(long_term_support=True) picks the latest LTS Databricks Runtime, how does that choice conceptually determine whether Spark 4.0-only behavior present in this corpus's spark/ tree is available to a submitted task, given the SDK selects a version key without knowing anything about Spark's internals?",
+    "family": "M",
+    "repo_a": "databricks-sdk-py",
+    "repo_b": "spark",
+    "hinges_on": "select_spark_version(long_term_support=True) filters the LTS runtime keys via SemVer ordering; the picked DBR conceptually pins the bundled Spark version (thus which Spark 4.0 features exist), yet the SDK only compares version strings"
+  }
+]

@@ -126,6 +126,22 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     theme_parser.add_argument('--batch', action='store_true',
         help='Submit summaries via the provider Batch API (~half price)')
 
+    embed_parser = spools_sub.add_parser(
+        'embed',
+        help="Fill in an installed spool's missing embeddings (pack + store)",
+    )
+    embed_parser.add_argument('spool', help='Spool/environment name')
+    embed_parser.add_argument('--yes', '-y', action='store_true',
+        help='Skip the cost confirmation')
+    embed_parser.add_argument('--dry-run', action='store_true',
+        help='Report the gap and estimated cost; embed nothing')
+    embed_parser.add_argument('--batch', action='store_true',
+        help='Embed via the OpenAI Batch API (about half price, up to 24h)')
+    embed_parser.add_argument('--resume', nargs='?', const=True, metavar='BATCH_ID',
+        help='Collect an already-submitted batch instead of sending a new one '
+             '(defaults to the batch recorded at submit). Use after an '
+             'interrupted run — the job is already paid for.')
+
     reconcile_parser = spools_sub.add_parser(
         'reconcile',
         help='Refresh cross-source themes for enabled spools (after base '
@@ -133,6 +149,82 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     reconcile_parser.add_argument('--spool', default=None,
         help='Reconcile only this spool (default: all enabled)')
+
+
+def _embed(args: argparse.Namespace) -> int:
+    """Top up an installed spool's embeddings (`spools embed`).
+
+    Separate from `rebuild --source`: that fixes the live store only, leaving
+    the pack it was installed from stale, so the install stops matching its
+    manifest and a reinstall reverts the work.
+    """
+    import asyncio
+
+    from cli.core import get_library
+    from spool_embed import embed_spool, gap_in_pack, pack_paths
+
+    config = get_config()
+    cache_dir = _cache_dir(args, config)
+    pack_db, _ = pack_paths(cache_dir, args.spool)
+    if not pack_db.exists():
+        print(f'No installed spool named {args.spool!r} (looked in {pack_db.parent})')
+        return 1
+
+    if getattr(args, 'resume', None):
+        import asyncio as _a
+        from spool_embed import load_batch_state, resume_embed
+        bid = None if args.resume is True else args.resume
+        st = load_batch_state(cache_dir, args.spool) or {}
+        print(f'resuming batch {bid or st.get("batch_id")} for {args.spool} '
+              f'({len(st.get("groups") or [])} group(s) recorded)')
+        library = get_library(getattr(args, 'db', None))
+        try:
+            out = _a.run(resume_embed(args.spool, library=library,
+                                      cache_dir=cache_dir, batch_id=bid))
+        finally:
+            library.close()
+        print(f"wrote {out.get('written_pack', 0):,} vector(s) into the pack, "
+              f"{out.get('written_store', 0):,} into the store; "
+              f"{out.get('skipped', 0):,} skipped")
+        if out.get('version'):
+            print(f"manifest re-stamped: version {out['version']}")
+        return 0
+
+    gap = gap_in_pack(pack_db)
+    # title+content, matching what is actually embedded (doc_embedding_text)
+    tokens = sum(len(t or '') + len(c or '') for _, t, c in gap) / 4
+    rate = 0.065 if getattr(args, 'batch', False) else 0.13
+    cost = tokens / 1_000_000 * rate
+    print(f'{args.spool}: {len(gap):,} document(s) missing an embedding '
+          f'(~{tokens/1e6:.1f}M tokens, ~${cost:.2f})')
+    if not gap:
+        return 0
+    if args.dry_run:
+        print('dry run — nothing embedded')
+        return 0
+    if not args.yes:
+        if not input(f'Proceed embedding {len(gap):,} docs (~${cost:.2f})? [y/N] '
+                     ).strip().lower().startswith('y'):
+            print('Aborted — nothing embedded.')
+            return 0
+
+    library = get_library(getattr(args, 'db', None))
+    try:
+        def on_progress(done, total):
+            print(f'  embedded {done}/{total}', flush=True)
+        out = asyncio.run(embed_spool(
+            args.spool, library=library, cache_dir=cache_dir,
+            use_batch=getattr(args, 'batch', False), on_progress=on_progress,
+            on_submit=lambda bid: print(
+                f'  submitted embeddings batch {bid} — polling until done '
+                f'(Ctrl-C leaves it running server-side)', flush=True)))
+    finally:
+        library.close()
+    print(f"wrote {out['written_pack']:,} vector(s) into the pack and "
+          f"{out['written_store']:,} into the store")
+    print(f"manifest re-stamped: version {out['version']}, "
+          f"checksum {str(out['checksum'])[:24]}…")
+    return 0
 
 
 def _theme(args: argparse.Namespace) -> int:
@@ -178,6 +270,7 @@ def cmd_spools(args: argparse.Namespace) -> int:
         'disable': _disable,
         'reconcile': _reconcile,
         'theme': _theme,
+        'embed': _embed,
     }
     return actions.get(getattr(args, 'spools_action', None), _status)(args)
 
@@ -216,6 +309,20 @@ def _status(args: argparse.Namespace) -> int:
                 f'(v{manifest.extraction_coverage_version}, current '
                 f'v{EXTRACTION_COVERAGE_VERSION}) — rebuild the pack '
                 f'(`ariadne spools create`) to refresh its SCIP intelligence.'
+            )
+        # Advisory (not a gap — the spool IS registered and serving, so this
+        # doesn't affect the exit code): with no declared scope it serves every
+        # configured source, including projects that never run this environment.
+        # Filing it as a gap would exit 1 on upgrade AND make `spools enable`
+        # refuse to reconcile — blocking the command that fixes it.
+        if not getattr(registration, 'projects', ()):
+            _scoped = sorted(config.sources)
+            print(
+                f'              ⚠ [scope-undeclared] no project scope declared, so '
+                f'this spool serves ALL {len(_scoped)} configured source(s) '
+                f'({", ".join(_scoped)}) — projects that do not run this '
+                f'environment still rank against it. Declare the ones that do: '
+                f'`ariadne spools enable {name} --project <source>`'
             )
     for gap in resolution.gaps:
         print(f'  gap         {gap.spool}  [{gap.reason}] {gap.message}')

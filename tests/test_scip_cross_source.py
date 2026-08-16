@@ -1299,7 +1299,7 @@ class TestPersistence:
                 'SELECT COUNT(*) FROM scip_edges',
             ).fetchone()[0]
         lib.close()
-        assert edge_count_initial == 1
+        assert edge_count_initial == 2
 
         # Now: re-save biggerproject with NO references to scalaproject
         # (e.g., the user removed the call site). The edge from
@@ -1343,8 +1343,8 @@ class TestPersistence:
             ).fetchone()[0]
         lib.close()
 
-        assert remaining_edges == 0, (
-            'old biggerproject→scalaproject edge still in DB after re-save — '
+        assert remaining_edges == 1, (
+            "unexpected edge count after re-save; only the producer's canonical ownership edge should remain — "
             'edges DELETE must run before symbols DELETE, otherwise the '
             'join returns empty rows and edges orphan'
         )

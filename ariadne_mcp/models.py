@@ -256,6 +256,11 @@ class AskResponse(BaseModel):
     #: call_site, stop_reason. Additive — `sources` keeps doc titles, so every
     #: existing caller is unaffected.
     citations: list[dict] = Field(default_factory=list)
+    #: Every file the assembled chain put in front of synthesis — not only
+    #: what the answer went on to cite. This is what an evidence gate has to
+    #: check a citation against: scoring against the cited set alone would
+    #: make the gate self-satisfying.
+    chain_files: list[str] = Field(default_factory=list)
 
 
 class ExplainDocument(BaseModel):

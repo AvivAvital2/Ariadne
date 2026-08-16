@@ -15,6 +15,80 @@ from ariadne_mcp.models import (
 _logger = logging.getLogger(__name__)
 
 
+def _chain_prompt(question: str, spine: str, *, notes: tuple = ()) -> str:
+    """The prompt stage four sends when a chain exists: the chain is the whole evidence.
+
+    Extracted so it can be asserted. It was an inline f-string, executed by the suite and
+    checked by nothing — ``test_ask_enabled_synthesizes_via_messages`` captures the
+    messages and asserts only that a system and user role exist. Line coverage counted it;
+    no test ever read it.
+
+Carries no retrieved-document block. It used to append ``Documentation:\n{context}``
+    — eight search-retrieved documents concatenated, 15,754 tokens measured on a production
+    question — and instruct the model to "use the documentation only to explain WHY a step
+    exists". That is prose selected by embedding similarity and offered as background
+    authority, which is a different thing from what travels now: each hop carries the
+    ``catalog`` entry for the symbol the walk actually reached, fetched by deterministic id.
+
+    The prompt says which half is trustworthy, because they differ. A description is
+    generated and can be wrong; a ``file:line`` from the index cannot. Stage five checks the
+    coordinates, so the model is told to lean on them.
+    """
+    return (
+        'Answer the question using the CALL CHAIN below. The chain is the only evidence '
+        'you have. Each hop is a definition at the file and line shown, with a short '
+        'description of what it does, followed by the site the index recorded there. '
+        '"called at" is a call edge: that body invokes this definition. "referenced at" '
+        'is a type reference: that body names this symbol, which is not evidence that it '
+        'runs, so do not describe a reference as a call. The file and line come from a '
+        'compiler-derived index and are exact; the descriptions are generated and may be '
+        'imprecise, so lean on the structure and cite coordinates rather than repeating a '
+        'description as fact. Walk the chain in order. Cite file:line for every claim. If '
+        'the chain does not show something, say so rather than inferring it. Never name a '
+        'file:line that does not appear in the chain.\n\n'
+        f'Question: {question}\n\n'
+        f'Call chain:\n{spine}'
+        + (('\n\nWhere the chain forks too widely to show, and what the index knows '
+            'about each:\n'
+            + '\n'.join(f'- {note}' for note in notes)
+            + '\nSay so in your answer, and pass the question on.') if notes else '')
+    )
+
+
+#: Output tokens for the selection reply. It answers with numbers, so this is generous.
+MENU_MAX_TOKENS = 256
+
+
+def _menu_prompt(question: str, menu: str) -> str:
+    """The first call: here is what the chain reached, say which parts you need.
+
+    The chain is offered before it is spent. Measured at production width, sending the whole
+    bundle is 240,945 tokens and $1.20 a question, 68% of it coordinates for hops the answer
+    never mentions; the menu of the same chain is $0.19 and the second call carries only what
+    was asked for.
+
+    This is also the only point where the question reaches the retrieval path at all. The
+    walk expands from wherever search landed and has never seen what was asked.
+
+    **An end-to-end wording was tried here and reverted.** It appeared to lift recall from 7
+    of 10 required symbols to 9 of 10, and the two extra credits turned out to be substring
+    matches: ``DataSource`` matched ``DataSourceV2Relation``, and ``MergeIntoTable`` matched
+    117 protobuf builder lines rather than the Catalyst plan the question was about. Once
+    those are discounted the two wordings measure the same, so the sparing instruction stays
+    until a comparison with boundary-aware matching says otherwise. What is *not* in doubt is
+    that it changes behaviour: 25 picks against 85 on the same menus.
+    """
+    return (
+        'A compiler-derived index found the code below while tracing the call chain for a '
+        'question. Say which entries you need in order to answer it.\n\n'
+        'Reply with numbers only, comma-separated — plain numbers for definitions, S-prefixed '
+        'for sections (for example: 3, 7, 12, S2). Choose only what the question needs; '
+        'choose nothing if the answer does not require any of them.\n\n'
+        f'Question: {question}\n\n'
+        f'{menu}'
+    )
+
+
 class AnalysisMixin:
     """Issue analysis, Q&A synthesis, coverage, review, and task context.
 
@@ -243,14 +317,43 @@ class AnalysisMixin:
         sources = [doc.title for doc in top_docs]
         _evidence = None
         _citations: list = []
+        _chain_files: list = []
         try:
             from library.chain_answer import evidence_for
             _scip_source = source or getattr(self.config, 'default_source', None)
             if _scip_source:
                 import asyncio
+                _clew_symbols: list = []
+                try:
+                    if self.embedding_service is not None:
+                        import numpy as np
+
+                        from library.clews import nearest_clews
+                        with self.library._conn_provider.acquire() as _conn:
+                            _has_clews = _conn.execute(
+                                'SELECT 1 FROM clews WHERE source_name = ? '
+                                'AND embedding IS NOT NULL LIMIT 1', (_scip_source,)).fetchone()
+                        if _has_clews:
+                            _vector = await self.embedding_service.embed(question)
+                            with self.library._conn_provider.acquire() as _conn:
+                                _matched = nearest_clews(
+                                    _conn, np.asarray(_vector, dtype=np.float32),
+                                    source_name=_scip_source, top_k=3)
+                            _clew_symbols = [name for clew in _matched for name in clew.route]
+                            if _clew_symbols:
+                                _logger.info('clews matched: %d route(s), %d symbols',
+                                             len(_matched), len(_clew_symbols))
+                except Exception as _clew_error:  # noqa: BLE001 -- positioning is optional
+                    _logger.info('clew lookup skipped: %s', _clew_error)
                 _evidence = await asyncio.to_thread(
-                    evidence_for, self.library, top_docs, source=_scip_source)
+                    evidence_for, self.library, top_docs, source=_scip_source,
+                    clew_symbols=_clew_symbols)
                 _citations = _evidence.citations()
+                # Every file the chain reached, not only what the answer cited: an
+                # evidence gate compares a citation against where the arm actually
+                # looked, and the cited set alone would satisfy itself.
+                _chain_files = sorted({hop.file for hop in _evidence.bundle_citations
+                                       if hop.file})
         except Exception as _chain_error:  # noqa: BLE001
             _logger.warning('chain assembly failed, answering from documents only: %s',
                             _chain_error)
@@ -279,7 +382,7 @@ class AnalysisMixin:
                     sources=[cached.title],
                     confidence=confidence,
                     event_id=search_result.event_id,
-                citations=_citations)
+                citations=_citations, chain_files=_chain_files)
 
             # Cache miss — call adapter with the dev baseline as
             # context. The dev docs are already in ``context`` above.
@@ -301,7 +404,7 @@ class AnalysisMixin:
                     sources=sources,
                     confidence=confidence,
                     event_id=search_result.event_id,
-                citations=_citations)
+                citations=_citations, chain_files=_chain_files)
 
             # Persist the adapted response so next identical question
             # is a cache hit.
@@ -325,7 +428,7 @@ class AnalysisMixin:
                 sources=sources,
                 confidence=confidence,
                 event_id=search_result.event_id,
-            citations=_citations)
+            citations=_citations, chain_files=_chain_files)
 
         if not self.config.ask_synthesis:
             return AskResponse(
@@ -333,7 +436,7 @@ class AnalysisMixin:
                 sources=sources,
                 confidence=confidence,
                 event_id=search_result.event_id,
-            citations=_citations)
+            citations=_citations, chain_files=_chain_files)
         from llm import has_provider_key
         if not has_provider_key():
             return AskResponse(
@@ -341,22 +444,47 @@ class AnalysisMixin:
                 sources=sources,
                 confidence=confidence,
                 event_id=search_result.event_id,
-            citations=_citations)
+            citations=_citations, chain_files=_chain_files)
         if _evidence is not None and _evidence.spine:
             # The chain is the spine and the prose is commentary -- the inversion the north
             # star asks for. Before this, `ask` concatenated eight documents and no answer
             # could name a line, so 2.5M compiler-precise edges never reached the model.
-            prompt = (
-                'Answer the question using the CALL CHAIN below as the spine of your '
-                'answer. The chain is real: each hop is a definition at the file and line '
-                'shown, followed by the call site that proves the edge. Walk it in order. '
-                'Cite file:line for every claim about control flow, and use the '
-                'documentation only to explain WHY a step exists. Never name a file:line '
-                'that does not appear in the chain.\n\n'
-                f'Question: {question}\n\n'
-                f'Call chain:\n{_evidence.spine}\n\n'
-                f'Documentation:\n{context}'
-            )
+            from library.chain_disclosure import describe_fan_out
+            from llm import chat_complete as _chat
+            notes = tuple(describe_fan_out(f) for f in _evidence.fan_outs)
+            spine = _evidence.spine
+            try:
+                # Offer the chain, then spend only what was asked for. A failure here costs
+                # the saving, never the answer: the whole chain travels as it did before.
+                from library.chain_menu import (
+                    fetch_selected,
+                    menu_for,
+                    render_selected,
+                    resolve_selection,
+                )
+                hops = list(_evidence.hops)
+                menu = menu_for(self.library, hops, source=_scip_source)
+                if menu.symbols or menu.sections:
+                    reply = await _chat(
+                        messages=[
+                            {'role': 'system', 'content': 'You select evidence. Reply with '
+                                                          'numbers only.'},
+                            {'role': 'user',
+                             'content': _menu_prompt(question, menu.text)},
+                        ],
+                        max_tokens=MENU_MAX_TOKENS)
+                    selection = resolve_selection(menu, reply)
+                    if selection.unknown:
+                        _logger.info('menu selection named %d unknown label(s): %s',
+                                     len(selection.unknown), selection.unknown)
+                    if selection.symbols or selection.sections:
+                        spine = render_selected(
+                            hops, selection,
+                            fetch_selected(self.library, selection, hops))
+            except Exception as _menu_error:  # noqa: BLE001
+                _logger.warning('menu selection failed, sending the whole chain: %s',
+                                _menu_error)
+            prompt = _chain_prompt(question, spine, notes=notes)
         else:
             prompt = (
                 f'Answer this question based ONLY on the documentation below. '
@@ -366,19 +494,28 @@ class AnalysisMixin:
             )
 
         try:
+            from library.chain_answer import ANSWER_MAX_TOKENS, expand_bare_lines
             from llm import chat_complete
             messages = [
                 {'role': 'system', 'content': 'You are a technical documentation assistant. Answer questions concisely using only the provided documentation. Cite document titles.'},
                 {'role': 'user', 'content': prompt},
             ]
-            answer = await chat_complete(messages=messages, max_tokens=1024)
+            answer = await chat_complete(messages=messages,
+                                         max_tokens=ANSWER_MAX_TOKENS)
+            # "(and again at :166)" is a claim about a line with its file left implicit.
+            # Expanding it here costs no prompt tokens and puts it in front of the same
+            # check as every other coordinate.
+            answer = expand_bare_lines(answer)
 
             return AskResponse(
                 answer=badge + answer,
                 sources=sources,
                 confidence=confidence,
                 event_id=search_result.event_id,
-            citations=_citations)
+                # what the answer rested on, not the whole chain: the shape is stated in the
+                # answer's own prose, and 973 coordinates in a payload is not navigation
+                citations=(_evidence.cited_by(answer) if _evidence is not None
+                           else _citations), chain_files=_chain_files)
         except Exception as e:
             _logger.warning('LLM synthesis failed: %s', e)
             return AskResponse(
@@ -386,7 +523,7 @@ class AnalysisMixin:
                 sources=sources,
                 confidence=confidence,
                 event_id=search_result.event_id,
-            citations=_citations)
+            citations=_citations, chain_files=_chain_files)
 
     # ------------------------------------------------------------------
     # Coverage

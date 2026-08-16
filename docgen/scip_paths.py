@@ -23,10 +23,11 @@ the first one is honest about a coverage gap.
 """
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from pathlib import Path
     from sqlite3 import Connection
 
 

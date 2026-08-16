@@ -20,6 +20,7 @@ import pytest
 from docgen.scip_graph import build_rows
 from docgen.scip_index import ScipDocument, ScipIndex, ScipOccurrence, ScipRelationship, ScipSymbolInfo
 from docgen.scip_store import load_rows, save_rows
+from docgen import scip_store
 from docgen.scip_wiring import wiring_report
 from library.scip import init_scip_schema
 
@@ -137,3 +138,225 @@ def test_a_store_built_this_way_passes_the_wiring_gate(conn):
     report = wiring_report(conn)
 
     assert report.ok, [(c.name, c.detail) for c in report.failures()]
+def _ownership_rows(source):
+    owner_type = f"semanticdb maven {source} . pkg/Owner#"
+    owner_term = f"semanticdb maven {source} . pkg/Owner."
+    member = f"semanticdb maven {source} . pkg/Owner#run()."
+    document = ScipDocument(f"{source}/Owner.scala", occurrences=(
+        _occ(owner_type, 1, definition=True, enclosing=(1, 0, 10, 0)),
+        _occ(member, 4, definition=True, enclosing=(4, 0, 8, 0)),
+        _occ(owner_term, 12, definition=True, enclosing=(12, 0, 16, 0)),
+    ))
+    index = ScipIndex(documents=(document,)).scoped_to(source)
+    return build_rows(index, source_name=source, language="scala"), (
+        owner_type, owner_term, member)
+
+
+def test_canonical_contains_edges_reach_the_store(conn):
+    rows, (owner_type, _owner_term, member) = _ownership_rows("src1")
+
+    save_rows(conn, rows, source_name="src1")
+
+    assert conn.execute(
+        "SELECT caller_canonical_id,callee_canonical_id FROM scip_edges "
+        "WHERE edge_type='contains'"
+    ).fetchall() == [(owner_type, member)]
+
+
+def test_canonical_ownership_replaces_a_stale_companion_edge(conn):
+    rows, (owner_type, owner_term, member) = _ownership_rows("src1")
+    save_rows(conn, rows, source_name="src1")
+    conn.execute(
+        "INSERT OR REPLACE INTO scip_edges VALUES (?,?,?,?,?,?)",
+        (owner_term, member, "contains", "src1/Owner.scala", 4, "stale"))
+
+    save_rows(conn, rows, source_name="src1")
+
+    assert conn.execute(
+        "SELECT caller_canonical_id,callee_canonical_id FROM scip_edges "
+        "WHERE edge_type='contains'"
+    ).fetchall() == [(owner_type, member)]
+
+
+def _insert_spool_symbol(
+    conn, canonical_id, source_name, *, file="Owner.scala", line=1,
+    kind="Method", display_name="symbol",
+):
+    conn.execute(
+        "INSERT INTO scip_symbols (canonical_id, source_name, language, file, "
+        "line_start, line_end, kind, display_name, qualified_name, "
+        "parent_qualified_name) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (
+            canonical_id, source_name, "scala", file, line, line + 1, kind,
+            display_name, display_name, None,
+        ),
+    )
+
+
+def test_canonical_ownership_backfill_repairs_a_spool_without_reindexing(conn):
+    source = "spool:fixture"
+    package = "semanticdb maven fixture . pkg/"
+    owner_type = package + "Owner#"
+    owner_term = package + "Owner."
+    member = owner_type + "run()."
+    for symbol, line, kind in (
+        (package, 1, "Package"),
+        (owner_type, 2, "Class"),
+        (owner_term, 12, "Object"),
+        (member, 4, "Method"),
+    ):
+        _insert_spool_symbol(conn, symbol, source, line=line, kind=kind)
+    conn.execute(
+        "INSERT INTO scip_edges VALUES (?,?,?,?,?,?)",
+        (owner_term, member, "contains", "Owner.scala", 4, "stale"),
+    )
+
+    result = scip_store.backfill_canonical_ownership(conn, source)
+
+    assert result.scanned_symbols == 4
+    assert result.candidate_edges == 1
+    assert result.removed_edges == 1
+    assert result.inserted_edges == 1
+    assert conn.execute(
+        "SELECT caller_canonical_id, callee_canonical_id, edge_type, "
+        "file, line, confidence FROM scip_edges"
+    ).fetchall() == [
+        (owner_type, member, "contains", "Owner.scala", 4, "exact"),
+    ]
+
+    repeated = scip_store.backfill_canonical_ownership(conn, source)
+    assert repeated.removed_edges == 0
+    assert repeated.inserted_edges == 0
+
+
+def test_canonical_ownership_backfill_is_source_scoped(conn):
+    first_source = "spool:first"
+    second_source = "spool:second"
+    first_owner = "semanticdb maven first . pkg/Owner#"
+    first_member = first_owner + "run()."
+    second_owner = "semanticdb maven second . pkg/Owner#"
+    second_member = second_owner + "run()."
+    for symbol, source, line, kind in (
+        (first_owner, first_source, 1, "Class"),
+        (first_member, first_source, 2, "Method"),
+        (second_owner, second_source, 1, "Class"),
+        (second_member, second_source, 2, "Method"),
+    ):
+        _insert_spool_symbol(conn, symbol, source, line=line, kind=kind)
+    conn.execute(
+        "INSERT INTO scip_edges VALUES (?,?,?,?,?,?)",
+        (second_owner, second_member, "contains", "Owner.scala", 2, "kept"),
+    )
+
+    scip_store.backfill_canonical_ownership(conn, first_source)
+
+    assert conn.execute(
+        "SELECT caller_canonical_id, callee_canonical_id, confidence "
+        "FROM scip_edges ORDER BY caller_canonical_id"
+    ).fetchall() == [
+        (first_owner, first_member, "exact"),
+        (second_owner, second_member, "kept"),
+    ]
+
+
+def test_canonical_ownership_backfill_rejects_an_unbounded_batch(conn):
+    with pytest.raises(ValueError, match="batch_size must be positive"):
+        scip_store.backfill_canonical_ownership(conn, "spool:fixture", batch_size=0)
+
+
+def test_canonical_ownership_backfill_rolls_back_a_partial_repair(conn):
+    source = "spool:fixture"
+    owner = "semanticdb maven fixture . pkg/Owner#"
+    member = owner + "run()."
+    _insert_spool_symbol(conn, owner, source, line=1, kind="Class")
+    _insert_spool_symbol(conn, member, source, line=2, kind="Method")
+
+    class FailingConnection:
+        def execute(self, sql, parameters=()):
+            if sql.startswith("INSERT OR IGNORE INTO scip_edges"):
+                raise RuntimeError("injected write failure")
+            return conn.execute(sql, parameters)
+
+        def executemany(self, sql, rows):
+            return conn.executemany(sql, rows)
+
+    with pytest.raises(RuntimeError, match="injected write failure"):
+        scip_store.backfill_canonical_ownership(FailingConnection(), source)
+
+    assert conn.execute("SELECT * FROM scip_edges").fetchall() == []
+    assert conn.execute(
+        "SELECT name FROM sqlite_temp_master "
+        "WHERE name = '_scip_canonical_ownership'"
+    ).fetchall() == []
+
+
+def _insert_colliding_edge_types(conn):
+    edge = ("owner", "member", "Owner.scala", 4)
+    conn.execute(
+        "INSERT INTO scip_edges VALUES (?,?,?,?,?,?)",
+        (edge[0], edge[1], "call", edge[2], edge[3], "exact"),
+    )
+    conn.execute(
+        "INSERT INTO scip_edges VALUES (?,?,?,?,?,?)",
+        (edge[0], edge[1], "contains", edge[2], edge[3], "exact"),
+    )
+
+
+def test_scip_edge_identity_includes_edge_type(conn):
+    _insert_colliding_edge_types(conn)
+
+    assert conn.execute(
+        "SELECT edge_type FROM scip_edges ORDER BY edge_type"
+    ).fetchall() == [("call",), ("contains",)]
+
+
+def test_scip_schema_migrates_the_legacy_edge_primary_key():
+    legacy = sqlite3.connect(":memory:")
+    legacy.execute(
+        "CREATE TABLE scip_edges ("
+        "caller_canonical_id TEXT NOT NULL, "
+        "callee_canonical_id TEXT NOT NULL, "
+        "edge_type TEXT NOT NULL, file TEXT NOT NULL, "
+        "line INTEGER NOT NULL, confidence TEXT NOT NULL, "
+        "PRIMARY KEY (caller_canonical_id, callee_canonical_id, file, line))"
+    )
+    legacy.execute(
+        "INSERT INTO scip_edges VALUES (?,?,?,?,?,?)",
+        ("owner", "member", "call", "Owner.scala", 4, "exact"),
+    )
+
+    init_scip_schema(legacy)
+    legacy.execute(
+        "INSERT INTO scip_edges VALUES (?,?,?,?,?,?)",
+        ("owner", "member", "contains", "Owner.scala", 4, "exact"),
+    )
+
+    primary_key = [
+        row[1] for row in sorted(
+            (
+                row for row in legacy.execute("PRAGMA table_info(scip_edges)")
+                if row[5]
+            ),
+            key=lambda row: row[5],
+        )
+    ]
+    assert primary_key == [
+        "caller_canonical_id", "callee_canonical_id", "edge_type", "file", "line",
+    ]
+    assert legacy.execute("SELECT COUNT(*) FROM scip_edges").fetchone()[0] == 2
+    legacy.close()
+
+
+def test_scip_schema_refuses_an_unknown_edge_primary_key():
+    unknown = sqlite3.connect(":memory:")
+    unknown.execute(
+        "CREATE TABLE scip_edges ("
+        "caller_canonical_id TEXT NOT NULL PRIMARY KEY, "
+        "callee_canonical_id TEXT NOT NULL, edge_type TEXT NOT NULL, "
+        "file TEXT NOT NULL, line INTEGER NOT NULL, confidence TEXT NOT NULL)"
+    )
+
+    with pytest.raises(RuntimeError, match="unsupported scip_edges primary key"):
+        init_scip_schema(unknown)
+
+    unknown.close()

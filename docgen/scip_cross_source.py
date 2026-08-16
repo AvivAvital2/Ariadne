@@ -69,6 +69,8 @@ DEFAULT_MAX_DATA_EDGES = 1_000_000
 logger = logging.getLogger(__name__)
 _BARE_LOCAL = re.compile(r'^local \d+$')
 
+_STRUCTURAL_EDGE_TYPES = frozenset({"contains"})
+
 
 @frozen
 class SymbolResolution:
@@ -332,13 +334,16 @@ class CrossSourceGraph:
     def consumers_of_source(
         self, source_name: str,
     ) -> list[CrossSourceEdge]:
-        """All edges where the callee is in ``source_name`` and the
-        caller is in a different source. This is the input to the
-        reverse-augment phase."""
+        """Cross-source reference edges whose callee belongs to source_name.
+
+        Structural ownership is deliberately excluded: containment is useful
+        for graph path construction, but it is not a consumer call.
+        """
         return [
-            e for e in self._edges
-            if e.callee.source_name == source_name
-            and e.caller.source_name != source_name
+            edge for edge in self._edges
+            if edge.edge_type not in _STRUCTURAL_EDGE_TYPES
+            and edge.callee.source_name == source_name
+            and edge.caller.source_name != source_name
         ]
     def callers_of(self, symbol_id: str) -> 'list[CrossSourceEdge]':
         """All edges referencing this symbol. Same-source edges included —
@@ -362,28 +367,31 @@ class CrossSourceGraph:
         return self._http_consumers.get(producer_id, [])
 
     def _rebuild_edge_index(self) -> None:
-        """(Re)build the endpoint indexes from ``_edges`` (design §6): O(1) per
-    hop instead of an O(E) scan, important because data edges are plausibly
-    the most numerous class. The flat ``_edges`` list stays for source-scoped
-    queries; this is rebuilt lazily after any edge mutation marks it dirty."""
+        """Build indexes for reference traversal, excluding structural edges."""
         self._edges_by_callee = {}
         self._edges_by_caller = {}
         for edge in self._edges:
-            self._edges_by_callee.setdefault(edge.callee.canonical_id, []).append(edge)
-            self._edges_by_caller.setdefault(edge.caller.canonical_id, []).append(edge)
+            if edge.edge_type in _STRUCTURAL_EDGE_TYPES:
+                continue
+            self._edges_by_callee.setdefault(
+                edge.callee.canonical_id, []
+            ).append(edge)
+            self._edges_by_caller.setdefault(
+                edge.caller.canonical_id, []
+            ).append(edge)
         self._edge_index_dirty = False
 
     def edges_in_source(self, source_name: str) -> list[CrossSourceEdge]:
-        """All edges where BOTH caller and callee are in
-        ``source_name`` — within-source edges only.
+        """Non-structural edges whose endpoints are both in source_name.
 
-        Used by cli_graph (Phase 5) to replace ast-grep-derived
-        approximate per-source edges with SCIP-precise ones for
-        sources that have a current ``.scip``."""
+        Used by the file-level SCIP-call projection; ownership must not become
+        a false call dependency between an owner file and a member file.
+        """
         return [
-            e for e in self._edges
-            if e.caller.source_name == source_name
-            and e.callee.source_name == source_name
+            edge for edge in self._edges
+            if edge.edge_type not in _STRUCTURAL_EDGE_TYPES
+            and edge.caller.source_name == source_name
+            and edge.callee.source_name == source_name
         ]
 
     def symbols_in(
@@ -397,13 +405,15 @@ class CrossSourceGraph:
     def symbols_with_zero_references(
         self, source_name: str,
     ) -> list[CrossSourceSymbol]:
-        """Symbols defined in ``source_name`` that are never referenced
-        anywhere in the registered corpus. Used as input to
-        ``ariadne improve --dead-code``."""
-        referenced = {e.callee.canonical_id for e in self._edges}
+        """Symbols in source_name that no non-structural edge references."""
+        referenced = {
+            edge.callee.canonical_id for edge in self._edges
+            if edge.edge_type not in _STRUCTURAL_EDGE_TYPES
+        }
         return [
-            s for s in self._symbols.values()
-            if s.source_name == source_name and s.canonical_id not in referenced
+            symbol for symbol in self._symbols.values()
+            if symbol.source_name == source_name
+            and symbol.canonical_id not in referenced
         ]
 
     # -- persistence (Phase 2f) -------------------------------------------

@@ -1084,3 +1084,133 @@ class TestSpoolPack:
         with Library(tmp_path / 'p.db') as pack:
             titles = {d.title for d in pack.list_documents()}
         assert titles == {'mine'}
+
+
+def test_spool_graph_copy_backfills_canonical_ownership_without_a_repo(tmp_path):
+    from spool_pack import _copy_source_scip
+
+    source_name = "fixture"
+    installed_source = "spool:fixture"
+    owner = "semanticdb maven fixture . pkg/Owner#"
+    member = owner + "run()."
+    with Library(tmp_path / "source.db") as source:
+        with source._conn_provider.acquire() as conn:
+            init_scip_schema(conn)
+            conn.executemany(
+                "INSERT INTO scip_symbols (canonical_id, source_name, "
+                "language, file, line_start, line_end, kind, display_name, "
+                "qualified_name, parent_qualified_name) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                [
+                    (
+                        owner, source_name, "scala", "Owner.scala", 1, 10,
+                        "Class", "Owner", "pkg.Owner", "pkg",
+                    ),
+                    (
+                        member, source_name, "scala", "Owner.scala", 4, 8,
+                        "Method", "run", "pkg.Owner.run", "pkg.Owner",
+                    ),
+                ],
+            )
+        with Library(tmp_path / "spool.db") as spool:
+            _copy_source_scip(
+                source, spool, source_name,
+                dest_source_name=installed_source,
+            )
+            with spool._conn_provider.acquire() as conn:
+                assert conn.execute(
+                    "SELECT caller_canonical_id, callee_canonical_id, "
+                    "edge_type, file, line, confidence FROM scip_edges"
+                ).fetchall() == [
+                    (owner, member, "contains", "Owner.scala", 4, "exact"),
+                ]
+                assert conn.execute(
+                    "SELECT DISTINCT source_name FROM scip_symbols"
+                ).fetchall() == [(installed_source,)]
+
+
+def test_install_migrates_legacy_edges_without_corrupting_cached_pack(tmp_path):
+    root = tmp_path / "corpus"
+    root.mkdir()
+    owner = "semanticdb maven fixture . pkg/Owner#"
+    member = owner + "run()."
+    original_pack = tmp_path / "new-pack.zip"
+    with Library(tmp_path / "builder.db") as builder:
+        builder.add_document(
+            "explanation", "owner", "owner body",
+            source_files=[str(root / "Owner.scala")],
+            source_name="fixture",
+        )
+        with builder._conn_provider.acquire() as conn:
+            init_scip_schema(conn)
+            conn.executemany(
+                "INSERT INTO scip_symbols VALUES (?,?,?,?,?,?,?,?,?,?)",
+                [
+                    (
+                        owner, "fixture", "scala", "Owner.scala", 1, 10,
+                        "Class", "Owner", "pkg.Owner", "pkg",
+                    ),
+                    (
+                        member, "fixture", "scala", "Owner.scala", 4, 8,
+                        "Method", "run", "pkg.Owner.run", "pkg.Owner",
+                    ),
+                ],
+            )
+            conn.execute(
+                "INSERT INTO scip_edges VALUES (?,?,?,?,?,?)",
+                (owner, member, "call", "Owner.scala", 4, "exact"),
+            )
+        build_pack(
+            builder, environment="fixture", version="1.0",
+            target_runtime="runtime", certified_docs=(),
+            source_root=root, out_path=original_pack,
+        )
+
+    legacy_db = tmp_path / "legacy-pack.db"
+    with zipfile.ZipFile(original_pack) as archive:
+        manifest_data = yaml.safe_load(archive.read("manifest.yaml"))
+        legacy_db.write_bytes(archive.read("pack.db"))
+    conn = sqlite3.connect(legacy_db)
+    conn.execute("DROP INDEX IF EXISTS idx_scip_edges_callee")
+    conn.execute("DROP INDEX IF EXISTS idx_scip_edges_caller")
+    conn.execute("ALTER TABLE scip_edges RENAME TO scip_edges_new_key")
+    conn.execute(
+        "CREATE TABLE scip_edges ("
+        "caller_canonical_id TEXT NOT NULL, "
+        "callee_canonical_id TEXT NOT NULL, "
+        "edge_type TEXT NOT NULL, file TEXT NOT NULL, "
+        "line INTEGER NOT NULL, confidence TEXT NOT NULL, "
+        "PRIMARY KEY (caller_canonical_id, callee_canonical_id, file, line))"
+    )
+    conn.execute(
+        "INSERT INTO scip_edges SELECT * FROM scip_edges_new_key "
+        "WHERE edge_type <> 'contains'"
+    )
+    conn.execute("DROP TABLE scip_edges_new_key")
+    conn.commit()
+    conn.close()
+
+    legacy_blob = legacy_db.read_bytes()
+    manifest_data["checksum"] = (
+        "sha256:" + hashlib.sha256(legacy_blob).hexdigest()
+    )
+    legacy_pack = tmp_path / "legacy-pack.zip"
+    with zipfile.ZipFile(legacy_pack, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("manifest.yaml", yaml.safe_dump(manifest_data))
+        archive.writestr("pack.db", legacy_blob)
+
+    cache = tmp_path / "cache"
+    with Library(tmp_path / "consumer.db") as consumer:
+        install_pack(consumer, legacy_pack, cache_dir=cache)
+        with consumer._conn_provider.acquire() as conn:
+            assert conn.execute(
+                "SELECT edge_type FROM scip_edges ORDER BY edge_type"
+            ).fetchall() == [("call",), ("contains",)]
+
+    cached_blob = (cache / "fixture" / "pack.db").read_bytes()
+    cached_manifest = yaml.safe_load(
+        (cache / "fixture" / "manifest.yaml").read_text()
+    )
+    assert cached_manifest["checksum"] == (
+        "sha256:" + hashlib.sha256(cached_blob).hexdigest()
+    )

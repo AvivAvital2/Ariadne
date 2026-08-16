@@ -29,6 +29,7 @@ import pytest
 
 from docgen.scip_paths import scip_paths_for
 from library.scip import init_scip_schema
+import json
 
 # The index holds BOTH as real, distinct files, so preferring the longest strip silently
 # resolves the wrong one.

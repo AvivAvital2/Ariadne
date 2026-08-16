@@ -47,9 +47,25 @@ LLM_PRICING: dict[str, tuple[float, float]] = {
     'claude-opus-4-6': (5.00, 25.00),
     'claude-opus-4-7': (5.00, 25.00),
     'claude-opus-4-8': (5.00, 25.00),
+    'claude-opus-5': (5.00, 25.00),
     'claude-haiku-4-5': (1.00, 5.00),
     'claude-fable-5': (10.00, 50.00),
 }
+MODEL_CONTEXT_WINDOW_TOKENS: dict[str, int] = {
+    'claude-fable-5': 1_000_000,
+    'claude-opus-5': 1_000_000,
+    'claude-opus-4-8': 1_000_000,
+    'claude-opus-4-7': 1_000_000,
+    'claude-opus-4-6': 1_000_000,
+    'claude-sonnet-5': 1_000_000,
+    'claude-sonnet-4-6': 1_000_000,
+    'claude-haiku-4-5': 200_000,
+}
+
+
+def context_window_tokens(model: str) -> 'int | None':
+    """How many input tokens ``model`` accepts, or ``None`` when that is not known here."""
+    return MODEL_CONTEXT_WINDOW_TOKENS.get(model)
 
 # text-embedding-3-large per-million-token price.
 EMBEDDING_PRICING_PER_M: float = 0.13

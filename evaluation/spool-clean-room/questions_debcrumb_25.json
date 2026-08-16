@@ -1,0 +1,202 @@
+[
+  {
+    "id": 4,
+    "family": "merge",
+    "before": "Spark's native MERGE compiles each clause into a MergeRows Instruction (Keep/Discard/Split) that MergeRowsExec evaluates downstream of a join it does not perform; where does Delta's ClassicMergeExecutor place its join relative to row classification, and what is Delta's analogous per-row output mechanism?",
+    "after": "When I MERGE INTO a Delta table versus a plain Spark V2 table, in what order does each run its join relative to deciding each row's insert/update/delete fate, and how does each emit the resulting rows?",
+    "flag": "",
+    "dup": ""
+  },
+  {
+    "id": 6,
+    "family": "merge",
+    "before": "Which Spark logical-plan node does Delta's DeltaMergeInto parallel, and which Spark analyzer rule \u2014 that Delta bypasses entirely by routing through PreprocessTableMerge \u2014 would normally rewrite that node into DataSource V2 row-level operations?",
+    "after": "A MERGE starts as the same SQL whether the target is Delta or a plain V2 table. Why does the Delta one end up NOT going through Spark's normal row-level rewrite, and what does Delta do during analysis to divert it onto its own path?",
+    "flag": "",
+    "dup": "id4"
+  },
+  {
+    "id": 8,
+    "family": "merge",
+    "before": "When a Delta MERGE assigns to generated or IDENTITY columns, which Delta preprocessing rule computes those values, and how does that responsibility differ from what Spark's ResolveRowLevelCommandAssignments does for column assignments on a native V2 table?",
+    "after": "When a MERGE inserts rows into a Delta table that has generated or identity columns, who computes those column values as part of the merge, and how does that differ from a plain V2 table handling the same assignments?",
+    "flag": "",
+    "dup": ""
+  },
+  {
+    "id": 10,
+    "family": "merge",
+    "before": "Where does the delegation boundary sit for a programmatic Scala merge: which immutable builder does DeltaTable.merge(...) return, and at which call does it converge onto the same DeltaMergeInto/PreprocessTableMerge path as SQL MERGE \u2014 versus Spark's own MergeIntoWriter which assembles a Catalyst MergeIntoTable?",
+    "after": "If I build a merge with the Scala DeltaTable API instead of SQL, does it run a different path \u2014 and if not, where do the programmatic and SQL forms converge, versus Spark's own programmatic merge?",
+    "flag": "",
+    "dup": ""
+  },
+  {
+    "id": 12,
+    "family": "update",
+    "before": "Delta's PreprocessTableUpdate turns a DeltaUpdateTable into an UpdateCommand using the UpdateExpressionsSupport trait; which Spark analyzer rule performs the analogous assignment alignment for a native V2 UpdateTable, and which executable DSv2 plans does the Spark path target that Delta's UpdateCommand does not?",
+    "after": "When I run an UPDATE on a Delta table, how does it turn my SET assignments into executed changes, and how does that differ from an UPDATE on a plain V2 table (which Spark compiles into its own executable plans Delta doesn't use)?",
+    "flag": "",
+    "dup": ""
+  },
+  {
+    "id": 13,
+    "family": "merge",
+    "before": "When Spark rewrites a group-based row-level MERGE it may inject RowLevelOperationRuntimeGroupFiltering (SupportsRuntimeV2Filtering) to prune groups at runtime; what is the corresponding file-pruning step inside Delta's ClassicMergeExecutor, and which repo owns each pruning mechanism?",
+    "after": "Spark's group-based row-level ops can skip whole groups of data at runtime before touching them. When Delta runs a MERGE, does it have an equivalent way to avoid reading files it doesn't need, and is that pruning owned by Delta or Spark?",
+    "flag": "",
+    "dup": "id4"
+  },
+  {
+    "id": 15,
+    "family": "write",
+    "before": "Trace what happens after TransactionalWrite.writeFiles produces a SparkPlan: which Spark class does DeltaFileFormatWriter reimplement as a fork, and what single capability, gated by DeltaOptions.WRITE_PARTITION_COLUMNS, did Delta fork it to add?",
+    "after": "Delta appears to run a forked version of Spark's file-writing machinery rather than the stock writer. What capability \u2014 about what actually gets written into the data files \u2014 would Delta need that the stock writer doesn't provide, justifying the fork?",
+    "flag": "",
+    "dup": "id187"
+  },
+  {
+    "id": 16,
+    "family": "write",
+    "before": "What does Delta's DelayedCommitProtocol change about Spark's FileCommitProtocol commit lifecycle, and which stock Spark committer's rename-plus-_SUCCESS behavior (e.g. HadoopMapReduceCommitProtocol) does it deliberately refuse to perform?",
+    "after": "After a Delta write I don't see the rename-into-final-place or the `_SUCCESS` marker a normal Spark file write leaves \u2014 what does Delta change about the commit lifecycle, and which part of the usual committer behavior does it deliberately skip?",
+    "flag": "",
+    "dup": "blended-q7"
+  },
+  {
+    "id": 17,
+    "family": "write",
+    "before": "When DeltaFileFormatWriter drives a write job, which FileCommitProtocol callbacks (setupTask/newTaskTempFile/commitTask/commitJob) does DelayedCommitProtocol implement to capture AddFile actions, and how is newTaskTempFile repurposed compared to stock Spark's file-moving semantics?",
+    "after": "During a Delta write the usual Spark commit steps still fire (make a temp file, commit the task, commit the job), but Delta records metadata about new files instead of moving them into place. How is the 'make a temp file' step in particular repurposed versus stock Spark?",
+    "flag": "",
+    "dup": "id16"
+  },
+  {
+    "id": 18,
+    "family": "write",
+    "before": "Delta's DeltaFileFormatWriter reuses Spark's WriteJobDescription bundle; when writeFilesOpt is empty but the plan contains an AdaptiveSparkPlanExec, what does the forked writer's materializeAdaptiveSparkPlan borrow from Spark's write path, and why does it inspect outputOrdering early?",
+    "after": "When a Delta write's plan is adaptively optimized at runtime, what does Delta's writer reuse from Spark's write path, and why must it inspect the plan's output ordering early?",
+    "flag": "drop",
+    "dup": ""
+  },
+  {
+    "id": 23,
+    "family": "write",
+    "before": "Why does TransactionalWrite.makeOutputNullable force every output attribute to nullable=true before handing the plan to DeltaFileFormatWriter, given the Parquet schema Spark writes then loses NOT NULL information \u2014 and where are those NOT NULL constraints actually enforced instead?",
+    "after": "A Delta write marks every output column nullable before writing, so the Parquet files carry no NOT NULL info \u2014 yet the table still rejects nulls in a NOT NULL column. If the files don't encode it, where is NOT NULL actually enforced?",
+    "flag": "",
+    "dup": ""
+  },
+  {
+    "id": 27,
+    "family": "catalog",
+    "before": "DeltaCatalog extends Spark's DelegatingCatalogExtension \u2014 which underlying Spark catalog does it wrap and pass non-Delta operations through to, and what does it intercept and return for a CREATE TABLE ... USING delta that the delegate would not?",
+    "after": "When I CREATE TABLE ... USING delta through the default session catalog I get real Delta semantics, but a plain CREATE TABLE just goes to the metastore. How does the same catalog do both \u2014 what does it intercept for Delta and what does it pass straight through?",
+    "flag": "",
+    "dup": "blended-q12"
+  },
+  {
+    "id": 31,
+    "family": "catalog",
+    "before": "V2SessionCatalog adapts Spark's V2 TableCatalog onto the V1 SessionCatalog, wrapping CatalogTable into a V2 Table; where does DeltaCatalog sit relative to V2SessionCatalog in the delegation chain, and what does it return for a Delta table load that V2SessionCatalog on its own would not?",
+    "after": "When I load an existing Delta table by name I get back something richer than a plain metastore table (time travel, snapshots). Where in the catalog chain does that enrichment happen, and what does it hand back that a plain session catalog wouldn't?",
+    "flag": "",
+    "dup": "id27"
+  },
+  {
+    "id": 33,
+    "family": "catalog",
+    "before": "DeltaDataSource.inferSchema always returns an empty StructType regardless of options; why is that stub harmless given how DeltaTableV2 actually resolves schema, and which Spark provider contract forces the method to exist at all?",
+    "after": "Delta's data-source returns an empty schema when Spark asks it to infer one, yet Delta tables obviously have schemas. Why is that empty stub harmless \u2014 where does the real schema come from, and why must the method exist at all?",
+    "flag": "niche",
+    "dup": ""
+  },
+  {
+    "id": 62,
+    "family": "streaming",
+    "before": "Trace how MicroBatchExecution asks DeltaSource.latestOffset for the end of the next micro-batch: how does Delta's AdmissionLimits translate the ReadLimit Spark passes in into a bounded (reservoirVersion, index) DeltaSourceOffset, and why does the index field exist at all rather than just a version?",
+    "after": "A Delta streaming source hands Spark a (version, position) pair as the end of each micro-batch rather than just the table version. Why isn't a plain version number enough \u2014 what does the position let it express?",
+    "flag": "",
+    "dup": "blended-q9"
+  },
+  {
+    "id": 66,
+    "family": "streaming",
+    "before": "When DeltaSource splits one large Delta commit across several micro-batches, how do the (reservoirVersion, index) coordinate in DeltaSourceOffset and the (version, index) pair in IndexedFile cooperate so Spark's MicroBatchExecution always observes monotonically increasing offsets?",
+    "after": "When one large Delta commit is spread across several micro-batches, how does the streaming source guarantee Spark always sees strictly increasing offsets, even partway through that single commit?",
+    "flag": "",
+    "dup": "id62"
+  },
+  {
+    "id": 67,
+    "family": "streaming",
+    "before": "How does DeltaSink.addBatch(batchId, data) achieve exactly-once against Spark's Structured Streaming replay guarantee \u2014 trace how it derives queryId from StreamExecution.QUERY_ID_KEY and compares txn.txnVersion(queryId) against batchId before committing a SetTransaction?",
+    "after": "My Delta streaming write needs exactly-once even if a micro-batch is replayed after a crash. How does the sink detect it already committed a given batch and skip re-writing it, and what identifier does that rely on that survives a restart?",
+    "flag": "",
+    "dup": "blended-q10"
+  },
+  {
+    "id": 84,
+    "family": "gen-cols",
+    "before": "Both Delta and Spark encode a generated column's expression under GENERATION_EXPRESSION_METADATA_KEY in StructField.metadata. When a table is created through the DataSource V2 catalog path into DeltaCatalog, which side validates the expression, and how does Delta's protocol-aware isGeneratedColumn(protocol, field) guard against Spark's metadata-preserving plan transforms leaking a generation expression onto a table whose protocol lacks GeneratedColumnsTableFeature?",
+    "after": "When I create a Delta table with a generated column through the catalog, the generation expression travels in the column's metadata. Which side actually validates it, and how does Delta stop a generation expression from ending up on a table whose format version doesn't support generated columns?",
+    "flag": "",
+    "dup": ""
+  },
+  {
+    "id": 87,
+    "family": "identity",
+    "before": "Spark's catalyst IdentityColumn.validateIdentityColumn fails at analysis time unless the target TableCatalog reports TableCatalogCapability.SUPPORTS_CREATE_TABLE_WITH_IDENTITY_COLUMNS. How does DeltaCatalog satisfy that capability gate, and how does Delta's own satisfiesIdentityColumnProtocol (IdentityColumnsTableFeature or writer version 6) form a second, independent write-time gate \u2014 what could pass one gate but fail the other?",
+    "after": "Identity columns on a Delta table seem gated in two independent places \u2014 once at create time and once at write time. Why two separate gates, and what situation could pass one but fail the other?",
+    "flag": "",
+    "dup": ""
+  },
+  {
+    "id": 88,
+    "family": "identity",
+    "before": "Contrast how Spark and Delta each turn a GENERATED ALWAYS AS IDENTITY DDL clause into metadata: Spark's IdentityColumn/IdentityColumnSpec carries start/step/allowExplicitInsert, while Delta's IdentityInfo adds highWaterMark. Given DeltaSqlParser delegates most parsing to Spark's parser, which side owns enforcing allowExplicitInsert when an INSERT supplies an explicit identity value?",
+    "after": "When a Delta table has a GENERATED ALWAYS AS IDENTITY column and I try to INSERT my own explicit value, it's rejected. Given Delta reuses Spark's parser for most of the DDL, which side actually owns enforcing that you can't supply your own identity value?",
+    "flag": "",
+    "dup": ""
+  },
+  {
+    "id": 89,
+    "family": "defaults",
+    "before": "When an INSERT omits a nullable column, Delta's columnHasDefaultExpr can treat it as having an implicit NULL default via the USE_NULL_AS_DEFAULT_DELTA_OPTION write flag. How does this interact with Spark's ResolveDefaultColumns two-key model \u2014 CURRENT_DEFAULT versus EXISTS_DEFAULT \u2014 for a column that was added later through ALTER TABLE ADD COLUMN with a DEFAULT?",
+    "after": "When I INSERT into a Delta table and omit a nullable column that was added later via ALTER TABLE ADD COLUMN with a DEFAULT, what value gets written \u2014 and how does that interact with the difference between the default for brand-new rows and the default backfilled for rows that predate the column?",
+    "flag": "technical",
+    "dup": ""
+  },
+  {
+    "id": 107,
+    "family": "type-coercion",
+    "before": "After DeltaAnalysis.addCastToColumn has already inserted schema-adjustment casts, a Delta write that declares RequiresDistributionAndOrdering still flows through Spark's DistributionAndOrderingUtils.prepareQuery, whose TypeCoercionExecutor bakes ANSI-vs-non-ANSI rules at object initialization. Which repo has the final say on written column types, and why does Delta's cast-injection running before Spark's distribution preparation matter?",
+    "after": "When I INSERT data whose column types don't exactly match a Delta table, both Delta and Spark can inject casts \u2014 Delta early, Spark later during its ordering/distribution prep. Which one has the final say over the written types, and why does the order they inject casts in matter?",
+    "flag": "",
+    "dup": "blended-q1"
+  },
+  {
+    "id": 147,
+    "family": "deletion-vectors",
+    "before": "Deletion-vector filtering is split between a Catalyst rule and the physical reader. How do Delta's PreprocessTableWithDVs (which adds IS_ROW_DELETED_STRUCT_FIELD, a Filter on __delta_internal_is_row_deleted == 0, and a Project) and DeltaParquetFileFormat (which populates that column) agree on the column name, and which Spark operator evaluates the Filter?",
+    "after": "On a Delta table with deletion vectors, deleted rows are dropped at read time without rewriting files. That filtering is split between a query-plan step and the physical Parquet reader \u2014 how do the two agree on which rows are deleted, and which one actually evaluates the drop?",
+    "flag": "",
+    "dup": "blended-q3"
+  },
+  {
+    "id": 156,
+    "family": "deletion-vectors",
+    "before": "Deletion vectors are produced at DELETE/UPDATE time and consumed at read time. How does the RoaringBitmap DV that DMLWithDeletionVectorsHelper/DeletionVectorBitmapGenerator write get aligned, on read, with the per-row ordinal that Spark's Parquet reader provides, so DeltaParquetFileFormat's rowIndexFilter tests the correct bit for each row?",
+    "after": "A deletion vector marks deleted rows by their position within a file. On read, how does Delta line up that positional mark with the actual rows the Parquet reader produces, so exactly the right rows get dropped?",
+    "flag": "",
+    "dup": "id147"
+  },
+  {
+    "id": 187,
+    "family": "write",
+    "before": "DeltaFileFormatWriter is a vendored fork of Spark's FileFormatWriter; which single capability (DeltaOptions.WRITE_PARTITION_COLUMNS \u2014 writing partition values into the data files) motivated the fork rather than configuring stock Spark, and how does it still defer to Spark's WriteFiles operator path detected via V1WritesUtils.getWriteFilesOpt?",
+    "after": "Delta ships its own fork of Spark's file-format writer. What single capability \u2014 about writing partition values into the data files \u2014 justified forking rather than configuring the stock writer, and how does the fork still fall back to Spark's normal write path where it can?",
+    "flag": "",
+    "dup": "id15"
+  }
+]

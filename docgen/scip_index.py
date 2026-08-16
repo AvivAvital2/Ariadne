@@ -114,6 +114,7 @@ class ScipSymbolInfo:
     display_name: str = ''
     signature_text: str = ''
     relationships: tuple[ScipRelationship, ...] = ()
+    enclosing_symbol: str = ''
 
     @property
     def effective_display_name(self) -> str:
@@ -151,28 +152,39 @@ class ScipDocument:
 
     def definitions(self) -> tuple[ScipOccurrence, ...]:
         return tuple(occ for occ in self.occurrences if occ.is_definition)
-
-    def _boundaries(self) -> list[int]:
+    def _boundaries(self, enclosing: 'str | None' = None) -> list[int]:
         """Start lines that may end a preceding definition's body.
 
-        Locals and parameters are excluded: scip-java emits them densely, and letting
-        one end a method's body would cut the method off at its first local.
-        """
+    Locals and parameters are excluded: scip-java emits them densely, and letting
+    one end a method's body would cut the method off at its first local.
+
+    ``enclosing`` excludes that symbol's own descendants. Without it a container ends
+    where its first member begins -- one line down -- so every class collapsed to a
+    single line: 47.5% of ``Class`` and 60.7% of ``Object`` on the live databricks store
+    against 0.1% of ``StaticMethod``, and 292 of 292 sampled single-line containers had
+    their next definition within two lines. A one-line class body is a hop stage two
+    cannot quote. Descendants are recognised from the moniker, which is hierarchical
+    (``pkg/Widget#run().`` starts with ``pkg/Widget#``), so no language-specific rule is
+    needed, and the terminator keeps a same-prefixed sibling like ``WidgetBar#`` out.
+    """
         return sorted({
             occ.identifier_lines[0] for occ in self.definitions()
             if not occ.is_local and not occ.is_parameter
+            and not (enclosing is not None
+                     and occ.symbol != enclosing
+                     and occ.symbol.startswith(enclosing))
         })
-
     def extent_of(self, occurrence: ScipOccurrence) -> tuple[int, int]:
-        """``(line_start, line_end)`` for a definition — identifier start, body end.
+        """``(line_start, line_end)`` for a definition -- identifier start, body end.
 
-        Decided per definition, so a document that mixes supplied and missing
-        ``enclosing_range`` gets a real extent for both kinds.
-        """
+    Decided per definition, so a document that mixes supplied and missing
+    ``enclosing_range`` gets a real extent for both kinds.
+    """
         start, identifier_end = occurrence.identifier_lines
         if occurrence.enclosing_range:
             return (start, max(identifier_end, _line_range(occurrence.enclosing_range)[1]))
-        nxt = next((line for line in self._boundaries() if line > start), None)
+        boundaries = self._boundaries(enclosing=occurrence.symbol)
+        nxt = next((line for line in boundaries if line > start), None)
         end = (nxt - 1) if nxt is not None else self.last_line
         return (start, max(identifier_end, end))
 
@@ -320,6 +332,6 @@ def document_from_proto(pb_doc) -> ScipDocument:
                 )
                 for rel in getattr(info, 'relationships', ())
             ),
-        ))
+        enclosing_symbol = getattr(info, 'enclosing_symbol', '')))
     return ScipDocument(relative_path=pb_doc.relative_path,
                         occurrences=occurrences, symbols=tuple(symbols))

@@ -23,9 +23,20 @@ import sqlite3
 import pytest
 
 from docgen.catalog_writer import _element_doc_id
-from library import Library
-from library.chain_answer import evidence_for, render_spine, unsupported_locations
-from library.scip import init_scip_schema
+from docgen.pricing import CHARS_PER_TOKEN, PROMPT_OVERHEAD_TOKENS
+from library import Library, chain_answer
+from library.chain_answer import (
+    AnswerEvidence,
+    ANSWER_MAX_TOKENS,
+    evidence_for,
+    expand_bare_lines,
+    locations_for,
+    render_spine,
+    spine_budget_chars,
+    unsupported_locations,
+)
+from library.chain_bundle import BundleHop, ChainBundle; from library.scip import init_scip_schema
+from library.structural_assembly import StructuralCitation
 
 SOURCE = 'src1'
 RUN = 'scip-python python src1 0.1 `m`/run().'
@@ -122,11 +133,26 @@ class TestSpine:
         evidence = evidence_for(library, DOCS, source=SOURCE, depth=3)
 
         assert 'm.py:8' in evidence.spine
+    def test_the_document_reaches_the_spine_because_it_is_the_payload(self, library):
+        """The spine carries each hop's description and its coordinates. Both, for different
+        reasons.
 
-    def test_prose_appears_only_for_hops_that_earned_it(self, library):
+        This reverses what this test asserted earlier today. The reasoning then was "code
+        first, everything else suspect", applied to mean no generated text may reach the
+        model at all — so the spine carried quoted source instead. That conflated distrust
+        of *authority* with the question of *payload*. A docstring or a human-authored guide
+        can contradict the code, and search-retrieved prose concatenated as background is
+        worse; a per-hop catalog entry is neither, being fetched by deterministic id for the
+        symbol the walk reached.
+
+        What settles it is which artefact can be wrong. A generated description can; a SCIP
+        coordinate cannot. So the description is what the model reads, and ``file:line``
+        travels beside it so every resulting claim can be checked against the code.
+        """
         evidence = evidence_for(library, DOCS, source=SOURCE, depth=3)
 
         assert 'Prepares the batch before writing.' in evidence.spine
+        assert 'h.py:3' in evidence.spine, 'the coordinate travels with the description'
 
     def test_an_empty_bundle_renders_nothing_rather_than_a_header(self):
         from library.chain_bundle import ChainBundle
@@ -163,14 +189,19 @@ class TestTheAnswerMayNotExceedTheBundle:
 
 
 class TestTheSpineIsBounded:
-    """An LLM context window is a real constraint — unlike a graph walk, where a count
-    cap was wrong. Measured on the rebuilt databricks store: 8 retrieved documents give
-    279 hops and **18,285 tokens** of spine at depth 3, 22,892 at depth 4, on top of the
-    ~17k-token document context. Unbounded, this dominates the prompt.
+    """The prompt has one real limit: the context window of the model that receives it.
 
-    The cut is a **prefix**, never a ranking: execution order is the one thing that makes
-    a chain explicable, so the beginning survives intact and the tail is reported as
-    omitted rather than silently dropped.
+    Not a number picked to leave room for something else. The bound this replaced —
+    20,000 characters — was set when the prompt also carried ~17k tokens of retrieved
+    documentation and the chain had to fit beside it. Nothing but the chain travels now,
+    so that premise is void, and the budget is derived from the window less the answer
+    reserved inside it.
+
+    The cut is still a **prefix**, never a ranking: execution order is the one thing that
+    makes a chain explicable, so the beginning survives intact and the tail is reported as
+    omitted rather than silently dropped. Measured at production width the spine is 279
+    hops and ~73k characters, which every window in the table holds many times over — so
+    truncation now means the window, not a preference.
     """
 
     def test_the_spine_respects_a_character_budget_and_says_what_it_cut(self, library):
@@ -226,3 +257,261 @@ class TestTheSpineIsBounded:
 
         assert generous.spine == default.spine
         assert 'omitted' not in generous.spine.lower()
+    def test_the_budget_is_the_context_window_not_a_number_someone_picked(self):
+        """The bound is derived from the model that will receive the prompt.
+
+        A declared limit cannot be checked against anything; a derived one can. The
+        window is the constraint the API actually enforces, and the answer reserved
+        inside it plus the instructions that frame it are the only other claimants.
+        """
+        opus = spine_budget_chars('claude-opus-5')
+        haiku = spine_budget_chars('claude-haiku-4-5')
+
+        assert opus == int((1_000_000 - ANSWER_MAX_TOKENS - PROMPT_OVERHEAD_TOKENS)
+                           * CHARS_PER_TOKEN)
+        assert haiku < opus, 'a smaller window must yield a smaller budget'
+        assert haiku > 200_000, (
+            'even the smallest window in the table dwarfs the 20,000 this replaced')
+
+    def test_an_unknown_window_cuts_nothing_rather_than_guessing(self, library,
+                                                                monkeypatch):
+        """A model the table does not know is reported, never given a plausible limit.
+
+        The same contract ``LLM_PRICING`` keeps by returning ``rates=None``, for the same
+        reason: substituting a believable figure for a known one is what a derived bound
+        exists to end. An over-long prompt then fails at the API — the boundary that owns
+        the rule — instead of being quietly trimmed here.
+        """
+        assert chain_answer.spine_budget_chars('nobody-registered-this-model') is None
+
+        monkeypatch.setattr(chain_answer, 'spine_budget_chars', lambda *a, **k: None)
+        evidence = evidence_for(library, DOCS, source=SOURCE, depth=3)
+
+        assert 'm.deep' in evidence.spine, 'the last hop survives an unknown window'
+        assert not evidence.truncation_reason
+    def test_a_description_is_shown_once_however_many_hops_reach_it(self):
+        """The same symbol reached from three places is one description and three call sites.
+
+        Measured at production width: 1,788 hops carry a document but only 883 documents are
+        distinct, so each description was travelling about twice. A type referenced by four
+        bodies is four hops — correctly, the call sites are four separate pieces of evidence —
+        but its description does not change between them.
+
+        This is the rule ``revisit`` already applies to a body, applied to a description.
+        """
+        from library.chain_bundle import BundleHop, ChainBundle
+        from library.structural_assembly import StructuralCitation
+
+        def hop(call_line):
+            return BundleHop(
+                citation=StructuralCitation(
+                    qualified_name='pkg.data.Dataset', file='pkg/data.py', line_start=3,
+                    source_name=SOURCE, relation='references', hop=1,
+                    call_site_file='m.py', call_site_line=call_line,
+                    stop_reason='reference', line_end=40),
+                evidence='A dataset of rows, with a schema.')
+
+        spine = render_spine(ChainBundle(hops=[hop(8), hop(19), hop(31)]))
+
+        assert spine.count('A dataset of rows, with a schema.') == 1
+        for line in (8, 19, 31):
+            assert f'm.py:{line}' in spine, 'every call site is still evidence'
+class TestWhatTheCallerGetsBack:
+    """Stage five returns coordinates. It must not return the whole chain as a list.
+
+    Measured at production width: the payload was 2,645 citation entries — 939,389
+    characters, ~235,000 tokens — for one question, covering 973 distinct symbols. In an MCP
+    client that lands in the caller's context window, so a single ask spent a quarter of it
+    restating a chain the answer had already used four coordinates from.
+    """
+
+    def _evidence(self, answer_locations=()):
+        hops = [
+            StructuralCitation(qualified_name='m.run', file='m.py', line_start=5,
+                               source_name=SOURCE, relation='calls', hop=1,
+                               call_site_file='c.py', call_site_line=1, line_end=20),
+            StructuralCitation(qualified_name='m.helper', file='h.py', line_start=3,
+                               source_name=SOURCE, relation='calls', hop=2,
+                               call_site_file='m.py', call_site_line=8, line_end=9),
+            # the same definition reached again from a second call site
+            StructuralCitation(qualified_name='m.helper', file='h.py', line_start=3,
+                               source_name=SOURCE, relation='calls', hop=2,
+                               call_site_file='m.py', call_site_line=12,
+                               stop_reason='revisit', line_end=9),
+        ]
+        return AnswerEvidence(
+            bundle_citations=hops,
+            locations=frozenset(f'{h.file}:{h.line_start}' for h in hops))
+
+    def test_the_payload_does_not_repeat_a_definition_it_already_named(self):
+        """A definition reached twice is one coordinate, not two."""
+        payload = self._evidence().citations()
+
+        assert len(payload) == 2, f'expected the two distinct definitions, got {payload}'
+
+    def test_the_payload_narrows_to_what_the_answer_actually_cited(self):
+        """The answer used one location; returning 973 does not help the caller."""
+        evidence = self._evidence()
+
+        cited = evidence.cited_by('The work happens in h.py:3 after validation.')
+
+        assert [c['file'] for c in cited] == ['h.py']
+        assert cited[0]['line'] == 3
+
+    def test_the_shape_travels_even_when_the_answer_cites_nothing(self):
+        """Shape is what replaces enumeration — hop and symbol counts, and any forks."""
+        summary = self._evidence().summary()
+
+        assert summary['hops'] == 3
+        assert summary['symbols'] == 2
+        assert summary['files'] == 2
+    def _evidence_with_call_sites(self):
+        hops = [
+            StructuralCitation(
+                qualified_name='m.InsertOnly.writeOnlyInserts',
+                file='spark/src/main/scala/delta/merge/InsertOnlyMergeExecutor.scala',
+                line_start=53, source_name=SOURCE, relation='calls', hop=1,
+                call_site_file='spark/src/main/scala/delta/MergeIntoCommand.scala',
+                call_site_line=130, line_end=90),
+        ]
+        return AnswerEvidence(bundle_citations=hops, locations=locations_for(hops))
+
+    def test_a_call_site_the_spine_showed_is_not_a_fabrication(self):
+        """The prompt shows "called at X:130" and calls it the proof of the edge.
+
+        A live run cited five call sites and every one was reported as invented, because the
+        admissible set held definition coordinates only. The guard was rejecting exactly what
+        the prompt had told the model to rely on.
+        """
+        evidence = self._evidence_with_call_sites()
+
+        assert unsupported_locations(
+            'The write happens at MergeIntoCommand.scala:130.', evidence) == ()
+
+    def test_a_basename_resolves_to_the_one_location_it_can_mean(self):
+        """An answer writes `InsertOnlyMergeExecutor.scala:53`, not the whole JVM path.
+
+        Measured on a live run: 11 of 11 cited coordinates were real and every one was
+        reported unsupported, because the set holds
+        `spark/src/main/scala/delta/merge/InsertOnlyMergeExecutor.scala:53` and the answer
+        wrote the file name. A basename that matches exactly one known location is that
+        location; the index says so.
+        """
+        evidence = self._evidence_with_call_sites()
+
+        assert unsupported_locations(
+            'See InsertOnlyMergeExecutor.scala:53.', evidence) == ()
+
+    def test_an_ambiguous_basename_is_reported_rather_than_assumed(self):
+        """Two files of the same name at the same line: the citation cannot be pinned."""
+        hops = [
+            StructuralCitation(qualified_name='a.Thing.run', file='one/Thing.scala',
+                               line_start=7, source_name=SOURCE, relation='calls', hop=1,
+                               call_site_file='one/Caller.scala', call_site_line=3,
+                               line_end=9),
+            StructuralCitation(qualified_name='b.Thing.run', file='two/Thing.scala',
+                               line_start=7, source_name=SOURCE, relation='calls', hop=1,
+                               call_site_file='two/Caller.scala', call_site_line=4,
+                               line_end=9),
+        ]
+        evidence = AnswerEvidence(bundle_citations=hops, locations=locations_for(hops))
+
+        assert unsupported_locations('It is in Thing.scala:7.', evidence) == (
+            'Thing.scala:7',)
+
+    def test_an_invented_location_is_still_caught(self):
+        """The guard must keep working: this is what it exists for."""
+        evidence = self._evidence_with_call_sites()
+
+        assert unsupported_locations(
+            'Handled in NoSuchFile.scala:999.', evidence) == ('NoSuchFile.scala:999',)
+
+    def test_the_payload_finds_the_hop_a_shortened_citation_refers_to(self):
+        """`cited_by` must match the way the guard matches, or the payload comes back empty.
+
+        On the live run it returned 0 citations for an answer that cited eleven real
+        coordinates — the caller got nothing to navigate with.
+        """
+        evidence = self._evidence_with_call_sites()
+
+        cited = evidence.cited_by('Written by InsertOnlyMergeExecutor.scala:53, '
+                                 'called at MergeIntoCommand.scala:130.')
+
+        assert [entry['qualified_name'] for entry in cited] == [
+            'm.InsertOnly.writeOnlyInserts']
+class TestBareLineReferences:
+    """`(and again at :166)` names a line without a file. Expand it, don't ask the model to.
+
+    Two reasons, and the second matters more. A reader gets a coordinate they can open
+    without scanning back for the antecedent. And ``_LOCATION`` requires ``file.ext:line``,
+    so a bare ``:166`` is invisible to the guard: it is neither validated nor resolved into a
+    citation. Expanding it after the fact costs no prompt tokens and puts every claim the
+    answer makes in front of the same check.
+    """
+
+    def test_a_bare_line_inherits_the_file_named_before_it(self):
+        answer = ('invoked at MergeIntoCommand.scala:130 (and again at :166), then '
+                  'ClassicMergeExecutor.scala:285 (and :155).')
+
+        expanded = expand_bare_lines(answer)
+
+        assert 'MergeIntoCommand.scala:166' in expanded
+        assert 'ClassicMergeExecutor.scala:155' in expanded
+
+    def test_a_bare_line_with_nothing_before_it_is_left_alone(self):
+        """No antecedent means no claim to make explicit."""
+        assert expand_bare_lines('see :166 for details') == 'see :166 for details'
+
+    def test_ordinary_prose_and_times_are_not_coordinates(self):
+        for text in ('Note: 166 rows', 'at 12:30 the job ran', 'ratio 3:4'):
+            assert expand_bare_lines(text) == text
+
+    def test_an_expanded_reference_is_judged_by_the_guard_like_any_other(self):
+        """Expansion makes the model's implicit claim explicit — including a wrong one.
+
+        Expanding only when it resolves would hide a bad claim from the check, which is
+        backwards: the point is that every coordinate is verified, not that the text looks
+        tidy.
+        """
+        hops = [StructuralCitation(
+            qualified_name='m.run', file='delta/MergeIntoCommand.scala', line_start=130,
+            source_name=SOURCE, relation='calls', hop=1,
+            call_site_file='delta/Caller.scala', call_site_line=8, line_end=140)]
+        evidence = AnswerEvidence(bundle_citations=hops, locations=locations_for(hops))
+
+        answer = expand_bare_lines('runs at MergeIntoCommand.scala:130 (and again at :999)')
+
+        assert unsupported_locations(answer, evidence) == ('MergeIntoCommand.scala:999',)
+class TestAHopSaysWhatSCIPRecorded:
+    """A type reference is not a call, and the prompt must not claim it was.
+
+    The walk already records the distinction — ``relation='references'`` for a ``type_ref``
+    edge, ``'calls'`` for a ``call`` — and the renderer discarded it, labelling every hop
+    ``called at``. That matters because of how framework components are wired: measured on
+    the live store, the only inbound edges an analyzer rule has from outside itself are
+    ``type_ref``, emitted where the extension registers it. Rendering that as "called at"
+    tells synthesis the rule was invoked at the registration site, which the index never
+    claimed — a false mechanism on a real coordinate, which is the one fabrication the
+    location guard cannot catch.
+    """
+
+    def _hop(self, relation, stop_reason, qualified_name, call_line):
+        return BundleHop(
+            citation=StructuralCitation(
+                qualified_name=qualified_name, file='pkg/rule.py', line_start=3,
+                source_name=SOURCE, relation=relation, hop=1,
+                call_site_file='ext.py', call_site_line=call_line,
+                stop_reason=stop_reason, line_end=40),
+            evidence=f'What {qualified_name} does.')
+
+    def test_each_hop_is_labelled_the_way_scip_recorded_it(self):
+        spine = render_spine(ChainBundle(hops=[
+            self._hop('calls', 'leaf', 'pkg.runner.run', 11),
+            self._hop('references', 'reference', 'pkg.Rule', 12),
+        ]))
+
+        assert 'called at ext.py:11' in spine, 'a call edge is still a call'
+        assert 'referenced at ext.py:12' in spine, (
+            'a type_ref edge must be presented as a reference')
+        assert spine.count('called at') == 1, (
+            'the reference hop must not be described as a call')

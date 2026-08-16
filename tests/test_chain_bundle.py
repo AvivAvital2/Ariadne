@@ -28,11 +28,13 @@ from library.structural_assembly import StructuralCitation
 SOURCE = 'src1'
 
 
-def _citation(qn, *, hop, line, stop_reason, file='pkg/alpha.py'):
+def _citation(qn, *, hop, line, stop_reason, file='pkg/alpha.py', line_end=None):
     return StructuralCitation(
         qualified_name=qn, file=file, line_start=line, source_name=SOURCE,
         relation='calls', hop=hop, call_site_file='pkg/alpha.py',
         call_site_line=line + 100, stop_reason=stop_reason,
+        # a real extent by default; stage two quotes a hop from it
+        line_end=line + 6 if line_end is None else line_end,
     )
 
 
@@ -75,16 +77,21 @@ def test_every_hop_carries_coordinates_and_its_document(library):
     assert bundle.documents_found == 3
     # order is the trace's order, never a relevance order
     assert [h.citation.hop for h in bundle.hops] == [1, 2, 1]
+def test_which_hops_carry_a_document_follows_the_stop_reason_the_walk_recorded(library):
+    """``descended`` and ``leaf`` earn their document; ``plumbing`` is cited and left alone.
 
-
-def test_prose_follows_the_stop_reason_the_walk_recorded(library):
-    """`descended` and `leaf` earn prose; `plumbing` is cited and left alone."""
+    The traversal already recorded why it stopped at each hop, so curation reads that
+    instead of inventing a relevance score. An earlier version inferred it from the
+    trace's shape and starved exactly the wrong hops: a destination like
+    ``writeAllChanges`` is a ``leaf``, and the leaf is usually where the work happens.
+    """
     bundle = curate_bundle(library, CHAIN, source=SOURCE)
     evidence = {h.citation.qualified_name: h.evidence for h in bundle.hops}
 
     assert evidence['pkg.alpha.Alpha.run'] == 'Runs the alpha operation end to end.'
     assert evidence['pkg.beta.Beta.start'] == 'Starts beta processing.'
-    assert evidence['pkg.aaa_util.Util.common'] is None
+    assert evidence['pkg.aaa_util.Util.common'] is None, (
+        'plumbing is named, not explained')
 
 
 def test_a_hop_with_no_document_still_carries_its_coordinates(library):
@@ -99,17 +106,24 @@ def test_a_hop_with_no_document_still_carries_its_coordinates(library):
     assert ghost.title is None
     assert (ghost.citation.file, ghost.citation.line_start) == ('pkg/ghost.py', 9)
     assert bundle.documents_found == 3
+def test_every_explained_hop_is_attached_and_the_renderer_bounds_the_prompt(library):
+    """Curation has no size budget: ``render_spine`` is the only thing that bounds output.
 
+    Measured across evidence caps of 6k, 12k, 20k, 60k and 200k chars, the rendered spine
+    stayed at ~20,000 chars every time — the cap changed nothing about the prompt, only
+    which hops were explained, decided before the renderer knew what it would keep. Two
+    constants were guessing at one constraint and the one that binds was not the one being
+    tuned.
 
-def test_the_context_budget_rations_prose_and_reports_what_it_dropped(library):
-    bundle = curate_bundle(library, CHAIN, source=SOURCE, max_evidence_chars=30)
+    So every chain-material hop is attached, and the omission is reported once, by the
+    stage that performs it: ``render_spine`` cuts from the tail, preserving execution
+    order, and says how many hops it dropped.
+    """
+    bundle = curate_bundle(library, CHAIN, source=SOURCE)
+    explained = [h for h in bundle.hops if h.evidence]
 
-    kept = [h for h in bundle.hops if h.evidence]
-    assert len(kept) == 1
-    assert bundle.evidence_omitted == 1
-    # coordinates survive rationing — they are what makes an answer checkable
-    assert len(bundle.hops) == 3
-    assert all(h.citation.line_start for h in bundle.hops)
+    assert len(explained) == 2, "both chain-material hops carry their document"
+    assert all(h.citation.line_start for h in bundle.hops), 'coordinates survive'
 
 
 def test_an_empty_chain_yields_an_empty_bundle_not_an_error(library):
@@ -212,3 +226,26 @@ def test_a_docstring_is_never_used_as_evidence(library):
     assert (ghost.citation.file, ghost.citation.line_start) == ('pkg/ghost.py', 9), (
         'coordinates survive — they are the checkable part'
     )
+def test_the_hop_carries_its_document_because_that_is_what_the_model_reads(library):
+    """The document is the payload; the coordinates are the traceability. Not the reverse.
+
+    This reverses what an earlier version of this file asserted — that a hop is quoted from
+    source and a generated document must not travel. That confused two different things.
+    Distrust of prose is about *authority for a claim*: a docstring or a human-authored
+    guide can contradict the code, and search-retrieved prose concatenated as background is
+    worse. A per-hop ``catalog`` document is neither — it is fetched by deterministic id
+    from the symbol the walk actually reached, and its description is derived from that
+    code.
+
+    The division of labour is the point. A generated description can be wrong; a SCIP
+    coordinate cannot. So the description is what the model reads, and ``file:line`` is what
+    makes every claim checkable afterwards — which is why source text does not travel here
+    and coordinates always do.
+    """
+    bundle = curate_bundle(library, CHAIN, source=SOURCE)
+    beta = next(h for h in bundle.hops
+                if h.citation.qualified_name == 'pkg.beta.Beta.start')
+
+    assert beta.evidence == 'Starts beta processing.'
+    assert beta.title == 'Beta.start'
+    assert (beta.citation.file, beta.citation.line_start) == ('pkg/beta.py', 3)

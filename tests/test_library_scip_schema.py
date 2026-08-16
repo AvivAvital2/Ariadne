@@ -136,3 +136,12 @@ def test_double_init_preserves_all_required_columns() -> None:
             )
     finally:
         conn.close()
+def test_scip_schema_indexes_exact_display_name_lookup(fresh_scip_db):
+    conn = fresh_scip_db
+
+    indexes = {row[1] for row in conn.execute("PRAGMA index_list(scip_symbols)")}
+    columns = [row[2] for row in conn.execute(
+        "PRAGMA index_info(idx_scip_symbols_display)")]
+
+    assert "idx_scip_symbols_display" in indexes
+    assert columns == ["display_name", "source_name"]

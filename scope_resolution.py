@@ -137,4 +137,4 @@ def make_scoped_library(
     # designs/spool-environment-plugin.md §18.6.4); an unresolvable spool is
     # simply absent here, its gap surfaces via `ariadne spools` / honest-gap.
     from spools import active_spool_sources
-    return ScopedLibrary(library, closure | active_spool_sources(config))
+    return ScopedLibrary(library, closure | active_spool_sources(config, for_project=resolved))

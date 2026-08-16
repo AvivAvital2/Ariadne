@@ -37,6 +37,7 @@ if __name__ != '__main__':
     from library.intelligence import IntelligenceMixin
     from library.migrations import MigrationsMixin
     from library.quality import QualityMixin
+    from library.clews import init_clews_schema
     from library.scip import init_scip_schema
     from library.search import SearchMixin
     from library.themes import (
@@ -283,6 +284,7 @@ class Library(
             conn.executescript(_CLUSTER_HISTORY_SCHEMA)
             conn.executescript(_THEME_SYNCED_HASHES_SCHEMA)
             conn.execute(_SPOOL_ASSOC_SYNC_SCHEMA)
+            init_clews_schema(conn)
             init_scip_schema(conn)
             
             # Migration: add string_literals.kind (plain|fstring) if missing

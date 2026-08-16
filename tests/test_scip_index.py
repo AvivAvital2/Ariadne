@@ -337,3 +337,70 @@ class TestLocalShapes:
 
         ids = {o.symbol for d in index.documents for o in d.occurrences}
         assert len(ids) == 2
+class TestAContainerBodyExtendsPastItsMembers:
+    """A class's body does not end where its first member begins.
+
+    scip-java emits no ``enclosing_range``, so an extent is reconstructed positionally:
+    a definition ends where the next definition starts. For a *container* the next
+    definition is its own first member, one line down, so every class collapsed to a
+    single line. Measured on the live databricks store: 47.5% of ``Class`` and 60.7% of
+    ``Object`` symbols recorded a one-line body, against 0.1% of ``StaticMethod`` — and
+    292 of 292 sampled single-line containers had their next definition within two lines.
+
+    An unquotable hop is the failure this closes: stage two quotes a hop from its extent,
+    so a container with a one-line body has nothing to show.
+
+    Descendants are recognised by the moniker, which is hierarchical — a member's symbol
+    string starts with its container's — so this needs no language-specific rule.
+    """
+
+    def test_a_class_extends_past_its_own_members(self):
+        cls = 'scip-java java src1 0.1 `pkg`/Widget#'
+        member = 'scip-java java src1 0.1 `pkg`/Widget#run().'
+        sibling = 'scip-java java src1 0.1 `pkg`/Other#'
+        doc = ScipDocument('Widget.java', occurrences=(
+            _occ(cls, 10, definition=True),        # class Widget {
+            _occ(member, 11, definition=True),     #   void run() {
+            _occ(sibling, 40, definition=True),    # class Other {
+        ))
+
+        start, end = doc.extent_of(doc.definitions()[0])
+
+        assert (start, end) == (11, 40), (
+            'the class must run to the next NON-descendant definition, not to its own '
+            f'first member; got {(start, end)}'
+        )
+
+    def test_a_member_still_ends_at_the_next_sibling(self):
+        """The original rule is right for a leaf — only containers were wrong."""
+        cls = 'scip-java java src1 0.1 `pkg`/Widget#'
+        first = 'scip-java java src1 0.1 `pkg`/Widget#run().'
+        second = 'scip-java java src1 0.1 `pkg`/Widget#stop().'
+        doc = ScipDocument('Widget.java', occurrences=(
+            _occ(cls, 10, definition=True),
+            _occ(first, 11, definition=True),
+            _occ(second, 25, definition=True),
+        ))
+
+        start, end = doc.extent_of(doc.definitions()[1])
+
+        assert (start, end) == (12, 25), f'got {(start, end)}'
+def test_proto_preserves_canonical_enclosing_symbol(tmp_path):
+    from docgen.scip import scip_pb2
+
+    owner = "semanticdb maven . . pkg/Owner#"
+    child = "semanticdb maven . . pkg/Owner#run()."
+    index = scip_pb2.Index()
+    document = index.documents.add()
+    document.relative_path = "Owner.scala"
+    info = document.symbols.add()
+    info.symbol = child
+    info.kind = scip_pb2.SymbolInformation.Kind.Value("Method")
+    info.enclosing_symbol = owner
+    path = tmp_path / "ownership.scip"
+    path.write_bytes(index.SerializeToString())
+
+    loaded = ScipIndex.load(
+        path, repo="src1", max_staleness_days=None)
+
+    assert loaded.documents[0].symbols[0].enclosing_symbol == owner

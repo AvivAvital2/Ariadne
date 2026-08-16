@@ -24,14 +24,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from library import Library
     from library.structural_assembly import StructuralCitation
 
-#: Prose characters a bundle may carry. A neighbour's ``explanation`` averages 8,421
-#: characters (~2.1k tokens), so an unrationed bundle at p90 fan-out would add ~23k tokens
-#: of context nobody asked for (design §5 contract item 7).
-DEFAULT_MAX_EVIDENCE_CHARS = 6000
 @dataclass(frozen=True)
 class BundleHop:
     """One hop: always coordinates, sometimes prose."""
@@ -58,8 +55,6 @@ class ChainTheme:
     hops: int
     member_count: int
     coherent: bool
-
-
 @dataclass(frozen=True)
 class ChainBundle:
     """What synthesis receives, plus an account of what was left out."""
@@ -67,21 +62,41 @@ class ChainBundle:
     hops: list[BundleHop] = field(default_factory=list)
     themes: list[ChainTheme] = field(default_factory=list)
     documents_found: int = 0
-    evidence_chars: int = 0
-    evidence_omitted: int = 0
 
 
-#: Stop reasons that are chain material and therefore worth prose. ``plumbing`` and
-#: ``revisit`` are cited for their coordinates alone.
-PROSE_WORTHY = frozenset({'descended', 'leaf', 'depth'})
+#: Stop reasons whose hop carries its document. ``plumbing`` and ``revisit`` are cited for
+#: their coordinates alone — a revisited body was already explained above, and plumbing is
+#: named without being opened.
+#:
+#: ``reference`` earns its document for the same reason it earns a citation: the type a body
+#: touches is part of what the body does, and a catalog entry for a type is a signature and a
+#: sentence, not a body.
+EXPLAINED = frozenset({'descended', 'leaf', 'depth', 'reference'})
 def curate_bundle(
     library: 'Library',
     citations: list['StructuralCitation'],
     *,
     source: str,
-    max_evidence_chars: int = DEFAULT_MAX_EVIDENCE_CHARS,
 ) -> ChainBundle:
-    """Attach each hop's document to it, rationing prose but never coordinates."""
+    """Attach each hop's document to it. Coordinates always; a description when the hop
+    is chain material and the catalog has one.
+
+    The division of labour this rests on: **a generated description can be wrong, a SCIP
+    coordinate cannot.** So the description is what synthesis reads and ``file:line`` is what
+    makes the resulting claim checkable. Source text does not travel — that is what the
+    coordinates are for, and a reader who wants the body has an exact place to open.
+
+    The document is the per-symbol ``catalog`` entry, fetched by deterministic id from the
+    symbol the walk reached. It is not search-retrieved prose and not a docstring: measured
+    at production width, 2,362 of 2,645 hops have one, 883 distinct documents totalling
+    ~88,600 tokens against ~227,700 for the same chain quoted from source.
+
+    No size budget here: ``render_spine`` is the only thing that bounds the prompt,
+    and it cuts from the tail preserving execution order while saying what it
+    dropped. A second budget in curation changed nothing about the prompt — the
+    spine measured ~20,000 chars at every cap from 6k to 200k — it only chose which
+    hops were explained, blindly, before the renderer knew what it would keep.
+    """
     from docgen.catalog_writer import _element_doc_id
 
     if not citations:
@@ -119,23 +134,16 @@ def curate_bundle(
                 theme_rows[cluster_id] = (theme_title, members, bool(coherent))
 
     hops: list[BundleHop] = []
-    spent = 0
-    omitted = 0
     for citation in citations:
         doc_id = wanted[citation.qualified_name]
         record = found.get(doc_id)
         title, content = record if record is not None else (None, '')
-        # Only a generated document may be evidence. A docstring is author prose --
-        # stale, aspirational, or contradicting the code it sits above -- and stage five
-        # verifies coordinates, not claims, so prose that nothing checks must not travel
-        # beside prose that something does. Code first, everything else suspect.
-        evidence = None
-        if content and citation.stop_reason in PROSE_WORTHY:
-            if spent + len(content) <= max_evidence_chars:
-                evidence = content
-                spent += len(content)
-            else:
-                omitted += 1
+        # The document is the evidence the model reads. A hop with none still travels on its
+        # coordinates: 10.7% of hops at production width have no catalog entry, and that is
+        # a gap to close in doc generation, not one to paper over here with something the
+        # model might misread.
+        evidence = (content or None
+                    if citation.stop_reason in EXPLAINED else None)
         hops.append(BundleHop(
             citation=citation,
             document_id=doc_id if record is not None else None,
@@ -158,5 +166,4 @@ def curate_bundle(
         key=lambda theme: (-theme.hops, theme.member_count, theme.title),
     )
 
-    return ChainBundle(hops=hops, themes=themes, documents_found=len(found),
-                       evidence_chars=spent, evidence_omitted=omitted)
+    return ChainBundle(hops=hops, themes=themes, documents_found=len(found))

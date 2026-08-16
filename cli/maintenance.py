@@ -455,6 +455,7 @@ def cmd_migrate(args: argparse.Namespace) -> int:
             ambiguous = 0
             no_match = 0
             unmatched_samples: list[tuple[str, str]] = []
+            by_source: dict = {}
             with library._conn_provider.acquire() as conn:
                 rows = conn.execute(
                     'SELECT id, source_files FROM documents '
@@ -479,19 +480,24 @@ def cmd_migrate(args: argparse.Namespace) -> int:
                             matched.append(name)
                             break  # longest match wins; stop after first
                     if len(matched) == 1:
-                        conn.execute(
-                            'UPDATE documents SET source_name = ? WHERE id = ?',
-                            (matched[0], doc_id),
-                        )
+                        if not args.dry_run:
+                            conn.execute(
+                                'UPDATE documents SET source_name = ? WHERE id = ?',
+                                (matched[0], doc_id),
+                            )
                         updated += 1
+                        by_source[matched[0]] = by_source.get(matched[0], 0) + 1
                     elif len(matched) > 1:
                         ambiguous += 1
                     else:
                         no_match += 1
                         if len(unmatched_samples) < 10:
                             unmatched_samples.append((doc_id, primary))
-
-            console.print(f'[green]Backfilled source_name on {updated} doc(s).[/green]')
+            verb = 'Would backfill' if args.dry_run else 'Backfilled'
+            console.print(f'[green]{verb} source_name on {updated} doc(s).[/green]')
+            if args.dry_run and by_source:
+                for _name, _count in sorted(by_source.items(), key=lambda kv: -kv[1]):
+                    console.print(f'  [dim]-> {_name}: {_count} doc(s)[/dim]')
             if ambiguous:
                 console.print(f'[yellow]Ambiguous (multiple sources matched): {ambiguous}[/yellow]')
             if no_match:

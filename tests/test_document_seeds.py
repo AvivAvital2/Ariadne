@@ -152,3 +152,26 @@ def test_the_file_route_wins_and_suppresses_scraping(conn):
     assert result.seeds == ['scip-python python src1 0.1 `m3`/fn().']
     assert result.from_mentions == 0
     assert result.ambiguous_mentions == 0
+def test_a_document_with_no_file_to_point_at_may_not_seed_the_walk(conn):
+    """A theme is Ariadne's own prose about a cluster, so it seeds nothing.
+
+    Measured store-wide: 2,581 documents carry no ``source_files``, and 2,579 of them are
+    themes. On a production question (8 documents, source ``databricks``, depth 3) the one
+    theme retrieved contributed 23 of 127 seeds by having its text scraped, and those 23
+    produced **21,713 of the walk's 25,313 hops** — because the names its own "Caveats"
+    section lists as *false positives* of the clustering (``Corr``, ``Covariance``,
+    ``ParquetFilters``) are graph hubs. The chain for a MERGE question came out widest at
+    ``Corr.scala:127``, correlation statistics.
+
+    A document earns a seed by pointing at a file. Prose that points at nothing does not:
+    code first, and a generated summary is not code. The recovery route stays for
+    documents that *do* name files the index cannot resolve — 34,235 of them in the live
+    databricks store, mostly catalog entries for files outside the SCIP index.
+    """
+    theme = {'content': 'The cluster includes Solitary among its members.',
+             'source_files': []}
+
+    result = seeds_from_documents(conn, [theme], source='src1', indexer_cwds=CWDS)
+
+    assert result.seeds == [], 'prose with no file to point at seeds nothing'
+    assert result.from_mentions == 0
