@@ -14,6 +14,8 @@ import numpy as np
 from attrs import field, frozen
 from numpy.typing import NDArray
 
+from model_config import EMBEDDING_DIM
+
 __all__ = [
     'ARIADNE_NAMESPACE',
     'CATALOG_KINDS',
@@ -50,8 +52,6 @@ CatalogKind = Literal['element', 'file_index']
 CATALOG_KIND_ELEMENT: CatalogKind = 'element'
 CATALOG_KIND_FILE_INDEX: CatalogKind = 'file_index'
 CATALOG_KINDS: tuple[str, ...] = get_args(CatalogKind)
-
-EMBEDDING_DIM = 3072  # OpenAI text-embedding-3-small dimension
 
 
 def _generate_id() -> str:
@@ -170,7 +170,7 @@ class Document:
         title: Human-readable title.
         content: Full markdown content.
         source_files: List of related source file paths.
-        embedding: Vector embedding of the content (1536 dimensions for OpenAI).
+        embedding: Vector embedding of the content (3072 dimensions in the bound space).
         created_at: ISO timestamp of creation.
         updated_at: ISO timestamp of last update.
         metadata: Additional JSON-serializable metadata. Reserved keys:

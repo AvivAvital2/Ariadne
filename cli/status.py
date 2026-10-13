@@ -17,6 +17,7 @@ from rich.table import Table
 
 import slack_usage
 import testimonials
+from cli.runtime import run_async
 from config import get_config
 
 if TYPE_CHECKING:
@@ -474,11 +475,10 @@ def cmd_gaps(args: argparse.Namespace) -> int:
         )
 
         if args.analyze:
-            import asyncio
             try:
                 from gap_analysis import analyze_gaps
                 console.print('\n[bold]Running LLM gap analysis...[/bold]')
-                gap_report = asyncio.run(analyze_gaps(report['recent_misses']))
+                gap_report = run_async(analyze_gaps(report['recent_misses']))
                 console.print(f'\n[bold]{gap_report.summary}[/bold]\n')
                 for rec in gap_report.recommendations:
                     console.print(
@@ -495,7 +495,6 @@ def cmd_gaps(args: argparse.Namespace) -> int:
 
     finally:
         library.close()
-
 
 def cmd_vacuum(args: argparse.Namespace) -> int:
     """Optimize the database file size."""

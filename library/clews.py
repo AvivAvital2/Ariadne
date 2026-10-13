@@ -735,12 +735,16 @@ def nearest_clew_matches(
     source_name: str,
     top_k: int = 5,
     min_similarity: float = DEFAULT_MIN_CLEW_SIMILARITY,
+    candidate_ids: tuple[str, ...] | None = None,
 ) -> list[ClewMatch]:
     """Return scored routes above a threshold, diversified by entry point.
 
     The source vector surface is normalized once per database revision. Queries then use
     one matrix-vector operation; only the winning clew metadata is decoded from SQLite.
     """
+    candidates = None if candidate_ids is None else set(candidate_ids)
+    if candidates is not None and not candidates:
+        return []
     conn.row_factory = __import__('sqlite3').Row
     query = np.asarray(query, dtype=np.float32)
     norm = float(np.linalg.norm(query))
@@ -755,6 +759,8 @@ def nearest_clew_matches(
     entries = set()
     for position in order:
         offset = int(position)
+        if candidates is not None and index["ids"][offset] not in candidates:
+            continue
         if not bool(index["valid"][offset]):
             continue
         similarity = float(similarities[offset])

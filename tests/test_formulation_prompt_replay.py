@@ -59,6 +59,19 @@ def test_fragment_recall_requires_every_literal_fragment_in_each_witness():
         "filter dropped"]
 
 
+def test_recorded_routes_position_replay_without_a_profiler():
+    module = _module()
+    specs = module.recorded_route_specs({
+        'route_candidates': {'R1': ['pkg.Start', 'pkg.End'], 'R2': []},
+    })
+    assert specs == [{'id': 'R1', 'route': ('pkg.Start', 'pkg.End')}]
+    match, = module.recorded_matches(specs, {'question': 'How?'}, 'src')
+    assert match.clew.source_name == 'src'
+    assert match.clew.entry_symbol == 'pkg.Start'
+    assert match.clew.route == ['pkg.Start', 'pkg.End']
+    assert match.clew.question == 'How?'
+
+
 def test_replay_prompt_hydrates_recorded_occurrences_and_audits_story(
         monkeypatch, tmp_path):
     from types import SimpleNamespace
@@ -75,9 +88,9 @@ def test_replay_prompt_hydrates_recorded_occurrences_and_audits_story(
     from ariadne_mcp.service import AriadneService
     monkeypatch.setattr(AriadneService, "get", staticmethod(lambda: service))
     monkeypatch.setattr(
-        module.profiler, "recorded_route_specs",
+        module, "recorded_route_specs",
         lambda answer: [{"id": "R1", "route": ("pkg.Entry",)}])
-    monkeypatch.setattr(module.profiler, "_matches", lambda *args: ["match"])
+    monkeypatch.setattr(module, "recorded_matches", lambda *args: ["match"])
     monkeypatch.setattr("library.chain_answer.evidence_for", lambda *args, **kwargs: evidence)
     monkeypatch.setattr("library.chain_menu._occurrence_key", lambda value: occurrence)
     monkeypatch.setattr(
@@ -116,14 +129,14 @@ def test_replay_prompt_rejects_missing_routes_or_unmatched_occurrences(monkeypat
     from types import SimpleNamespace
 
     module = _module()
-    monkeypatch.setattr(module.profiler, "recorded_route_specs", lambda answer: [])
+    monkeypatch.setattr(module, "recorded_route_specs", lambda answer: [])
     with pytest.raises(ValueError, match="no recorded routes"):
         module.replay_prompt({}, {}, source="src")
 
     monkeypatch.setattr(
-        module.profiler, "recorded_route_specs",
+        module, "recorded_route_specs",
         lambda answer: [{"id": "R1", "route": ("pkg.Entry",)}])
-    monkeypatch.setattr(module.profiler, "_matches", lambda *args: ["match"])
+    monkeypatch.setattr(module, "recorded_matches", lambda *args: ["match"])
     service = SimpleNamespace(library=object())
     from ariadne_mcp.service import AriadneService
     monkeypatch.setattr(AriadneService, "get", staticmethod(lambda: service))

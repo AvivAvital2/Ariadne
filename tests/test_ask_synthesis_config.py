@@ -353,7 +353,7 @@ async def test_ask_falls_back_to_the_whole_chain_when_nothing_is_chosen(
 
     assert 'ANSWER at w.py:20' in result.answer
     assert len(calls) == 3
-    assert 'Call chain:' in calls[2], 'the full chain travels when nothing was chosen'
+    assert 'Transitions:' in calls[2], 'the full chain travels when nothing was chosen'
 @pytest.mark.asyncio
 async def test_ask_expands_a_bare_line_reference_in_the_answer(
     service, library, monkeypatch,
@@ -473,6 +473,46 @@ async def test_chain_synthesis_failure_cannot_retain_chain_confidence(
     assert result.confidence_reasons == ["synthesis failed: RuntimeError"]
     assert result.citations == []
     assert result.chain_citations
+@pytest.mark.asyncio
+@pytest.mark.parametrize('truncated_phase', [
+    'scip-component-select', 'scip-exact-route-select', 'scip-body-select',
+])
+async def test_selection_consumes_provider_usage_without_losing_evidence(
+    service, library, monkeypatch, truncated_phase,
+):
+    _seed_chain(library)
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+    monkeypatch.setattr('library.chain_menu.definition_body_selection_requires_llm', lambda *a: True)
+    phases = []
+
+    async def completion(messages, *, phase=None, max_tokens=2048, usage_sink=None, **kwargs):
+        phases.append(phase)
+        if usage_sink is not None:
+            usage_sink.append({
+                'stop_reason': 'max_tokens' if phase == truncated_phase else 'end_turn',
+                'output_tokens': max_tokens if phase == truncated_phase else 5,
+                'max_tokens': max_tokens,
+            })
+        return {
+            'scip-component-select': '1',
+            'scip-exact-route-select': 'R1',
+            'scip-body-select': 'B1',
+        }.get(phase, 'The widget flushes at w.py:20.')
+
+    monkeypatch.setattr('llm.chat_complete', completion)
+    result = await service.ask('How does the widget subsystem work?', source='test')
+    assert truncated_phase in phases
+    assert result.route_selection_status == 'selected'
+    assert result.selected_route_ids and result.selected_body_symbols
+    diagnostics = result.graph_diagnostics['post_walk_selection']
+    if truncated_phase == 'scip-component-select':
+        assert diagnostics['component_decision']['outcome'] == 'component-scope-skipped:incomplete'
+    elif truncated_phase == 'scip-exact-route-select':
+        assert set(result.selected_route_ids) == set(result.route_candidates)
+    else:
+        assert len(result.selected_body_symbols) == diagnostics['body_candidates']
+
+
 def test_transition_ledger_wiring_is_not_duplicated():
     source = Path("ariadne_mcp/service_analysis.py").read_text()
     assert source.count("transition_supported = []") == 1
@@ -649,7 +689,7 @@ async def test_deterministic_selection_uses_one_formulation_call_and_reports_pha
     assert len(calls) == 1
     prompt = "\n".join(
         message["content"] for message in calls[0] if message["role"] == "user")
-    assert "Call chain:" in prompt
+    assert "Transitions:" in prompt
     assert "w.py:7" in prompt and "w.py:20" in prompt, (result.selected_symbols, result.selected_body_symbols, result.hydrated_symbols, result.selected_route_ids)
     assert result.route_selection_status == "deterministic"
     assert result.selected_route_ids
@@ -761,7 +801,7 @@ def test_ask_does_not_restore_every_unselected_mandatory_alternative():
     import inspect
     source = inspect.getsource(AnalysisMixin.ask)
 
-    exact = source.index("resolve_obligation_route_selection")
+    exact = source.index("selection = guarded_route_selection(")
     hydrate = source.index("hydrate_selected_hops(", exact)
     assert "retain_mandatory_routes(menu, selection)" not in source[exact:hydrate]
 

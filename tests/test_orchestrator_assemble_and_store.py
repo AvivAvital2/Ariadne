@@ -6,7 +6,7 @@ After the batch fetches results, this method:
 2. Wraps each successful response into a ``GeneratedDoc`` via
    ``DocGenerator.assemble_doc``.
 3. Validates each doc — failures count as ``docs_failed`` with NO
-   retry (per Decision 1a / ``BATCH_VALIDATION_RETRY = False``).
+   inline retry; the dispatcher handles bounded retries as new batches.
 4. Stores docs in the library unless ``dry_run``.
 5. Records staleness for stored doc_ids.
 
@@ -108,13 +108,11 @@ def _prompts_for_files(*paths: Path) -> tuple[
 
 
 class TestBatchValidationRetryConstant:
-    def test_constant_is_false_by_default(self) -> None:
-        """Pin the contract: batch dispatch does NOT retry validation
-        failures. Bites a future change that flips this to True
-        without updating the rationale comment + docstring (and
-        without addressing the cost regression that mode change
-        introduces)."""
-        assert BATCH_VALIDATION_RETRY is False
+    def test_batch_retry_is_enabled_by_default(self) -> None:
+        """The dispatcher retries failed validations as new batches, within
+        max_batch_validation_retries; assembly itself never calls the LLM.
+        """
+        assert BATCH_VALIDATION_RETRY is True
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +200,7 @@ class TestAssembleAndStorePartialResults:
 
 
 # ---------------------------------------------------------------------------
-# Validation: no retry on failure (Decision 1a)
+# Validation: assembly never retries inline
 # ---------------------------------------------------------------------------
 
 
@@ -259,7 +257,7 @@ class TestAssembleAndStoreValidationNoRetry:
         self, tmp_path: Path,
     ) -> None:
         """Validation FAIL → docs_failed += 1 with NO retry call to
-        the LLM. Pins Decision 1a / BATCH_VALIDATION_RETRY = False.
+        the LLM. Only the dispatcher resubmits failed prompts as batches.
         Bites a fix that wires the streaming retry into batch (which
         would silently halve the batch discount the user opted into)."""
         a = tmp_path / 'a.py'

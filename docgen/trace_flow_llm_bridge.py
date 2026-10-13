@@ -230,7 +230,10 @@ def build_llm_bridge(
 
         try:
             text = complete(prompt)
-        except Exception:
+        except Exception as error:
+            from inference import raise_inference_error
+
+            raise_inference_error(error)
             return (None, '')
         if not text:
             return (None, '')
@@ -330,10 +333,18 @@ def _completion_from_config() -> Callable[[str], str | None]:
     """
     import os
 
-    from cli.generate import resolve_provider
     from config import get_config
+    from model_config import resolve_provider
 
     cfg = get_config()
+    from inference import current_context
+
+    context = current_context()
+    if context is not None and context.local:
+        context.validate(credentials=True)
+        return lambda prompt: context.chat.call_sync('', prompt, max_tokens=1024, timeout=30.0)
+    if cfg.provider == 'local':
+        raise ValueError('The local trace bridge requires the operation InferenceContext')
     model = cfg.model
     provider = resolve_provider(
         cli_provider=None,

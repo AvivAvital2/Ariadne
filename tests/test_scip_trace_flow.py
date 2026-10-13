@@ -79,7 +79,7 @@ def _insert_edge(
 ) -> None:
     conn.execute(
         'INSERT INTO scip_edges VALUES (?, ?, ?, ?, ?, ?)',
-        (caller, callee, 'reference', file, line, 'scip'),
+        (caller, callee, 'call', file, line, 'scip'),
     )
 
 

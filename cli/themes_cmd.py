@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.table import Table
 
+from cli.runtime import ConcurrencyAction, run_async
 from config import get_config
 
 if TYPE_CHECKING:
@@ -50,7 +51,8 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     themes_build.add_argument('--batch', action='store_true',
         help='Summarize dirty themes via the provider batch API '
              '(~50%% off, up to 24h) instead of the live per-theme path')
-    themes_build.add_argument('--concurrency', '-c', type=int, default=3, help='Max concurrent LLM calls for theme summarization')
+    themes_build.set_defaults(concurrency_explicit=False)
+    themes_build.add_argument('--concurrency', '-c', type=int, default=3, action=ConcurrencyAction, help='Max concurrent LLM calls for theme summarization')
 
     themes_list = themes_sub.add_parser(
         'list', help='List discovered themes',
@@ -106,7 +108,7 @@ async def cmd_themes_build(args: argparse.Namespace) -> int:
 
     cfg = get_config()
     batch_strategy = None
-    if getattr(args, 'batch', False):
+    if getattr(args, 'batch', False) and cfg.provider != 'local':
         from cli.generate import resolve_batch_strategy
 
         batch_strategy, batch_provider, key_env = resolve_batch_strategy(
@@ -122,6 +124,16 @@ async def cmd_themes_build(args: argparse.Namespace) -> int:
 
     library = get_library(getattr(args, 'db', None))
     try:
+        from inference import local_context
+
+        if local_context(library):
+            from docgen.local_pipeline import run_theme_build
+
+            result = await run_theme_build(library, enabled=cfg.themes_enabled)
+            console.print(
+                f'{result["run_id"]}: {result["state"]}; {result["applied"]} themes applied'
+            )
+            return int(result['state'] != 'completed')
         async def _build() -> dict:
             with make_progress(console=console) as progress:
                 task_id = progress.add_task(
@@ -215,8 +227,7 @@ def _cmd_themes_build(args: argparse.Namespace) -> int:
     """Synchronous wrapper for the standalone ``ariadne themes build``
     dispatch — supplies the event loop that :func:`cmd_themes_build`
     expects a caller to provide."""
-    return asyncio.run(cmd_themes_build(args))
-
+    return run_async(cmd_themes_build(args))
 
 def _cmd_themes_list(args: argparse.Namespace) -> int:
     """`ariadne themes list` — print a table of discovered themes."""
@@ -376,6 +387,7 @@ def cmd_diff_docs(args: argparse.Namespace) -> int:
         legacy_gen = DocGenerator(
             config=GeneratorConfig(
                 model=cfg.model,
+                provider=cfg.provider,
                 api_key=os.environ.get('OPENAI_API_KEY'),
             ),
             analyzer=analyzer,
@@ -416,6 +428,7 @@ def cmd_diff_docs(args: argparse.Namespace) -> int:
         new_gen = DocGenerator(
             config=GeneratorConfig(
                 model=cfg.model,
+                provider=cfg.provider,
                 api_key=os.environ.get('OPENAI_API_KEY'),
             ),
         )
@@ -448,7 +461,7 @@ def cmd_diff_docs(args: argparse.Namespace) -> int:
         return (legacy_user, new_user, legacy_output, new_output)
 
     try:
-        legacy_user, new_user, legacy_out, new_out = asyncio.run(_run())
+        legacy_user, new_user, legacy_out, new_out = run_async(_run())
     except Exception as e:
         console.print(f'[red]diff-docs failed: {e}[/red]')
         return 1
@@ -471,7 +484,6 @@ def cmd_diff_docs(args: argparse.Namespace) -> int:
         console.print(new_out or '[dim](no output)[/dim]')
 
     return 0
-
 
 def cmd_themes(args: argparse.Namespace) -> int:
     """Dispatcher for `ariadne themes <action>`."""

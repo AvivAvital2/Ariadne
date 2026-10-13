@@ -1,0 +1,453 @@
+{
+  "fixture_version": 1,
+  "note": "Synthetic artifact revisions and paths are test identities, not deployment pins.",
+  "config": {
+    "defaults": {
+      "db_path": "state/local.db",
+      "staleness_db_path": "state/local_staleness.db"
+    },
+    "llm": {
+      "provider": "local",
+      "model": "Qwen/Qwen3.8-27B",
+      "model_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "weight_format": "bf16",
+      "base_url": "http://127.0.0.1:8000/v1",
+      "api_key_env": null
+    },
+    "embeddings": {
+      "provider": "local",
+      "model": "Qwen/Qwen3-Embedding-8B",
+      "model_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "weight_format": "bf16",
+      "base_url": "http://127.0.0.1:8001/v1",
+      "api_key_env": null
+    }
+  },
+  "profile": {
+    "version": 1,
+    "generation": {
+      "version": 1,
+      "provider": "local",
+      "artifact": {
+        "repository": "Qwen/Qwen3.8-27B",
+        "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "weight_format": "bf16"
+      },
+      "tokenizer_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "embedding": {
+      "version": 1,
+      "provider": "local",
+      "model": "Qwen/Qwen3-Embedding-8B",
+      "dimensions": 3072,
+      "artifact": {
+        "repository": "Qwen/Qwen3-Embedding-8B",
+        "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "weight_format": "bf16"
+      },
+      "recipe": {
+        "name": "qwen3-embedding-8b-3072-v1",
+        "tokenizer_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "pooling": "last-token",
+        "native_dimensions": 4096,
+        "stored_dimensions": 3072,
+        "reduction": "prefix",
+        "normalization": "l2-float64-then-float32",
+        "query_instruction": "Given a question about a codebase, retrieve relevant code documentation that answers the question.",
+        "document_input": "title-newline2-content2000-v1",
+        "chunk_input": "ariadne-chunks-v1",
+        "section_input": "heading-or-introduction-v1",
+        "add_special_tokens": true
+      }
+    }
+  },
+  "canonical_profile_utf8": "{\"embedding\":{\"artifact\":{\"repository\":\"Qwen/Qwen3-Embedding-8B\",\"revision\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"weight_format\":\"bf16\"},\"dimensions\":3072,\"model\":\"Qwen/Qwen3-Embedding-8B\",\"provider\":\"local\",\"recipe\":{\"add_special_tokens\":true,\"chunk_input\":\"ariadne-chunks-v1\",\"document_input\":\"title-newline2-content2000-v1\",\"name\":\"qwen3-embedding-8b-3072-v1\",\"native_dimensions\":4096,\"normalization\":\"l2-float64-then-float32\",\"pooling\":\"last-token\",\"query_instruction\":\"Given a question about a codebase, retrieve relevant code documentation that answers the question.\",\"reduction\":\"prefix\",\"section_input\":\"heading-or-introduction-v1\",\"stored_dimensions\":3072,\"tokenizer_revision\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"version\":1},\"generation\":{\"artifact\":{\"repository\":\"Qwen/Qwen3.8-27B\",\"revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"weight_format\":\"bf16\"},\"provider\":\"local\",\"tokenizer_revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"version\":1},\"version\":1}",
+  "profile_hash": "f8a8b4da641b0c0b1480ccdeb73b2dc4ae41e7d6e53d208d78d09c2833337d9c",
+  "embedding_space_id": "bc8d7d1ce188ea955e5ff11762a8405b8bf970289d416b3286fa675b743e9427",
+  "requests": {
+    "chat": {
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "presence_penalty": 1.5,
+      "temperature": 0.7,
+      "top_k": 20,
+      "top_p": 0.8,
+      "model": "Qwen/Qwen3.8-27B",
+      "messages": [
+        {
+          "role": "system",
+          "content": "Document the source."
+        },
+        {
+          "role": "user",
+          "content": "Explain arithmetic."
+        }
+      ],
+      "max_tokens": 8192,
+      "stream": false
+    },
+    "chat_tokenize": {
+      "model": "Qwen/Qwen3.8-27B",
+      "messages": [
+        {
+          "role": "system",
+          "content": "Document the source."
+        },
+        {
+          "role": "user",
+          "content": "Explain arithmetic."
+        }
+      ],
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "add_generation_prompt": true,
+      "add_special_tokens": false
+    },
+    "document_embedding": {
+      "model": "Qwen/Qwen3-Embedding-8B",
+      "input": [
+        "Arithmetic\n\nAdds two integers."
+      ],
+      "encoding_format": "float"
+    },
+    "query_embedding": {
+      "model": "Qwen/Qwen3-Embedding-8B",
+      "input": [
+        "Instruct: Given a question about a codebase, retrieve relevant code documentation that answers the question.\nQuery:How does add work?"
+      ],
+      "encoding_format": "float"
+    },
+    "query_tokenize": {
+      "model": "Qwen/Qwen3-Embedding-8B",
+      "prompt": "Instruct: Given a question about a codebase, retrieve relevant code documentation that answers the question.\nQuery:How does add work?",
+      "add_special_tokens": true
+    },
+    "paths": {
+      "chat_tokenize": "/chat/tokenize",
+      "embedding_tokenize": "/embed/tokenize",
+      "chat": "/chat/v1/chat/completions",
+      "embeddings": "/embed/v1/embeddings"
+    },
+    "authorization": null
+  },
+  "sidecar_records": [
+    {
+      "source_name": "alpha",
+      "generation_scope": "stable",
+      "path": "core.py",
+      "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "doc_ids": [
+        "alpha:stable"
+      ]
+    },
+    {
+      "source_name": "beta",
+      "generation_scope": "stable",
+      "path": "core.py",
+      "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "doc_ids": [
+        "beta:stable"
+      ]
+    },
+    {
+      "source_name": "alpha",
+      "generation_scope": "branch:feature/math",
+      "path": "core.py",
+      "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "doc_ids": [
+        "alpha:branch:feature/math"
+      ]
+    }
+  ],
+  "jobs": [
+    {
+      "custom_id": "per_file_document",
+      "payload": {
+        "version": 1,
+        "prompt_version": 1,
+        "parser_version": 1,
+        "kind": "per_file_document",
+        "target_id": "per_file_document:target",
+        "data": {
+          "content_type": "explanation",
+          "title": "Arithmetic",
+          "source_files": [
+            "core.py"
+          ],
+          "source_name": "alpha",
+          "metadata": {
+            "generated": true
+          }
+        },
+        "request": {
+          "chat_template_kwargs": {
+            "enable_thinking": false
+          },
+          "presence_penalty": 1.5,
+          "temperature": 0.7,
+          "top_k": 20,
+          "top_p": 0.8,
+          "model": "Qwen/Qwen3.8-27B",
+          "messages": [
+            {
+              "role": "system",
+              "content": "Document the source."
+            },
+            {
+              "role": "user",
+              "content": "Explain arithmetic."
+            }
+          ],
+          "max_tokens": 8192,
+          "stream": false
+        },
+        "snapshots": {
+          "/fixture/alpha/core.py": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "context_versions": {
+          "context": "2026-10-10T00:00:00Z"
+        },
+        "expected_version": "2026-10-10T00:00:00Z",
+        "phase": "base"
+      },
+      "request_hash": "66605213cc82fff61be1c0ec0eecc28a1a1f9669a62ded7d08f8275384500fe7",
+      "response": "# Core arithmetic\n\n## Overview\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\n## Usage\n\n```python\nfrom core import add\nresult = add(2, 3)\n```\n\n## Behavior\n\nThe result is an integer.\n",
+      "parsed_result": {
+        "content_type": "explanation",
+        "title": "Arithmetic",
+        "source_files": [
+          "core.py"
+        ],
+        "source_name": "alpha",
+        "metadata": {
+          "generated": true
+        },
+        "content": "# Core arithmetic\n\n## Overview\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\nThe module implements arithmetic operations on two integers. The function accepts two arguments and returns their calculated result. Callers supply integers directly.\n\n## Usage\n\n```python\nfrom core import add\nresult = add(2, 3)\n```\n\n## Behavior\n\nThe result is an integer.\n"
+      }
+    },
+    {
+      "custom_id": "catalog_description",
+      "payload": {
+        "version": 1,
+        "prompt_version": 1,
+        "parser_version": 1,
+        "kind": "catalog_description",
+        "target_id": "catalog_description:target",
+        "data": {
+          "content_type": "catalog",
+          "title": "Arithmetic",
+          "source_files": [
+            "core.py"
+          ],
+          "source_name": "alpha",
+          "metadata": {
+            "kind": "element",
+            "description": "Old description."
+          },
+          "original_content": "def add(a, b)\n\nDescription: Old description."
+        },
+        "request": {
+          "chat_template_kwargs": {
+            "enable_thinking": false
+          },
+          "presence_penalty": 1.5,
+          "temperature": 0.7,
+          "top_k": 20,
+          "top_p": 0.8,
+          "model": "Qwen/Qwen3.8-27B",
+          "messages": [
+            {
+              "role": "system",
+              "content": "Document the source."
+            },
+            {
+              "role": "user",
+              "content": "Explain arithmetic."
+            }
+          ],
+          "max_tokens": 2048,
+          "stream": false
+        },
+        "snapshots": {
+          "/fixture/alpha/core.py": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "context_versions": {
+          "context": "2026-10-10T00:00:00Z"
+        },
+        "expected_version": "2026-10-10T00:00:00Z",
+        "phase": "catalog"
+      },
+      "request_hash": "15981e342e5793c89bef3b585ac54379b9a4a1adea7d19a479ef9254ec64b98d",
+      "response": "Adds two integers.",
+      "parsed_result": {
+        "content_type": "catalog",
+        "title": "Arithmetic",
+        "source_files": [
+          "core.py"
+        ],
+        "source_name": "alpha",
+        "metadata": {
+          "kind": "element",
+          "description": "Adds two integers.",
+          "generated": true
+        },
+        "original_content": "def add(a, b)\n\nDescription: Old description.",
+        "content": "def add(a, b)\n\nDescription: Adds two integers."
+      }
+    },
+    {
+      "custom_id": "theme_summary",
+      "payload": {
+        "version": 1,
+        "prompt_version": 1,
+        "parser_version": 1,
+        "kind": "theme_summary",
+        "target_id": "theme_summary:target",
+        "data": {
+          "content_type": "theme",
+          "title": "Arithmetic",
+          "source_files": [
+            "core.py"
+          ],
+          "source_name": "alpha",
+          "metadata": {
+            "pending": true
+          },
+          "cluster_id": "arithmetic",
+          "resolution": 1.0,
+          "summary_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "request": {
+          "chat_template_kwargs": {
+            "enable_thinking": false
+          },
+          "presence_penalty": 1.5,
+          "temperature": 0.7,
+          "top_k": 20,
+          "top_p": 0.8,
+          "model": "Qwen/Qwen3.8-27B",
+          "messages": [
+            {
+              "role": "system",
+              "content": "Document the source."
+            },
+            {
+              "role": "user",
+              "content": "Explain arithmetic."
+            }
+          ],
+          "max_tokens": 2048,
+          "stream": false
+        },
+        "snapshots": {
+          "/fixture/alpha/core.py": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "context_versions": {
+          "context": "2026-10-10T00:00:00Z"
+        },
+        "expected_version": "2026-10-10T00:00:00Z",
+        "phase": "themes"
+      },
+      "request_hash": "2ea7764e29eff296a1fdaa5c36037d3d73a9ca52e7d8005ea3aa164f74982275",
+      "response": "# Arithmetic\n\nInteger operations.",
+      "parsed_result": {
+        "content_type": "theme",
+        "title": "Arithmetic",
+        "source_files": [
+          "core.py"
+        ],
+        "source_name": "alpha",
+        "metadata": {
+          "pending": false,
+          "generated": true,
+          "theme_title": "Arithmetic"
+        },
+        "cluster_id": "arithmetic",
+        "resolution": 1.0,
+        "summary_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "content": "# Arithmetic\n\nInteger operations.",
+        "coherent": true
+      }
+    },
+    {
+      "custom_id": "embedding_application",
+      "payload": {
+        "version": 1,
+        "prompt_version": 1,
+        "parser_version": 1,
+        "kind": "embedding_application",
+        "target_id": "embedding_application:target",
+        "data": {
+          "content_type": "finding",
+          "title": "Arithmetic",
+          "source_files": [
+            "core.py"
+          ],
+          "source_name": "alpha",
+          "metadata": {},
+          "content": "Preserve this exact authored observation."
+        },
+        "request": null,
+        "snapshots": {
+          "/fixture/alpha/core.py": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "context_versions": {
+          "context": "2026-10-10T00:00:00Z"
+        },
+        "expected_version": "2026-10-10T00:00:00Z",
+        "phase": "crossrefs"
+      },
+      "request_hash": "c938d1c850d30d2aca7cc03f5502aa279e6c441d68748f2d40c41daa7282d868",
+      "response": null,
+      "parsed_result": {
+        "content_type": "finding",
+        "title": "Arithmetic",
+        "source_files": [
+          "core.py"
+        ],
+        "source_name": "alpha",
+        "metadata": {},
+        "content": "Preserve this exact authored observation."
+      }
+    }
+  ],
+  "crash_boundaries": [
+    {
+      "boundary": "before_request",
+      "persisted_state": "running",
+      "saved_response": false,
+      "chat_calls_before_resume": 0,
+      "additional_chat_calls_on_resume": 1
+    },
+    {
+      "boundary": "during_request",
+      "persisted_state": "running",
+      "saved_response": false,
+      "chat_calls_before_resume": 1,
+      "additional_chat_calls_on_resume": 1
+    },
+    {
+      "boundary": "after_response",
+      "persisted_state": "response_ready",
+      "saved_response": true,
+      "chat_calls_before_resume": 1,
+      "additional_chat_calls_on_resume": 0
+    },
+    {
+      "boundary": "during_embedding",
+      "persisted_state": "apply_pending",
+      "saved_response": true,
+      "chat_calls_before_resume": 1,
+      "additional_chat_calls_on_resume": 0
+    },
+    {
+      "boundary": "after_commit",
+      "persisted_state": "applied",
+      "saved_response": true,
+      "chat_calls_before_resume": 1,
+      "additional_chat_calls_on_resume": 0
+    }
+  ]
+}

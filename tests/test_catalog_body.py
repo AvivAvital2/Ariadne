@@ -123,9 +123,38 @@ class TestGetElementBodyErrors:
 
 import json
 import subprocess
+import sys
+import pytest
 from pathlib import Path
 
 ARIADNE_ROOT = str(Path(__file__).resolve().parent.parent)
+
+
+@pytest.fixture
+def catalog_db(tmp_path, monkeypatch):
+    from config import Config
+    import config
+    from docgen.catalog_writer import _element_doc_id
+    from library import Library
+    from schema import CATALOG_KIND_ELEMENT
+
+    source = tmp_path / 'embedding.py'
+    source.write_text('EMBEDDING_DIM = 3072\n')
+    db = tmp_path / 'catalog.db'
+    cfg_path = tmp_path / 'ariadne.yaml'
+    cfg_path.write_text(f'db_path: {db}\nsources:\n  ariadne: {tmp_path}\n')
+    monkeypatch.setattr(config, '_global_config', Config(cfg_path))
+    monkeypatch.setenv('ARIADNE_CONFIG', str(cfg_path))
+    with Library(db) as lib:
+        lib.add_document(
+            'catalog', 'EMBEDDING_DIM', 'Embedding dimension.',
+            source_files=[str(source)], source_name='ariadne',
+            doc_id=_element_doc_id('ariadne', 'embedding.EMBEDDING_DIM'),
+            metadata={'kind': CATALOG_KIND_ELEMENT, 'language': 'python',
+                      'qualified_name': 'embedding.EMBEDDING_DIM',
+                      'location': {'line_start': 1, 'line_end': 1}},
+        )
+    return db
 
 
 class TestCmdBodyCli:
@@ -136,11 +165,9 @@ class TestCmdBodyCli:
     Does NOT validate: error branches, flag parsing edge cases.
     """
 
-    def test_known_symbol_returns_body(self):
-        # Uses a stable symbol that exists in the live catalog.
-        # If catalog is stale or symbol moves, this test is a signal to re-sync.
+    def test_known_symbol_returns_body(self, catalog_db):
         result = subprocess.run(
-            ['uv', 'run', 'ariadne', 'body',
+            [sys.executable, '-m', 'cli.main', '--db', str(catalog_db), 'body',
              '--source', 'ariadne',
              '--name', 'embedding.EMBEDDING_DIM'],
             cwd=ARIADNE_ROOT,
@@ -155,9 +182,9 @@ class TestCmdBodyCli:
         assert 'EMBEDDING_DIM' in data['body']
         assert data['body_line_count'] >= 1
 
-    def test_missing_symbol_returns_not_found(self):
+    def test_missing_symbol_returns_not_found(self, catalog_db):
         result = subprocess.run(
-            ['uv', 'run', 'ariadne', 'body',
+            [sys.executable, '-m', 'cli.main', '--db', str(catalog_db), 'body',
              '--source', 'ariadne',
              '--name', 'nonexistent.symbol.xyzzy'],
             cwd=ARIADNE_ROOT,
@@ -204,14 +231,14 @@ class TestMcpToolRegistration:
 
 
 class TestRealLibraryIntegration:
-    """Integration test: real Library against live ariadne.db.
+    """Integration test: real Library against a temporary populated catalog.
 
     Validates: get_element_body correctly reads lookup_symbol response shape
     (catches breaking changes in lookup_symbol that unit tests miss).
-    Does NOT validate: isolated/empty DB scenarios (we use the live catalog).
+    The fixture includes its source file and needs no operator database.
     """
 
-    def test_real_library_known_symbol(self):
+    def test_real_library_known_symbol(self, catalog_db):
         from config import get_config
         from library import Library
         cfg = get_config()
@@ -233,7 +260,7 @@ class TestRealLibraryIntegration:
         # body should be the one-line constant declaration
         assert result['body_line_count'] == 1
 
-    def test_real_library_missing_symbol(self):
+    def test_real_library_missing_symbol(self, catalog_db):
         from config import get_config
         from library import Library
         cfg = get_config()

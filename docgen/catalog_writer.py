@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from attrs import frozen
 
 from docgen.catalog_extractor import ElementInfo, extract_elements
+from inference import local_context
 from schema import (
     CATALOG_KIND_ELEMENT,
     CATALOG_KIND_FILE_INDEX,
@@ -319,6 +320,40 @@ async def sync_file_catalog(
     for qn, el in new_by_qn.items():
         doc_id = _element_doc_id(source_name, qn)
         existing = old_by_qn.get(qn)
+        if local_context(writer) is not None:
+            from library.prepared import ObsoleteInput
+
+            old = library.get_document(doc_id)
+            metadata = _element_metadata(el, source_name)
+            content = _element_content(el)
+            if old and old.metadata.get('description'):
+                if old.metadata.get('sha_at_sync') == el.body_sha:
+                    content += '\n\nDescription: ' + old.metadata['description']
+                else:
+                    metadata.update(description=None, generated=False)
+
+            def check_source() -> None:
+                if _file_sha(file) != current_sha:
+                    raise ObsoleteInput(f'Source changed during catalog ingestion: {file}')
+
+            await writer.add_document(
+                'catalog',
+                qn,
+                content,
+                [el.file],
+                metadata=metadata,
+                doc_id=doc_id,
+                source_name=source_name,
+                check_inputs=check_source,
+            )
+            if existing is None:
+                added += 1
+            elif existing[1] != el.body_sha:
+                modified += 1
+            else:
+                unchanged += 1
+            final_element_ids.append(doc_id)
+            continue
         if existing is None:
             new_to_add.append((qn, el, doc_id))
             added += 1
@@ -387,7 +422,21 @@ async def sync_file_catalog(
     lang = _detect_language(file)                                                                                                                                       
     index_meta = _file_index_metadata(source_name, lang, current_sha, final_element_ids)                                                                                
     index_content = f'Catalog index for {rel} -- {len(final_element_ids)} elements.'
-    if existing_index:                                                                                                                                                
+    if local_context(writer) is not None:
+        if _file_sha(file) != current_sha:
+            from library.prepared import ObsoleteInput
+
+            raise ObsoleteInput(f'Source changed during catalog ingestion: {file}')
+        await writer.add_document(
+            'catalog',
+            f'file_index:{source_name}:{rel}',
+            index_content,
+            [str(file)],
+            metadata=index_meta,
+            doc_id=index_id,
+            source_name=source_name,
+        )
+    elif existing_index:
         library.update_document(index_id, content=index_content, metadata=index_meta)                                                                                   
     else:                                                                                                                                                               
         library.add_document(

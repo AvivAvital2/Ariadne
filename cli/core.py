@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -10,6 +11,7 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.table import Table
 
+from cli.runtime import run_async
 from config import get_config
 
 if TYPE_CHECKING:
@@ -34,11 +36,9 @@ EMBED_DOCS_PER_SEC_SLOW = 10
 
 def get_library(db_path: Path | None = None) -> 'Library':
     """Get or create a library instance."""
-    from library import Library
-    if db_path is None:
-        cfg = get_config()
-        db_path = Path(cfg.db_path)
-    return Library(db_path)
+    from cli.runtime import get_library as open_library
+
+    return open_library(db_path)
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
@@ -126,6 +126,18 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     import_mode.add_argument('--live', action='store_true',
                              help='Embed live at interactive speed (skips the mode prompt)')
 
+    export_db_parser = subparsers.add_parser('export-db', help='Export a source as a SQLite slice')
+    export_db_parser.add_argument('--source', '-s', default=None)
+    export_db_parser.add_argument('--out', required=True)
+    export_db_parser.add_argument('--no-embeddings', action='store_true')
+    export_db_parser.add_argument('--with-scip', action='store_true')
+    export_db_parser.add_argument('--embedding-model', default='text-embedding-3-large')
+
+    import_db_parser = subparsers.add_parser('import-db', help='Import a SQLite source slice')
+    import_db_parser.add_argument('bundle')
+    import_db_parser.add_argument('--on-conflict', choices=('replace', 'skip', 'fail'), default='replace')
+    import_db_parser.add_argument('--embedding-model', default='text-embedding-3-large')
+
     # rebuild
     rebuild_parser = subparsers.add_parser('rebuild', help='Rebuild all embeddings')
     rebuild_parser.add_argument('--only-missing', action='store_true',
@@ -173,7 +185,7 @@ async def cmd_search(args: argparse.Namespace) -> int:
 
     try:
         async with EmbeddingService() as service:
-            query_embedding = await service.embed(args.query)
+            query_embedding = await service.embed_query(args.query)
 
         # Determine scope filtering
         source_paths: list[Path] | None = None
@@ -196,9 +208,14 @@ async def cmd_search(args: argparse.Namespace) -> int:
                     source_paths = scope_paths
 
         if args.chunks:
-            results = library.search_chunks(query_embedding, k=args.k)
+            context = getattr(library, 'inference_context', None)
+            if context is not None and context.local and source_name:
+                names = (source_name, *cfg.get_effective_dependencies(source_name))
+                results = library.search_chunks(query_embedding, k=args.k, source_names=names)
+            else:
+                results = library.search_chunks(query_embedding, k=args.k)
             # Filter chunk results by scope if needed
-            if source_paths:
+            if source_paths and not (context is not None and context.local):
                 results = [
                     r for r in results
                     if library.filter_documents_by_scope([r.document], source_paths)
@@ -621,6 +638,21 @@ def cmd_import_(args: argparse.Namespace) -> int:
             console.print(f'[red]Input not found: {input_path}[/red]')
             return 1
 
+        if library.inference_context is not None and library.inference_context.binding is not None:
+            from library.imports import import_bound_markdown
+
+            if input_path.is_file():
+                import tempfile
+                from export import _extract_archive
+
+                with tempfile.TemporaryDirectory() as directory:
+                    incoming = Path(directory)
+                    incoming = _extract_archive(input_path, incoming)
+                    count = run_async(import_bound_markdown(library, incoming, embed=not args.skip_embeddings))
+            else:
+                count = run_async(import_bound_markdown(library, input_path, embed=not args.skip_embeddings))
+            console.print(f'[green]Imported {count} documents from {input_path}[/green]')
+            return 0
         if input_path.is_file():
             try:
                 count = import_from_archive(library, input_path)
@@ -634,7 +666,7 @@ def cmd_import_(args: argparse.Namespace) -> int:
 
         if not args.skip_embeddings:
             console.print('Regenerating embeddings...')
-            asyncio.run(_rebuild_embeddings(library, only_missing=True, assume_yes=args.yes, use_batch=_resolve_embed_mode(args)))
+            run_async(_rebuild_embeddings(library, only_missing=True, assume_yes=args.yes, use_batch=_resolve_embed_mode(args)))
             console.print('[green]Embeddings regenerated.[/green]')
 
         # file_index docs are excluded from export/import (derived index data,
@@ -652,6 +684,49 @@ def cmd_import_(args: argparse.Namespace) -> int:
 
     finally:
         library.close()
+
+
+def cmd_export_db(args: argparse.Namespace) -> int:
+    from export_db import export_source_db
+
+    cfg = get_config()
+    source = args.source or cfg.default_source
+    if not source:
+        console.print('[red]Specify --source or configure default_source.[/red]')
+        return 1
+    try:
+        manifest = export_source_db(
+            args.db or cfg.db_path, source, args.out,
+            include_embeddings=not args.no_embeddings,
+            include_scip=getattr(args, 'with_scip', False),
+            embedding_model=getattr(args, 'embedding_model', 'text-embedding-3-large'),
+        )
+    except ValueError as exc:
+        console.print(f'[red]{exc}[/red]')
+        return 1
+    console.print(f'Exported slice of {source!r} -> {args.out}')
+    console.print(f'{manifest.doc_count} documents, {manifest.chunk_count} chunks, {manifest.section_count} sections')
+    return 0
+
+
+def cmd_import_db(args: argparse.Namespace) -> int:
+    from export_db import import_source_db
+
+    cfg = get_config()
+    if getattr(cfg, 'provider', None) == 'local':
+        console.print('[red]SQLite slices cannot initialize a local model pair; use markdown import.[/red]')
+        return 1
+    try:
+        report = import_source_db(
+            args.db or cfg.db_path, args.bundle,
+            on_conflict=args.on_conflict,
+            expected_embedding_model=args.embedding_model,
+        )
+    except ValueError as exc:
+        console.print(f'[red]{exc}[/red]')
+        return 1
+    console.print(f'Imported {report.documents_merged} documents for {report.source_name!r}')
+    return 0
 
 
 def cmd_build_matrix(args: argparse.Namespace) -> int:
@@ -909,15 +984,17 @@ def cmd_tag(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 HANDLERS = {
-    'search': lambda args: asyncio.run(cmd_search(args)),
+    'export-db': cmd_export_db,
+    'import-db': cmd_import_db,
+    'search': lambda args: run_async(cmd_search(args)),
     'list': lambda args: cmd_list(args),
     'get': lambda args: cmd_get(args),
-    'add': lambda args: asyncio.run(cmd_add(args)),
-    'finding': lambda args: asyncio.run(cmd_finding(args)),
+    'add': lambda args: run_async(cmd_add(args)),
+    'finding': lambda args: run_async(cmd_finding(args)),
     'delete': lambda args: cmd_delete(args),
     'export': lambda args: cmd_export(args),
     'import': lambda args: cmd_import_(args),
-    'rebuild': lambda args: asyncio.run(cmd_rebuild(args)),
+    'rebuild': lambda args: run_async(cmd_rebuild(args)),
     'build-matrix': lambda args: cmd_build_matrix(args),
     'tag': lambda args: cmd_tag(args),
     

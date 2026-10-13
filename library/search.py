@@ -66,7 +66,7 @@ class SearchMixin:
         """Search for documents by semantic similarity.
 
         Args:
-            query_embedding: The query vector (1536 dimensions).
+            query_embedding: The query vector (3072 dimensions in the bound space).
             k: Number of results to return.
             content_type: Filter by content type.
 
@@ -74,6 +74,12 @@ class SearchMixin:
             List of SearchResult objects sorted by descending similarity.
         """
         from search import batch_dot_similarity, top_k_indices
+
+        self.require_semantic_context()
+        if self.inference_context is not None and self.inference_context.local:
+            from library.prepared import validate_vector
+
+            validate_vector(query_embedding)
 
         # Get all documents with embeddings
         docs = self.list_documents(content_type=content_type)
@@ -83,6 +89,7 @@ class SearchMixin:
             return []
 
         # Batch compute similarities (vectorized, much faster than per-doc loop)
+        self._validate_stored_vectors([d.embedding for d in docs_with_embeddings])
         embeddings = np.stack([d.embedding for d in docs_with_embeddings])  # type: ignore[misc]
         similarities = batch_dot_similarity(query_embedding, embeddings)
         # Down-rank zero-hit documents (proven unhelpful in past searches)
@@ -111,11 +118,12 @@ class SearchMixin:
         self,
         query_embedding: NDArray[np.float32],
         k: int = 5,
+        source_names: tuple[str, ...] | None = None,
     ) -> list[SearchResult]:
         """Search for documents by chunk-level semantic similarity.
 
         Args:
-            query_embedding: The query vector (1536 dimensions).
+            query_embedding: The query vector (3072 dimensions in the bound space).
             k: Number of results to return.
 
         Returns:
@@ -123,12 +131,23 @@ class SearchMixin:
         """
         from search import batch_dot_similarity, top_k_indices
 
+        self.require_semantic_context()
+        if self.inference_context is not None and self.inference_context.local:
+            from library.prepared import validate_vector
+
+            validate_vector(query_embedding)
+
         # Get all chunks with embeddings
         with self._conn_provider.acquire() as conn:
-            rows = conn.execute(
-                '''SELECT c.id, c.document_id, c.chunk_index, c.content, c.embedding
-                   FROM chunks c WHERE c.embedding IS NOT NULL'''
-            ).fetchall()
+            query = '''SELECT c.id, c.document_id, c.chunk_index, c.content, c.embedding
+                       FROM chunks c JOIN documents d ON d.id=c.document_id WHERE c.embedding IS NOT NULL'''
+            params = ()
+            if source_names is not None:
+                if not source_names:
+                    return []
+                query += ' AND d.source_name IN (' + ','.join('?' for _ in source_names) + ')'
+                params = source_names
+            rows = conn.execute(query, params).fetchall()
 
         if not rows:
             return []
@@ -154,6 +173,7 @@ class SearchMixin:
             return []
 
         # Batch compute similarities (vectorized — handles 15K+ chunks efficiently)
+        self._validate_stored_vectors(raw_embeddings)
         embeddings_matrix = np.stack(raw_embeddings)
         similarities = batch_dot_similarity(query_embedding, embeddings_matrix)
         top_indices = top_k_indices(similarities, k)
@@ -325,7 +345,7 @@ class SearchMixin:
         """Search for documents with optional scope filtering.
 
         Args:
-            query_embedding: The query vector (1536 dimensions).
+            query_embedding: The query vector (3072 dimensions in the bound space).
             source_paths: List of source paths to limit results to.
             k: Number of results to return.
             content_type: Filter by content type.
@@ -335,6 +355,11 @@ class SearchMixin:
         """
         from search import batch_dot_similarity, top_k_indices
 
+        self.require_semantic_context()
+        if self.inference_context is not None and self.inference_context.local:
+            from library.prepared import validate_vector
+
+            validate_vector(query_embedding)
         # Get all documents with embeddings
         docs = self.list_documents(content_type=content_type)
         docs_with_embeddings = [d for d in docs if d.embedding is not None]
@@ -349,6 +374,7 @@ class SearchMixin:
             return []
 
         # Batch compute similarities (vectorized)
+        self._validate_stored_vectors([d.embedding for d in docs_with_embeddings])
         embeddings = np.stack([d.embedding for d in docs_with_embeddings])  # type: ignore[misc]
         similarities = batch_dot_similarity(query_embedding, embeddings)
         for i, doc in enumerate(docs_with_embeddings):

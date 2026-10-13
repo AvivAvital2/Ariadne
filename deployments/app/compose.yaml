@@ -1,0 +1,17 @@
+services:
+  ariadne:
+    image: ${ARIADNE_IMAGE:-ariadne:local-model-support}
+    build:
+      context: ../..
+    environment:
+      ARIADNE_CONFIG: /config/ariadne.yaml
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ./cloud.yaml:/config/ariadne.yaml:ro
+      - ${ARIADNE_SOURCE_DIR:-../..}:/workspace:ro
+      - ariadne-state:/data
+    command: ["--help"]
+    stdin_open: true
+volumes:
+  ariadne-state:

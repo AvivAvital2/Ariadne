@@ -164,6 +164,23 @@ RUN = 'scip-python python src1 0.1 `m`/run().'
 HELPER = 'scip-python python src1 0.1 `m`/helper().'
 
 
+def test_candidate_scope_precedes_top_k_and_entry_diversity(conn):
+    add_clew(conn, **_clew('pkg.entry', ['entry', 'best'], ['a.py'], vector=[1.0, 0.0]))
+    allowed = add_clew(conn, **_clew(
+        'pkg.entry', ['entry', 'allowed'], ['b.py'], vector=[0.8, 0.2]))
+    foreign = add_clew(conn, **{
+        **_clew('pkg.foreign', ['foreign'], ['c.py'], vector=[1.0, 0.0]),
+        'source_name': 'other',
+    })
+    query = np.asarray([1.0, 0.0], dtype=np.float32)
+    matches = nearest_clew_matches(
+        conn, query, source_name=SOURCE, top_k=1, candidate_ids=(allowed, foreign))
+    assert [match.clew.id for match in matches] == [allowed]
+    assert nearest_clew_matches(conn, query, source_name=SOURCE, candidate_ids=()) == []
+    assert nearest_clew_matches(
+        conn, query, source_name=SOURCE, candidate_ids=('missing',)) == []
+
+
 def _symbol(conn, cid, *, file, qn, line_start, line_end, parent=''):
     conn.execute(
         'INSERT INTO scip_symbols (canonical_id, source_name, language, file, '

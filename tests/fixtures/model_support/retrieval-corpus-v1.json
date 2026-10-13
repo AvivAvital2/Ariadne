@@ -1,0 +1,1291 @@
+{
+  "version": 1,
+  "judgment_method": "Agent-authored known-relevant evidence targets, frozen before model calls; not independent human review or exhaustive relevance labeling.",
+  "corpus_method": "Repository Markdown excerpts, with a document title prepended and the excerpt heading normalized to level two. Prose unchanged.",
+  "documents": [
+    {
+      "id": "source-config",
+      "title": "Configuration Reference / directory-scoping",
+      "content": "# Configuration Reference / directory-scoping\n\n## Configuration Reference\n\n### SourceConfig Fields\n\nEach source in `ariadne.yaml` supports these fields:\n\n| Field | Type | Default | Description |\n|-------|------|---------|-------------|\n| `path` | string | required | Path to the source code directory |\n| `depends_on` | list | `[]` | Explicit dependencies on other sources |\n| `parent` | string | `null` | Parent source name (for subdirectory sources) |\n| `branches` | list | `[]` | Git branch patterns where source is active |\n| `ref` | string | `null` | Pin external dependency to specific branch/tag |\n\n### Simple vs Full Form\n\nSources can be defined in two ways:\n\n```yaml\nsources:\n  # Simple form: just a path (no advanced features)\n  mylib: /path/to/mylib\n\n  # Full form: with all options\n  mylib:\n    path: /path/to/mylib\n    depends_on: [otherlib]\n    parent: parentlib\n    branches: [\"feature/*\"]\n    ref: main\n```\n\n### Field Details\n\n#### `path` (required)\nThe absolute path to the source code directory. Supports `~` expansion.\n\n```yaml\nmylib:\n  path: ~/projects/mylib/src\n```\n\n#### `depends_on`\nList of source names whose documentation should be loaded alongside this source. Dependencies are loaded transitively.\n\n```yaml\nmylib:\n  path: /path/to/mylib\n  depends_on: [core, utils]  # mylib docs include core and utils docs\n```\n\n#### `parent`\nDeclares this source as a subdirectory of another source. The child's path must be a subdirectory of the parent's path.\n\n```yaml\npythonproject:\n  path: /path/to/myproject\n\nbenchmark:\n  path: /path/to/myproject/benchmark\n  parent: pythonproject  # benchmark is inside pythonproject\n```\n\nWhen you use `parent`:\n- Ariadne validates that the child path is under the parent path\n- The parent is automatically added as an implicit dependency\n- Working from the child directory activates both sources\n\n#### `branches`\nList of git branch patterns (using glob syntax) where this source is active. If empty or not set, the source is active on all branches.\n\n```yaml\nexperimental:\n  path: /path/to/experimental\n  branches: [\"feature/*\", \"develop\"]  # Only active on feature branches or develop\n```\n\nBranch patterns support:\n- Exact matches: `\"main\"`, `\"develop\"`\n- Glob patterns: `\"feature/*\"`, `\"release/*\"`, `\"hotfix-*\"`\n- Wildcard for all branches: `\"*\"`\n\n#### `ref`\nPin an external dependency to a specific git ref (branch or tag). Useful for ensuring consistent documentation from external repos.\n\n```yaml\nexternal-lib:\n  path: /path/to/external-lib\n  ref: v2.0.0  # Always use docs from v2.0.0 tag\n```\n",
+      "source_file": "docs/directory-scoping.md",
+      "source_lines": [
+        18,
+        108
+      ],
+      "source_sha256": "1853d525d475c1529f863be86df997250c7ccbb1e7c01a28e325f57a2eab01cc",
+      "chunks": [
+        "# Configuration Reference / directory-scoping\n\n## Configuration Reference\n\n### SourceConfig Fields\n\nEach source in `ariadne.yaml` supports these fields:",
+        "| Field | Type | Default | Description |\n|-------|------|---------|-------------|\n| `path` | string | required | Path to the source code directory |\n| `depends_on` | list | `[]` | Explicit dependencies on other sources |\n| `parent` | string | `null` | Parent source name (for subdirectory sources) |\n| `branches` | list | `[]` | Git branch patterns where source is active |\n| `ref` | string | `null` | Pin external dependency to specific branch/tag |\n\n### Simple vs Full Form",
+        "Sources can be defined in two ways:\n\n```yaml\nsources:\n  # Simple form: just a path (no advanced features)\n  mylib: /path/to/mylib\n\n  # Full form: with all options\n  mylib:\n    path: /path/to/mylib\n    depends_on: [otherlib]\n    parent: parentlib\n    branches: [\"feature/*\"]\n    ref: main\n```\n\n### Field Details\n\n#### `path` (required)\nThe absolute path to the source code directory. Supports `~` expansion.\n\n```yaml\nmylib:\n  path: ~/projects/mylib/src\n```",
+        "#### `depends_on`\nList of source names whose documentation should be loaded alongside this source. Dependencies are loaded transitively.\n\n```yaml\nmylib:\n  path: /path/to/mylib\n  depends_on: [core, utils]  # mylib docs include core and utils docs\n```\n\n#### `parent`\nDeclares this source as a subdirectory of another source. The child's path must be a subdirectory of the parent's path.\n\n```yaml\npythonproject:\n  path: /path/to/myproject",
+        "benchmark:\n  path: /path/to/myproject/benchmark\n  parent: pythonproject  # benchmark is inside pythonproject\n```\n\nWhen you use `parent`:\n- Ariadne validates that the child path is under the parent path\n- The parent is automatically added as an implicit dependency\n- Working from the child directory activates both sources\n\n#### `branches`\nList of git branch patterns (using glob syntax) where this source is active. If empty or not set, the source is active on all branches.",
+        "```yaml\nexperimental:\n  path: /path/to/experimental\n  branches: [\"feature/*\", \"develop\"]  # Only active on feature branches or develop\n```\n\nBranch patterns support:\n- Exact matches: `\"main\"`, `\"develop\"`\n- Glob patterns: `\"feature/*\"`, `\"release/*\"`, `\"hotfix-*\"`\n- Wildcard for all branches: `\"*\"`\n\n#### `ref`\nPin an external dependency to a specific git ref (branch or tag). Useful for ensuring consistent documentation from external repos.",
+        "```yaml\nexternal-lib:\n  path: /path/to/external-lib\n  ref: v2.0.0  # Always use docs from v2.0.0 tag\n```\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# Configuration Reference / directory-scoping"
+        ],
+        [
+          "Configuration Reference",
+          "## Configuration Reference\n\n### SourceConfig Fields\n\nEach source in `ariadne.yaml` supports these fields:\n\n| Field | Type | Default | Description |\n|-------|------|---------|-------------|\n| `path` | string | required | Path to the source code directory |\n| `depends_on` | list | `[]` | Explicit dependencies on other sources |\n| `parent` | string | `null` | Parent source name (for subdirectory sources) |\n| `branches` | list | `[]` | Git branch patterns where source is active |\n| `ref` | string | `null` | Pin external dependency to specific branch/tag |\n\n### Simple vs Full Form\n\nSources can be defined in two ways:\n\n```yaml\nsources:\n  # Simple form: just a path (no advanced features)\n  mylib: /path/to/mylib\n\n  # Full form: with all options\n  mylib:\n    path: /path/to/mylib\n    depends_on: [otherlib]\n    parent: parentlib\n    branches: [\"feature/*\"]\n    ref: main\n```\n\n### Field Details\n\n#### `path` (required)\nThe absolute path to the source code directory. Supports `~` expansion.\n\n```yaml\nmylib:\n  path: ~/projects/mylib/src\n```\n\n#### `depends_on`\nList of source names whose documentation should be loaded alongside this source. Dependencies are loaded transitively.\n\n```yaml\nmylib:\n  path: /path/to/mylib\n  depends_on: [core, utils]  # mylib docs include core and utils docs\n```\n\n#### `parent`\nDeclares this source as a subdirectory of another source. The child's path must be a subdirectory of the parent's path.\n\n```yaml\npythonproject:\n  path: /path/to/myproject\n\nbenchmark:\n  path: /path/to/myproject/benchmark\n  parent: pythonproject  # benchmark is inside pythonproject\n```\n\nWhen you use `parent`:\n- Ariadne validates that the child path is under the parent path\n- The parent is automatically added as an implicit dependency\n- Working from the child directory activates both sources\n\n#### `branches`\nList of git branch patterns (using glob syntax) where this source is active. If empty or not set, the source is active on all branches.\n\n```yaml\nexperimental:\n  path: /path/to/experimental\n  branches: [\"feature/*\", \"develop\"]  # Only active on feature branches or develop\n```\n\nBranch patterns support:\n- Exact matches: `\"main\"`, `\"develop\"`\n- Glob patterns: `\"feature/*\"`, `\"release/*\"`, `\"hotfix-*\"`\n- Wildcard for all branches: `\"*\"`\n\n#### `ref`\nPin an external dependency to a specific git ref (branch or tag). Useful for ensuring consistent documentation from external repos.\n\n```yaml\nexternal-lib:\n  path: /path/to/external-lib\n  ref: v2.0.0  # Always use docs from v2.0.0 tag\n```"
+        ]
+      ]
+    },
+    {
+      "id": "scope-resolution",
+      "title": "How It Works / directory-scoping",
+      "content": "# How It Works / directory-scoping\n\n## How It Works\n\n### Scope Resolution Algorithm\n\nWhen you run `ariadne manifest --auto-scope`, Ariadne:\n\n1. Gets your current working directory\n2. Gets your current git branch\n3. For each configured source:\n   - Checks if the source is active on the current branch\n   - Checks if cwd is within the source's path\n4. Returns the most specific match (longest path that contains cwd)\n\n```python\n# Simplified logic from get_source_scope()\nfor source in sources:\n    if not source.is_active_on_branch(current_branch):\n        continue\n    if cwd.is_under(source.path):\n        candidates.append(source)\n\nreturn most_specific(candidates)  # Longest path wins\n```\n\n### Branch Pattern Matching\n\nBranch patterns use Python's `fnmatch` module:\n\n| Pattern | Matches |\n|---------|---------|\n| `main` | Exactly `main` |\n| `feature/*` | `feature/foo`, `feature/bar` |\n| `release-*` | `release-1.0`, `release-2.0` |\n| `*` | Any branch |\n\n### Effective Dependencies\n\nWhen loading docs, Ariadne computes \"effective dependencies\" which include:\n\n1. The parent source (if defined and active)\n2. All explicit `depends_on` sources (if active on current branch)\n\nThis means `parent` creates an implicit dependency—you don't need to list it in `depends_on`.\n",
+      "source_file": "docs/directory-scoping.md",
+      "source_lines": [
+        174,
+        217
+      ],
+      "source_sha256": "1853d525d475c1529f863be86df997250c7ccbb1e7c01a28e325f57a2eab01cc",
+      "chunks": [
+        "# How It Works / directory-scoping\n\n## How It Works\n\n### Scope Resolution Algorithm\n\nWhen you run `ariadne manifest --auto-scope`, Ariadne:\n\n1. Gets your current working directory\n2. Gets your current git branch\n3. For each configured source:\n   - Checks if the source is active on the current branch\n   - Checks if cwd is within the source's path\n4. Returns the most specific match (longest path that contains cwd)",
+        "```python\n# Simplified logic from get_source_scope()\nfor source in sources:\n    if not source.is_active_on_branch(current_branch):\n        continue\n    if cwd.is_under(source.path):\n        candidates.append(source)\n\nreturn most_specific(candidates)  # Longest path wins\n```\n\n### Branch Pattern Matching\n\nBranch patterns use Python's `fnmatch` module:",
+        "| Pattern | Matches |\n|---------|---------|\n| `main` | Exactly `main` |\n| `feature/*` | `feature/foo`, `feature/bar` |\n| `release-*` | `release-1.0`, `release-2.0` |\n| `*` | Any branch |\n\n### Effective Dependencies\n\nWhen loading docs, Ariadne computes \"effective dependencies\" which include:\n\n1. The parent source (if defined and active)\n2. All explicit `depends_on` sources (if active on current branch)\n\nThis means `parent` creates an implicit dependency—you don't need to list it in `depends_on`.\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# How It Works / directory-scoping"
+        ],
+        [
+          "How It Works",
+          "## How It Works\n\n### Scope Resolution Algorithm\n\nWhen you run `ariadne manifest --auto-scope`, Ariadne:\n\n1. Gets your current working directory\n2. Gets your current git branch\n3. For each configured source:\n   - Checks if the source is active on the current branch\n   - Checks if cwd is within the source's path\n4. Returns the most specific match (longest path that contains cwd)\n\n```python\n# Simplified logic from get_source_scope()\nfor source in sources:\n    if not source.is_active_on_branch(current_branch):\n        continue\n    if cwd.is_under(source.path):\n        candidates.append(source)\n\nreturn most_specific(candidates)  # Longest path wins\n```\n\n### Branch Pattern Matching\n\nBranch patterns use Python's `fnmatch` module:\n\n| Pattern | Matches |\n|---------|---------|\n| `main` | Exactly `main` |\n| `feature/*` | `feature/foo`, `feature/bar` |\n| `release-*` | `release-1.0`, `release-2.0` |\n| `*` | Any branch |\n\n### Effective Dependencies\n\nWhen loading docs, Ariadne computes \"effective dependencies\" which include:\n\n1. The parent source (if defined and active)\n2. All explicit `depends_on` sources (if active on current branch)\n\nThis means `parent` creates an implicit dependency—you don't need to list it in `depends_on`."
+        ]
+      ]
+    },
+    {
+      "id": "scope-conflicts",
+      "title": "Conflict Resolution / directory-scoping",
+      "content": "# Conflict Resolution / directory-scoping\n\n## Conflict Resolution\n\nWhen multiple sources provide documentation about the same topic, conflicts can arise.\n\n### What Causes Conflicts\n\n- Same document title in multiple sources\n- Overlapping file coverage (same source files documented in parent and child)\n- Duplicate content in branch-specific vs base sources\n\n### Resolution Precedence\n\nAriadne resolves conflicts using these rules (highest priority first):\n\n1. **Scope-specific wins** - If you're in a subdirectory, its docs take precedence over parent\n2. **Branch-specific wins** - Branch-filtered docs override base docs\n3. **Most recently updated wins** - Tiebreaker based on modification time\n\n### Using `supersedes` Metadata\n\nYou can explicitly mark documents that supersede others:\n\n```yaml\n# In a document's frontmatter\n---\ntitle: Updated Caching Design\nsupersedes: old-caching-design\n---\n```\n\nThis ensures the new document is preferred when both are available.\n",
+      "source_file": "docs/directory-scoping.md",
+      "source_lines": [
+        218,
+        249
+      ],
+      "source_sha256": "1853d525d475c1529f863be86df997250c7ccbb1e7c01a28e325f57a2eab01cc",
+      "chunks": [
+        "# Conflict Resolution / directory-scoping\n\n## Conflict Resolution\n\nWhen multiple sources provide documentation about the same topic, conflicts can arise.\n\n### What Causes Conflicts\n\n- Same document title in multiple sources\n- Overlapping file coverage (same source files documented in parent and child)\n- Duplicate content in branch-specific vs base sources\n\n### Resolution Precedence\n\nAriadne resolves conflicts using these rules (highest priority first):",
+        "1. **Scope-specific wins** - If you're in a subdirectory, its docs take precedence over parent\n2. **Branch-specific wins** - Branch-filtered docs override base docs\n3. **Most recently updated wins** - Tiebreaker based on modification time\n\n### Using `supersedes` Metadata\n\nYou can explicitly mark documents that supersede others:\n\n```yaml\n# In a document's frontmatter\n---\ntitle: Updated Caching Design\nsupersedes: old-caching-design\n---\n```",
+        "This ensures the new document is preferred when both are available.\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# Conflict Resolution / directory-scoping"
+        ],
+        [
+          "Conflict Resolution",
+          "## Conflict Resolution\n\nWhen multiple sources provide documentation about the same topic, conflicts can arise.\n\n### What Causes Conflicts\n\n- Same document title in multiple sources\n- Overlapping file coverage (same source files documented in parent and child)\n- Duplicate content in branch-specific vs base sources\n\n### Resolution Precedence\n\nAriadne resolves conflicts using these rules (highest priority first):\n\n1. **Scope-specific wins** - If you're in a subdirectory, its docs take precedence over parent\n2. **Branch-specific wins** - Branch-filtered docs override base docs\n3. **Most recently updated wins** - Tiebreaker based on modification time\n\n### Using `supersedes` Metadata\n\nYou can explicitly mark documents that supersede others:\n\n```yaml\n# In a document's frontmatter\n---\ntitle: Updated Caching Design\nsupersedes: old-caching-design\n---\n```\n\nThis ensures the new document is preferred when both are available."
+        ]
+      ]
+    },
+    {
+      "id": "scope-commands",
+      "title": "CLI Commands / directory-scoping",
+      "content": "# CLI Commands / directory-scoping\n\n## CLI Commands\n\n### `ariadne manifest --auto-scope`\n\nOutputs the manifest for the auto-detected source based on your cwd and branch:\n\n```bash\n# From /path/to/myproject/benchmark on main branch\n$ ariadne manifest --auto-scope\n# Shows: benchmark source manifest with pythonproject dependencies\n```\n\nOptions:\n- `--branch BRANCH` - Override branch detection\n- `--no-branch-filter` - Disable branch filtering entirely\n- `--limit N` - Limit number of documents shown\n\n### `ariadne search --source --include-all`\n\nSearch with scope awareness:\n\n```bash\n# Search only in current scope\n$ ariadne search \"caching\" --source benchmark\n\n# Search across all sources regardless of scope\n$ ariadne search \"caching\" --include-all\n```\n",
+      "source_file": "docs/directory-scoping.md",
+      "source_lines": [
+        250,
+        278
+      ],
+      "source_sha256": "1853d525d475c1529f863be86df997250c7ccbb1e7c01a28e325f57a2eab01cc",
+      "chunks": [
+        "# CLI Commands / directory-scoping\n\n## CLI Commands\n\n### `ariadne manifest --auto-scope`\n\nOutputs the manifest for the auto-detected source based on your cwd and branch:\n\n```bash\n# From /path/to/myproject/benchmark on main branch\n$ ariadne manifest --auto-scope\n# Shows: benchmark source manifest with pythonproject dependencies\n```\n\nOptions:\n- `--branch BRANCH` - Override branch detection\n- `--no-branch-filter` - Disable branch filtering entirely\n- `--limit N` - Limit number of documents shown",
+        "### `ariadne search --source --include-all`\n\nSearch with scope awareness:\n\n```bash\n# Search only in current scope\n$ ariadne search \"caching\" --source benchmark\n\n# Search across all sources regardless of scope\n$ ariadne search \"caching\" --include-all\n```\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# CLI Commands / directory-scoping"
+        ],
+        [
+          "CLI Commands",
+          "## CLI Commands\n\n### `ariadne manifest --auto-scope`\n\nOutputs the manifest for the auto-detected source based on your cwd and branch:\n\n```bash\n# From /path/to/myproject/benchmark on main branch\n$ ariadne manifest --auto-scope\n# Shows: benchmark source manifest with pythonproject dependencies\n```\n\nOptions:\n- `--branch BRANCH` - Override branch detection\n- `--no-branch-filter` - Disable branch filtering entirely\n- `--limit N` - Limit number of documents shown\n\n### `ariadne search --source --include-all`\n\nSearch with scope awareness:\n\n```bash\n# Search only in current scope\n$ ariadne search \"caching\" --source benchmark\n\n# Search across all sources regardless of scope\n$ ariadne search \"caching\" --include-all\n```"
+        ]
+      ]
+    },
+    {
+      "id": "onboard-source",
+      "title": "Step 1: Configure the Source / new-project-onboarding",
+      "content": "# Step 1: Configure the Source / new-project-onboarding\n\n## Step 1: Configure the Source\n\nAdd your project to `ariadne.yaml` in the Ariadne directory:\n\n```yaml\ndefault_source: myproject\n\nsources:\n  myproject: /path/to/myproject/src\n\ndocs_base: ./docs\n```\n\nThe `path` should point to your source code root. For more advanced setups (monorepo subdirectories, branch filtering, dependencies), see the [Source Configuration Schema](../README.md#source-configuration-fields) in the README.\n",
+      "source_file": "docs/new-project-onboarding.md",
+      "source_lines": [
+        21,
+        35
+      ],
+      "source_sha256": "00ec03ec4fc3a2a57f392b1fd756d8165ab53b17837c84dc985d9ba05d1fb11e",
+      "chunks": [],
+      "sections": [
+        [
+          "",
+          "# Step 1: Configure the Source / new-project-onboarding"
+        ],
+        [
+          "Step 1: Configure the Source",
+          "## Step 1: Configure the Source\n\nAdd your project to `ariadne.yaml` in the Ariadne directory:\n\n```yaml\ndefault_source: myproject\n\nsources:\n  myproject: /path/to/myproject/src\n\ndocs_base: ./docs\n```\n\nThe `path` should point to your source code root. For more advanced setups (monorepo subdirectories, branch filtering, dependencies), see the [Source Configuration Schema](../README.md#source-configuration-fields) in the README."
+        ]
+      ]
+    },
+    {
+      "id": "generate-docs",
+      "title": "Step 2: Generate Documentation / new-project-onboarding",
+      "content": "# Step 2: Generate Documentation / new-project-onboarding\n\n## Step 2: Generate Documentation\n\n```bash\n# Generate docs from source code\nariadne generate --source myproject\n\n# Export to markdown files under docs/myproject/\nariadne export --source myproject\n\n# Verify documents were created\nariadne list --source myproject\n```\n\nYou should see a list of generated documents (explanations, architecture docs, etc.).\n\n**What to expect:**\n- Generation uses the LLM model configured in `ariadne.yaml` (`defaults.model`, e.g., `claude-opus-4-8` or `gpt-5.5`)\n- Duration depends on codebase size — a small project takes a few minutes, a large one can take 10-30 minutes\n- Concurrency is configurable: `ariadne generate --concurrency 5` (default: 3)\n- If generation fails partway through, re-run with `--force` to retry failed files\n- Use `--dry-run` to preview what would be generated without making API calls\n- Use `--verbose` to see detailed validation output for any failures\n",
+      "source_file": "docs/new-project-onboarding.md",
+      "source_lines": [
+        36,
+        58
+      ],
+      "source_sha256": "00ec03ec4fc3a2a57f392b1fd756d8165ab53b17837c84dc985d9ba05d1fb11e",
+      "chunks": [
+        "# Step 2: Generate Documentation / new-project-onboarding\n\n## Step 2: Generate Documentation\n\n```bash\n# Generate docs from source code\nariadne generate --source myproject\n\n# Export to markdown files under docs/myproject/\nariadne export --source myproject\n\n# Verify documents were created\nariadne list --source myproject\n```\n\nYou should see a list of generated documents (explanations, architecture docs, etc.).",
+        "**What to expect:**\n- Generation uses the LLM model configured in `ariadne.yaml` (`defaults.model`, e.g., `claude-opus-4-8` or `gpt-5.5`)\n- Duration depends on codebase size — a small project takes a few minutes, a large one can take 10-30 minutes\n- Concurrency is configurable: `ariadne generate --concurrency 5` (default: 3)\n- If generation fails partway through, re-run with `--force` to retry failed files\n- Use `--dry-run` to preview what would be generated without making API calls",
+        "what would be generated without making API calls\n- Use `--verbose` to see detailed validation output for any failures"
+      ],
+      "sections": [
+        [
+          "",
+          "# Step 2: Generate Documentation / new-project-onboarding"
+        ],
+        [
+          "Step 2: Generate Documentation",
+          "## Step 2: Generate Documentation\n\n```bash\n# Generate docs from source code\nariadne generate --source myproject\n\n# Export to markdown files under docs/myproject/\nariadne export --source myproject\n\n# Verify documents were created\nariadne list --source myproject\n```\n\nYou should see a list of generated documents (explanations, architecture docs, etc.).\n\n**What to expect:**\n- Generation uses the LLM model configured in `ariadne.yaml` (`defaults.model`, e.g., `claude-opus-4-8` or `gpt-5.5`)\n- Duration depends on codebase size — a small project takes a few minutes, a large one can take 10-30 minutes\n- Concurrency is configurable: `ariadne generate --concurrency 5` (default: 3)\n- If generation fails partway through, re-run with `--force` to retry failed files\n- Use `--dry-run` to preview what would be generated without making API calls\n- Use `--verbose` to see detailed validation output for any failures"
+        ]
+      ]
+    },
+    {
+      "id": "integration-setup",
+      "title": "Step 3: Initialize the Integration / new-project-onboarding",
+      "content": "# Step 3: Initialize the Integration / new-project-onboarding\n\n## Step 3: Initialize the Integration\n\n`ariadne init` is the all-in-one setup command. It creates session hooks, CLAUDE.md instructions, and registers the MCP server.\n\n### Automated Setup (Recommended)\n\n```bash\n# Register MCP globally + create hooks in your project\nariadne init --source myproject --target /path/to/myproject --global\n```\n\nThis does three things:\n1. **Registers the MCP server** at user scope (available in all Claude Code sessions)\n2. **Creates `.claude/settings.json`** in the target project with:\n   - **SessionStart hook** — runs `ariadne manifest --auto-scope` to display the doc index at session start\n   - **PostToolUse hook** — syncs CLAUDE.md edits back to Ariadne\n3. **Appends to CLAUDE.md** — instructions telling Claude to check Ariadne docs before exploring source code\n\n### Per-Project MCP (Alternative)\n\nIf you don't want global MCP registration, omit `--global`:\n\n```bash\nariadne init --source myproject --target /path/to/myproject\n```\n\nThis creates a `.mcp.json` in the target project instead of registering globally:\n\n```json\n{\n  \"mcpServers\": {\n    \"ariadne\": {\n      \"command\": \"uv\",\n      \"args\": [\"run\", \"--directory\", \"/path/to/Ariadne\", \"ariadne\", \"mcp\"]\n    }\n  }\n}\n```\n\n### Manual MCP Registration\n\nIf you prefer to register the MCP server manually without creating hooks:\n\n```bash\nclaude mcp add -s user ariadne -- uv run --directory /path/to/Ariadne ariadne mcp\n```\n\nNote: With manual registration, you won't get session hooks or CLAUDE.md instructions. The MCP server's built-in `instructions` directive still tells Claude to use Ariadne tools first (see [How MCP Instructions Work](claude-code-integration.md#how-mcp-instructions-work)), but you miss the session-start manifest display.\n\n### Verify MCP Connection\n\n```bash\nclaude mcp list\n```\n\nYou should see: `ariadne: ... Connected`\n",
+      "source_file": "docs/new-project-onboarding.md",
+      "source_lines": [
+        59,
+        115
+      ],
+      "source_sha256": "00ec03ec4fc3a2a57f392b1fd756d8165ab53b17837c84dc985d9ba05d1fb11e",
+      "chunks": [
+        "# Step 3: Initialize the Integration / new-project-onboarding\n\n## Step 3: Initialize the Integration\n\n`ariadne init` is the all-in-one setup command. It creates session hooks, CLAUDE.md instructions, and registers the MCP server.\n\n### Automated Setup (Recommended)\n\n```bash\n# Register MCP globally + create hooks in your project\nariadne init --source myproject --target /path/to/myproject --global\n```",
+        "This does three things:\n1. **Registers the MCP server** at user scope (available in all Claude Code sessions)\n2. **Creates `.claude/settings.json`** in the target project with:\n   - **SessionStart hook** — runs `ariadne manifest --auto-scope` to display the doc index at session start\n   - **PostToolUse hook** — syncs CLAUDE.md edits back to Ariadne\n3. **Appends to CLAUDE.md** — instructions telling Claude to check Ariadne docs before exploring source code\n\n### Per-Project MCP (Alternative)",
+        "If you don't want global MCP registration, omit `--global`:\n\n```bash\nariadne init --source myproject --target /path/to/myproject\n```\n\nThis creates a `.mcp.json` in the target project instead of registering globally:\n\n```json\n{\n  \"mcpServers\": {\n    \"ariadne\": {\n      \"command\": \"uv\",\n      \"args\": [\"run\", \"--directory\", \"/path/to/Ariadne\", \"ariadne\", \"mcp\"]\n    }\n  }\n}\n```\n\n### Manual MCP Registration\n\nIf you prefer to register the MCP server manually without creating hooks:",
+        "```bash\nclaude mcp add -s user ariadne -- uv run --directory /path/to/Ariadne ariadne mcp\n```\n\nNote: With manual registration, you won't get session hooks or CLAUDE.md instructions. The MCP server's built-in `instructions` directive still tells Claude to use Ariadne tools first (see [How MCP Instructions Work](claude-code-integration.md#how-mcp-instructions-work)), but you miss the session-start manifest display.\n\n### Verify MCP Connection\n\n```bash\nclaude mcp list\n```",
+        "You should see: `ariadne: ... Connected`\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# Step 3: Initialize the Integration / new-project-onboarding"
+        ],
+        [
+          "Step 3: Initialize the Integration",
+          "## Step 3: Initialize the Integration\n\n`ariadne init` is the all-in-one setup command. It creates session hooks, CLAUDE.md instructions, and registers the MCP server.\n\n### Automated Setup (Recommended)\n\n```bash\n# Register MCP globally + create hooks in your project\nariadne init --source myproject --target /path/to/myproject --global\n```\n\nThis does three things:\n1. **Registers the MCP server** at user scope (available in all Claude Code sessions)\n2. **Creates `.claude/settings.json`** in the target project with:\n   - **SessionStart hook** — runs `ariadne manifest --auto-scope` to display the doc index at session start\n   - **PostToolUse hook** — syncs CLAUDE.md edits back to Ariadne\n3. **Appends to CLAUDE.md** — instructions telling Claude to check Ariadne docs before exploring source code\n\n### Per-Project MCP (Alternative)\n\nIf you don't want global MCP registration, omit `--global`:\n\n```bash\nariadne init --source myproject --target /path/to/myproject\n```\n\nThis creates a `.mcp.json` in the target project instead of registering globally:\n\n```json\n{\n  \"mcpServers\": {\n    \"ariadne\": {\n      \"command\": \"uv\",\n      \"args\": [\"run\", \"--directory\", \"/path/to/Ariadne\", \"ariadne\", \"mcp\"]\n    }\n  }\n}\n```\n\n### Manual MCP Registration\n\nIf you prefer to register the MCP server manually without creating hooks:\n\n```bash\nclaude mcp add -s user ariadne -- uv run --directory /path/to/Ariadne ariadne mcp\n```\n\nNote: With manual registration, you won't get session hooks or CLAUDE.md instructions. The MCP server's built-in `instructions` directive still tells Claude to use Ariadne tools first (see [How MCP Instructions Work](claude-code-integration.md#how-mcp-instructions-work)), but you miss the session-start manifest display.\n\n### Verify MCP Connection\n\n```bash\nclaude mcp list\n```\n\nYou should see: `ariadne: ... Connected`"
+        ]
+      ]
+    },
+    {
+      "id": "mcp-permissions",
+      "title": "Step 4: Grant MCP Permissions (Optional) / new-project-onboarding",
+      "content": "# Step 4: Grant MCP Permissions (Optional) / new-project-onboarding\n\n## Step 4: Grant MCP Permissions (Optional)\n\nWithout permissions, Claude will prompt for approval each time it calls an MCP tool. To auto-allow the most common read-only tools, add them to `.claude/settings.local.json` in your project:\n\n```json\n{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__ariadne__ariadne_search\",\n      \"mcp__ariadne__ariadne_list_all\",\n      \"mcp__ariadne__ariadne_sync_status\",\n      \"mcp__ariadne__ariadne_log_hit\"\n    ]\n  }\n}\n```\n\nFor the full list of available tools, see [Available MCP Tools](claude-code-integration.md#available-mcp-tools).\n",
+      "source_file": "docs/new-project-onboarding.md",
+      "source_lines": [
+        116,
+        134
+      ],
+      "source_sha256": "00ec03ec4fc3a2a57f392b1fd756d8165ab53b17837c84dc985d9ba05d1fb11e",
+      "chunks": [
+        "# Step 4: Grant MCP Permissions (Optional) / new-project-onboarding\n\n## Step 4: Grant MCP Permissions (Optional)\n\nWithout permissions, Claude will prompt for approval each time it calls an MCP tool. To auto-allow the most common read-only tools, add them to `.claude/settings.local.json` in your project:",
+        "```json\n{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__ariadne__ariadne_search\",\n      \"mcp__ariadne__ariadne_list_all\",\n      \"mcp__ariadne__ariadne_sync_status\",\n      \"mcp__ariadne__ariadne_log_hit\"\n    ]\n  }\n}\n```\n\nFor the full list of available tools, see [Available MCP Tools](claude-code-integration.md#available-mcp-tools).\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# Step 4: Grant MCP Permissions (Optional) / new-project-onboarding"
+        ],
+        [
+          "Step 4: Grant MCP Permissions (Optional)",
+          "## Step 4: Grant MCP Permissions (Optional)\n\nWithout permissions, Claude will prompt for approval each time it calls an MCP tool. To auto-allow the most common read-only tools, add them to `.claude/settings.local.json` in your project:\n\n```json\n{\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__ariadne__ariadne_search\",\n      \"mcp__ariadne__ariadne_list_all\",\n      \"mcp__ariadne__ariadne_sync_status\",\n      \"mcp__ariadne__ariadne_log_hit\"\n    ]\n  }\n}\n```\n\nFor the full list of available tools, see [Available MCP Tools](claude-code-integration.md#available-mcp-tools)."
+        ]
+      ]
+    },
+    {
+      "id": "docs-freshness",
+      "title": "Keeping Docs Fresh / new-project-onboarding",
+      "content": "# Keeping Docs Fresh / new-project-onboarding\n\n## Keeping Docs Fresh\n\nAfter code changes, sync documentation:\n\n```bash\n# Check what needs updating\nariadne sync --status --source myproject\n\n# Sync with git changes\nariadne sync --source myproject\n```\n\nFor automatic sync after every commit, set up a git post-commit hook. See [Automatic Sync via Git Hook](../README.md#automatic-sync-via-git-hook) in the README.\n",
+      "source_file": "docs/new-project-onboarding.md",
+      "source_lines": [
+        142,
+        155
+      ],
+      "source_sha256": "00ec03ec4fc3a2a57f392b1fd756d8165ab53b17837c84dc985d9ba05d1fb11e",
+      "chunks": [],
+      "sections": [
+        [
+          "",
+          "# Keeping Docs Fresh / new-project-onboarding"
+        ],
+        [
+          "Keeping Docs Fresh",
+          "## Keeping Docs Fresh\n\nAfter code changes, sync documentation:\n\n```bash\n# Check what needs updating\nariadne sync --status --source myproject\n\n# Sync with git changes\nariadne sync --source myproject\n```\n\nFor automatic sync after every commit, set up a git post-commit hook. See [Automatic Sync via Git Hook](../README.md#automatic-sync-via-git-hook) in the README."
+        ]
+      ]
+    },
+    {
+      "id": "local-onboard",
+      "title": "Local model onboarding / new-project-onboarding",
+      "content": "# Local model onboarding / new-project-onboarding\n\n## Local model onboarding\n\nFor the local pair, follow [local models](local-models.md) and use a fresh database pair. `ariadne onboard --source NAME` performs only deterministic preview; it does not discover/index into the target corpus or generate catalog embeddings. `--approve` binds the pair and executes structural/catalog work, descriptions, generation, reverse augmentation, themes and cross-references as a durable foreground run. Keep the printed `local:` ID and resume it with `ariadne batch resume ID`. Local runs have no provider batch discount or 24-hour SLA. The supplied deployment remains a candidate until hardware qualification is recorded.\n",
+      "source_file": "docs/new-project-onboarding.md",
+      "source_lines": [
+        184,
+        186
+      ],
+      "source_sha256": "00ec03ec4fc3a2a57f392b1fd756d8165ab53b17837c84dc985d9ba05d1fb11e",
+      "chunks": [
+        "# Local model onboarding / new-project-onboarding\n\n## Local model onboarding",
+        "For the local pair, follow [local models](local-models.md) and use a fresh database pair. `ariadne onboard --source NAME` performs only deterministic preview; it does not discover/index into the target corpus or generate catalog embeddings. `--approve` binds the pair and executes structural/catalog work, descriptions, generation, reverse augmentation, themes and cross-references as a durable foreground run. Keep the printed `local:` ID and resume it with `ariadne batch resume ID`.",
+        "ID and resume it with `ariadne batch resume ID`. Local runs have no provider batch discount or 24-hour SLA. The supplied deployment remains a candidate until hardware qualification is recorded."
+      ],
+      "sections": [
+        [
+          "",
+          "# Local model onboarding / new-project-onboarding"
+        ],
+        [
+          "Local model onboarding",
+          "## Local model onboarding\n\nFor the local pair, follow [local models](local-models.md) and use a fresh database pair. `ariadne onboard --source NAME` performs only deterministic preview; it does not discover/index into the target corpus or generate catalog embeddings. `--approve` binds the pair and executes structural/catalog work, descriptions, generation, reverse augmentation, themes and cross-references as a durable foreground run. Keep the printed `local:` ID and resume it with `ariadne batch resume ID`. Local runs have no provider batch discount or 24-hour SLA. The supplied deployment remains a candidate until hardware qualification is recorded."
+        ]
+      ]
+    },
+    {
+      "id": "local-profile",
+      "title": "Local models / local-models",
+      "content": "# Local models / local-models\n\n## Local models\n\nAriadne implements local inference for the fixed pair `Qwen/Qwen3.8-27B` and `Qwen/Qwen3-Embedding-8B`. The software is tested against two independent HTTP fixtures. The pinned [serving candidate](../deployments/local-v1/README.md) still needs [real-model qualification](local-model-qualification.md); it is not a production support claim.\n\nDevelopment and automated tests do not require GPUs, model weights, or running Qwen servers. Real-model qualification is deferred until a deployment is available. Actual local generation, embedding and semantic retrieval require the configured model endpoints.\n\nFor paid verification without local servers, use the [shared hosted workflow runner](live-model-verification.md). Change `--profile` to run the same scenarios with hosted Qwen, Claude or OpenAI; each profile uses a fresh library and an explicit spending cap. The separate blind implementation run passed 41 checks across six fresh Qwen cases; earlier factual failures remain recorded separately.\n\nThe [Docker application image](docker.md) includes cloud/local presets and has passed local registry push/pull, installed-package CLI/MCP checks with networking disabled, and state persistence across container recreation. External publication and real GPU qualification remain separate.\n\nStart from [ariadne.local.yaml.example](../ariadne.local.yaml.example). Set independent `/v1` endpoints, actual artifact and tokenizer revisions, BF16 weight representation, and fresh library/sidecar paths. Credential settings name environment variables; `null` omits authorization. Local requests ignore `OPENAI_BASE_URL`, cloud keys and proxy environment variables. HTTP redirects are refused. Token counting uses each local server's `/tokenize`, including the rendered non-thinking chat template. Generation reserves its complete requested output budget plus 64 tokens. Inputs that do not fit fail explicitly.\n\n```sh\nariadne config\nariadne doctor --models\nariadne onboard --source myproject\nariadne onboard --source myproject --approve\nariadne generate --source myproject --batch\nariadne search 'How is authentication configured?' --source myproject\n```\n\nLocal previews do deterministic discovery and character estimates without inference, corpus writes, binding, catalog embeddings, or spool creation. Estimates say **$0 provider token charges; hardware/runtime cost unestimated**. Missing structural artifacts make the estimate incomplete. Hosted preview behavior is unchanged.\n\n`config`, inspection/export and batch list/status work with inference servers offline. `doctor --models` explicitly probes both advertised model IDs and tokenization routes; it does not generate text or bind a missing library.\n\nA library reserves both model identities before its first corpus mutation. Its staleness database belongs to the same UUID/profile. Changing endpoints, credential values, timeouts or concurrency limits does not change the model identity. Changing artifact/tokenizer pins, weight format or embedding recipe requires a new pair. `--force`, import and rebuild cannot migrate models. With local `--db`, an unspecified sidecar is derived beside that database; use `--staleness-db` before the subcommand to choose it explicitly.\n\nPopulated unbound libraries, including structural-only libraries, cannot be adopted into local mode. Existing populated hosted libraries keep their legacy behavior without a historical identity guarantee. Newly created hosted libraries also reserve their configured pair. Bare handles may inspect or export bound databases; semantic consumers and writers need an `InferenceContext`.\n\nThe embedding recipe is `qwen3-embedding-8b-3072-v1`. Only search queries receive the fixed retrieval instruction. Documents retain the title plus the first 2000 content characters; chunks retain current chunk text and sections retain their heading or `Introduction`. The server returns 4096 floats, response indices restore ordering, and Ariadne stores the normalized first 3072 components. Raw local embedding wrappers require a query/document purpose. Invalid vectors never enter a prepared document transaction.\n\nLive operations prepare document, chunk and section vectors before atomically replacing their text and vectors. Metadata-only changes preserve vectors. Same-model rebuild refreshes all three levels and removes obsolete children. Corpus revisions invalidate retrieval caches across processes. Audience responses use the same model pair and scope/branch/revision-aware caches. Generated cross-reference decoration excludes authored text and catalogs.\n",
+      "source_file": "docs/local-models.md",
+      "source_lines": [
+        1,
+        33
+      ],
+      "source_sha256": "718a8e6129b35f82fb01f81d7784379f5e5e65e8cfa13a5611211d9327b39b4f",
+      "chunks": [
+        "# Local models / local-models\n\n## Local models\n\nAriadne implements local inference for the fixed pair `Qwen/Qwen3.8-27B` and `Qwen/Qwen3-Embedding-8B`. The software is tested against two independent HTTP fixtures. The pinned [serving candidate](../deployments/local-v1/README.md) still needs [real-model qualification](local-model-qualification.md); it is not a production support claim.",
+        "Development and automated tests do not require GPUs, model weights, or running Qwen servers. Real-model qualification is deferred until a deployment is available. Actual local generation, embedding and semantic retrieval require the configured model endpoints.",
+        "For paid verification without local servers, use the [shared hosted workflow runner](live-model-verification.md). Change `--profile` to run the same scenarios with hosted Qwen, Claude or OpenAI; each profile uses a fresh library and an explicit spending cap. The separate blind implementation run passed 41 checks across six fresh Qwen cases; earlier factual failures remain recorded separately.",
+        "The [Docker application image](docker.md) includes cloud/local presets and has passed local registry push/pull, installed-package CLI/MCP checks with networking disabled, and state persistence across container recreation. External publication and real GPU qualification remain separate.",
+        "Start from [ariadne.local.yaml.example](../ariadne.local.yaml.example). Set independent `/v1` endpoints, actual artifact and tokenizer revisions, BF16 weight representation, and fresh library/sidecar paths. Credential settings name environment variables; `null` omits authorization. Local requests ignore `OPENAI_BASE_URL`, cloud keys and proxy environment variables. HTTP redirects are refused. Token counting uses each local server's `/tokenize`, including the rendered non-thinking chat template.",
+        "ncluding the rendered non-thinking chat template. Generation reserves its complete requested output budget plus 64 tokens. Inputs that do not fit fail explicitly.\n\n```sh\nariadne config\nariadne doctor --models\nariadne onboard --source myproject\nariadne onboard --source myproject --approve\nariadne generate --source myproject --batch\nariadne search 'How is authentication configured?' --source myproject\n```",
+        "Local previews do deterministic discovery and character estimates without inference, corpus writes, binding, catalog embeddings, or spool creation. Estimates say **$0 provider token charges; hardware/runtime cost unestimated**. Missing structural artifacts make the estimate incomplete. Hosted preview behavior is unchanged.",
+        "`config`, inspection/export and batch list/status work with inference servers offline. `doctor --models` explicitly probes both advertised model IDs and tokenization routes; it does not generate text or bind a missing library.",
+        "A library reserves both model identities before its first corpus mutation. Its staleness database belongs to the same UUID/profile. Changing endpoints, credential values, timeouts or concurrency limits does not change the model identity. Changing artifact/tokenizer pins, weight format or embedding recipe requires a new pair. `--force`, import and rebuild cannot migrate models.",
+        "force`, import and rebuild cannot migrate models. With local `--db`, an unspecified sidecar is derived beside that database; use `--staleness-db` before the subcommand to choose it explicitly.",
+        "Populated unbound libraries, including structural-only libraries, cannot be adopted into local mode. Existing populated hosted libraries keep their legacy behavior without a historical identity guarantee. Newly created hosted libraries also reserve their configured pair. Bare handles may inspect or export bound databases; semantic consumers and writers need an `InferenceContext`.",
+        "The embedding recipe is `qwen3-embedding-8b-3072-v1`. Only search queries receive the fixed retrieval instruction. Documents retain the title plus the first 2000 content characters; chunks retain current chunk text and sections retain their heading or `Introduction`. The server returns 4096 floats, response indices restore ordering, and Ariadne stores the normalized first 3072 components. Raw local embedding wrappers require a query/document purpose.",
+        "edding wrappers require a query/document purpose. Invalid vectors never enter a prepared document transaction.",
+        "Live operations prepare document, chunk and section vectors before atomically replacing their text and vectors. Metadata-only changes preserve vectors. Same-model rebuild refreshes all three levels and removes obsolete children. Corpus revisions invalidate retrieval caches across processes. Audience responses use the same model pair and scope/branch/revision-aware caches. Generated cross-reference decoration excludes authored text and catalogs.\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# Local models / local-models"
+        ],
+        [
+          "Local models",
+          "## Local models\n\nAriadne implements local inference for the fixed pair `Qwen/Qwen3.8-27B` and `Qwen/Qwen3-Embedding-8B`. The software is tested against two independent HTTP fixtures. The pinned [serving candidate](../deployments/local-v1/README.md) still needs [real-model qualification](local-model-qualification.md); it is not a production support claim.\n\nDevelopment and automated tests do not require GPUs, model weights, or running Qwen servers. Real-model qualification is deferred until a deployment is available. Actual local generation, embedding and semantic retrieval require the configured model endpoints.\n\nFor paid verification without local servers, use the [shared hosted workflow runner](live-model-verification.md). Change `--profile` to run the same scenarios with hosted Qwen, Claude or OpenAI; each profile uses a fresh library and an explicit spending cap. The separate blind implementation run passed 41 checks across six fresh Qwen cases; earlier factual failures remain recorded separately.\n\nThe [Docker application image](docker.md) includes cloud/local presets and has passed local registry push/pull, installed-package CLI/MCP checks with networking disabled, and state persistence across container recreation. External publication and real GPU qualification remain separate.\n\nStart from [ariadne.local.yaml.example](../ariadne.local.yaml.example). Set independent `/v1` endpoints, actual artifact and tokenizer revisions, BF16 weight representation, and fresh library/sidecar paths. Credential settings name environment variables; `null` omits authorization. Local requests ignore `OPENAI_BASE_URL`, cloud keys and proxy environment variables. HTTP redirects are refused. Token counting uses each local server's `/tokenize`, including the rendered non-thinking chat template. Generation reserves its complete requested output budget plus 64 tokens. Inputs that do not fit fail explicitly.\n\n```sh\nariadne config\nariadne doctor --models\nariadne onboard --source myproject\nariadne onboard --source myproject --approve\nariadne generate --source myproject --batch\nariadne search 'How is authentication configured?' --source myproject\n```\n\nLocal previews do deterministic discovery and character estimates without inference, corpus writes, binding, catalog embeddings, or spool creation. Estimates say **$0 provider token charges; hardware/runtime cost unestimated**. Missing structural artifacts make the estimate incomplete. Hosted preview behavior is unchanged.\n\n`config`, inspection/export and batch list/status work with inference servers offline. `doctor --models` explicitly probes both advertised model IDs and tokenization routes; it does not generate text or bind a missing library.\n\nA library reserves both model identities before its first corpus mutation. Its staleness database belongs to the same UUID/profile. Changing endpoints, credential values, timeouts or concurrency limits does not change the model identity. Changing artifact/tokenizer pins, weight format or embedding recipe requires a new pair. `--force`, import and rebuild cannot migrate models. With local `--db`, an unspecified sidecar is derived beside that database; use `--staleness-db` before the subcommand to choose it explicitly.\n\nPopulated unbound libraries, including structural-only libraries, cannot be adopted into local mode. Existing populated hosted libraries keep their legacy behavior without a historical identity guarantee. Newly created hosted libraries also reserve their configured pair. Bare handles may inspect or export bound databases; semantic consumers and writers need an `InferenceContext`.\n\nThe embedding recipe is `qwen3-embedding-8b-3072-v1`. Only search queries receive the fixed retrieval instruction. Documents retain the title plus the first 2000 content characters; chunks retain current chunk text and sections retain their heading or `Introduction`. The server returns 4096 floats, response indices restore ordering, and Ariadne stores the normalized first 3072 components. Raw local embedding wrappers require a query/document purpose. Invalid vectors never enter a prepared document transaction.\n\nLive operations prepare document, chunk and section vectors before atomically replacing their text and vectors. Metadata-only changes preserve vectors. Same-model rebuild refreshes all three levels and removes obsolete children. Corpus revisions invalidate retrieval caches across processes. Audience responses use the same model pair and scope/branch/revision-aware caches. Generated cross-reference decoration excludes authored text and catalogs."
+        ]
+      ]
+    },
+    {
+      "id": "local-jobs",
+      "title": "Durable local runs / local-models",
+      "content": "# Durable local runs / local-models\n\n## Durable local runs\n\n`--batch` runs a single foreground worker with SQLite persistence; it has no cloud batch discount or 24-hour SLA and never calls `/batches` or uploads batch files. Auto mode uses `execution.auto_batch_threshold`. Local onboarding and theme builds have durable phases; catalog synchronization uses embedding-only jobs. Catalog descriptions support `--batch`.\n\n```sh\nariadne batch list\nariadne batch status local:RUN_UUID\nariadne batch resume local:RUN_UUID\nariadne batch cancel local:RUN_UUID\nariadne batch clear local:RUN_UUID\n```\n\nList/status work offline. Ctrl-C and process termination leave work resumable. Saved chat responses and parsed results survive an interrupted embedding/application stage. Retry attempts are persisted before work and remain bounded after restarts. An applied document and its job marker commit together, so replay preserves timestamps. Status distinguishes saved responses from applied documents. Explicit cancellation is terminal; clearing accepts terminal runs only and preserves applied documents.\n\nOne nonblocking POSIX lock owns corpus writes across CLI and MCP operations. Independent writers fail as busy. Cancellation uses a short control-only transaction, allowing another process to stop an active run. SQLite remains WAL/`synchronous=normal`: process-crash recovery is tested; power-loss durability has not been qualified. Keep both database files, their SQLite WAL files as appropriate for a consistent backup, and the main database's spool when backing up a library. Backups preserve UUIDs.\n\nLater phases are planned after their inputs exist: structural catalog → catalog descriptions → per-file generation → reverse augmentation → semantic graph/themes → generated-prose cross-references → staleness reconciliation. Source and target changes make queued work obsolete. A file becomes current only when all requested, language-supported document types committed for the same captured hash. Sidecar keys include source name, generation scope and relative path.\n\nBound Markdown exports carry versioned model-pair and generated-document provenance using safe nested YAML. Import preflights all candidates before applying any and re-embeds matching content locally; another library UUID is allowed for the same profile. Import never copies sidecar ownership or spools. Unidentified generated exports are rejected. Use authored ingestion (`add`, `finding`, MCP contributions) for human-authored material.\n",
+      "source_file": "docs/local-models.md",
+      "source_lines": [
+        34,
+        52
+      ],
+      "source_sha256": "718a8e6129b35f82fb01f81d7784379f5e5e65e8cfa13a5611211d9327b39b4f",
+      "chunks": [
+        "# Durable local runs / local-models\n\n## Durable local runs\n\n`--batch` runs a single foreground worker with SQLite persistence; it has no cloud batch discount or 24-hour SLA and never calls `/batches` or uploads batch files. Auto mode uses `execution.auto_batch_threshold`. Local onboarding and theme builds have durable phases; catalog synchronization uses embedding-only jobs. Catalog descriptions support `--batch`.",
+        "```sh\nariadne batch list\nariadne batch status local:RUN_UUID\nariadne batch resume local:RUN_UUID\nariadne batch cancel local:RUN_UUID\nariadne batch clear local:RUN_UUID\n```",
+        "List/status work offline. Ctrl-C and process termination leave work resumable. Saved chat responses and parsed results survive an interrupted embedding/application stage. Retry attempts are persisted before work and remain bounded after restarts. An applied document and its job marker commit together, so replay preserves timestamps. Status distinguishes saved responses from applied documents. Explicit cancellation is terminal; clearing accepts terminal runs only and preserves applied documents.",
+        "One nonblocking POSIX lock owns corpus writes across CLI and MCP operations. Independent writers fail as busy. Cancellation uses a short control-only transaction, allowing another process to stop an active run. SQLite remains WAL/`synchronous=normal`: process-crash recovery is tested; power-loss durability has not been qualified. Keep both database files, their SQLite WAL files as appropriate for a consistent backup, and the main database's spool when backing up a library.",
+        "main database's spool when backing up a library. Backups preserve UUIDs.",
+        "Later phases are planned after their inputs exist: structural catalog → catalog descriptions → per-file generation → reverse augmentation → semantic graph/themes → generated-prose cross-references → staleness reconciliation. Source and target changes make queued work obsolete. A file becomes current only when all requested, language-supported document types committed for the same captured hash. Sidecar keys include source name, generation scope and relative path.",
+        "Bound Markdown exports carry versioned model-pair and generated-document provenance using safe nested YAML. Import preflights all candidates before applying any and re-embeds matching content locally; another library UUID is allowed for the same profile. Import never copies sidecar ownership or spools. Unidentified generated exports are rejected. Use authored ingestion (`add`, `finding`, MCP contributions) for human-authored material.\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# Durable local runs / local-models"
+        ],
+        [
+          "Durable local runs",
+          "## Durable local runs\n\n`--batch` runs a single foreground worker with SQLite persistence; it has no cloud batch discount or 24-hour SLA and never calls `/batches` or uploads batch files. Auto mode uses `execution.auto_batch_threshold`. Local onboarding and theme builds have durable phases; catalog synchronization uses embedding-only jobs. Catalog descriptions support `--batch`.\n\n```sh\nariadne batch list\nariadne batch status local:RUN_UUID\nariadne batch resume local:RUN_UUID\nariadne batch cancel local:RUN_UUID\nariadne batch clear local:RUN_UUID\n```\n\nList/status work offline. Ctrl-C and process termination leave work resumable. Saved chat responses and parsed results survive an interrupted embedding/application stage. Retry attempts are persisted before work and remain bounded after restarts. An applied document and its job marker commit together, so replay preserves timestamps. Status distinguishes saved responses from applied documents. Explicit cancellation is terminal; clearing accepts terminal runs only and preserves applied documents.\n\nOne nonblocking POSIX lock owns corpus writes across CLI and MCP operations. Independent writers fail as busy. Cancellation uses a short control-only transaction, allowing another process to stop an active run. SQLite remains WAL/`synchronous=normal`: process-crash recovery is tested; power-loss durability has not been qualified. Keep both database files, their SQLite WAL files as appropriate for a consistent backup, and the main database's spool when backing up a library. Backups preserve UUIDs.\n\nLater phases are planned after their inputs exist: structural catalog → catalog descriptions → per-file generation → reverse augmentation → semantic graph/themes → generated-prose cross-references → staleness reconciliation. Source and target changes make queued work obsolete. A file becomes current only when all requested, language-supported document types committed for the same captured hash. Sidecar keys include source name, generation scope and relative path.\n\nBound Markdown exports carry versioned model-pair and generated-document provenance using safe nested YAML. Import preflights all candidates before applying any and re-embeds matching content locally; another library UUID is allowed for the same profile. Import never copies sidecar ownership or spools. Unidentified generated exports are rejected. Use authored ingestion (`add`, `finding`, MCP contributions) for human-authored material."
+        ]
+      ]
+    },
+    {
+      "id": "container-layout",
+      "title": "Docker application image / docker",
+      "content": "# Docker application image / docker\n\n## Docker application image\n\nThe application image installs Ariadne and its locked runtime dependencies, including the CLI and stdio MCP server. It runs as UID 1000, stores state under `/data`, and reads source under `/workspace`. It includes cloud and local configurations with container paths; the local configuration already contains the serving manifest's artifact pins.\n\nOn 2026-10-11 the image was built and tested on **linux/amd64**. A subsequent [local distribution test](../tests/fixtures/container/2026-10-11/distribution/README.md) pushed it to an isolated registry, pulled it by digest into an empty Docker daemon, and verified the installed package, both Compose configurations and state persistence across container recreation. The CLI/MCP model fixtures run with external networking disabled. External publication is separate from this verification; build the image from this checkout:\n\n```sh\ndocker build -t ariadne:local-model-support .\ndocker run --rm --network none ariadne:local-model-support --help\n```\n\nThe image uses a non-editable installation and pinned Python/uv base images. Host credentials, operator databases, tests and model weights are excluded from the runtime image. Language-specific SCIP indexers/build toolchains are not included; workflows requiring them need a separately provisioned image and writable indexing locations.\n",
+      "source_file": "docs/docker.md",
+      "source_lines": [
+        1,
+        13
+      ],
+      "source_sha256": "e54bf2ee6b268d90ad945c24c3bd186abb9624f41812d234ba274dc1d4d7ec97",
+      "chunks": [
+        "# Docker application image / docker\n\n## Docker application image\n\nThe application image installs Ariadne and its locked runtime dependencies, including the CLI and stdio MCP server. It runs as UID 1000, stores state under `/data`, and reads source under `/workspace`. It includes cloud and local configurations with container paths; the local configuration already contains the serving manifest's artifact pins.",
+        "On 2026-10-11 the image was built and tested on **linux/amd64**. A subsequent [local distribution test](../tests/fixtures/container/2026-10-11/distribution/README.md) pushed it to an isolated registry, pulled it by digest into an empty Docker daemon, and verified the installed package, both Compose configurations and state persistence across container recreation. The CLI/MCP model fixtures run with external networking disabled.",
+        "l fixtures run with external networking disabled. External publication is separate from this verification; build the image from this checkout:\n\n```sh\ndocker build -t ariadne:local-model-support .\ndocker run --rm --network none ariadne:local-model-support --help\n```",
+        "The image uses a non-editable installation and pinned Python/uv base images. Host credentials, operator databases, tests and model weights are excluded from the runtime image. Language-specific SCIP indexers/build toolchains are not included; workflows requiring them need a separately provisioned image and writable indexing locations.\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# Docker application image / docker"
+        ],
+        [
+          "Docker application image",
+          "## Docker application image\n\nThe application image installs Ariadne and its locked runtime dependencies, including the CLI and stdio MCP server. It runs as UID 1000, stores state under `/data`, and reads source under `/workspace`. It includes cloud and local configurations with container paths; the local configuration already contains the serving manifest's artifact pins.\n\nOn 2026-10-11 the image was built and tested on **linux/amd64**. A subsequent [local distribution test](../tests/fixtures/container/2026-10-11/distribution/README.md) pushed it to an isolated registry, pulled it by digest into an empty Docker daemon, and verified the installed package, both Compose configurations and state persistence across container recreation. The CLI/MCP model fixtures run with external networking disabled. External publication is separate from this verification; build the image from this checkout:\n\n```sh\ndocker build -t ariadne:local-model-support .\ndocker run --rm --network none ariadne:local-model-support --help\n```\n\nThe image uses a non-editable installation and pinned Python/uv base images. Host credentials, operator databases, tests and model weights are excluded from the runtime image. Language-specific SCIP indexers/build toolchains are not included; workflows requiring them need a separately provisioned image and writable indexing locations."
+        ]
+      ]
+    },
+    {
+      "id": "container-cloud",
+      "title": "Cloud suite / docker",
+      "content": "# Cloud suite / docker\n\n## Cloud suite\n\nFrom the repository root, export `OPENAI_API_KEY` and set `ARIADNE_SOURCE_DIR` to an absolute path to the repository you want documented. The Compose file defaults to this checkout when that path is omitted.\n\n```sh\nexport ARIADNE_SOURCE_DIR=/absolute/path/to/your/project\ndocker compose -f deployments/app/compose.yaml run --rm ariadne config\ndocker compose -f deployments/app/compose.yaml run --rm ariadne generate --source project --dry-run\ndocker compose -f deployments/app/compose.yaml run --rm ariadne generate --source project --no-batch --yes\ndocker compose -f deployments/app/compose.yaml run --rm ariadne search 'How does authentication work?' --source project\n```\n\nThe cloud preset uses GPT-6 Astra with OpenAI `text-embedding-3-large` at 3072 dimensions. For Claude, set `llm.provider: anthropic`, `llm.model: claude-opus-5-5`, and `llm.api_key_env: ANTHROPIC_API_KEY` in `deployments/app/cloud.yaml`, export that key too, and choose fresh database paths. The mounted YAML is read-only; edit configuration on the host.\n\nFor a stdio MCP client, launch:\n\n```sh\ndocker compose -f deployments/app/compose.yaml run --rm -T ariadne mcp\n```\n\nRun Compose from this checkout or give the client an absolute Compose file path. Source is mounted read-only. The named `ariadne-state` volume persists the library, sidecar and generated exports across container removal. Do not remove that volume to switch models.\n\nThe bundled cloud preset also supports running the image directly, without mounting a configuration file:\n\n```sh\ndocker run --rm -e OPENAI_API_KEY \\\n  --mount type=bind,src=/absolute/path/to/your/project,dst=/workspace,readonly \\\n  --mount type=volume,src=ariadne-cloud-state,dst=/data \\\n  ariadne:local-model-support generate --source project --no-batch --yes\n```\n",
+      "source_file": "docs/docker.md",
+      "source_lines": [
+        14,
+        44
+      ],
+      "source_sha256": "e54bf2ee6b268d90ad945c24c3bd186abb9624f41812d234ba274dc1d4d7ec97",
+      "chunks": [
+        "# Cloud suite / docker\n\n## Cloud suite\n\nFrom the repository root, export `OPENAI_API_KEY` and set `ARIADNE_SOURCE_DIR` to an absolute path to the repository you want documented. The Compose file defaults to this checkout when that path is omitted.",
+        "```sh\nexport ARIADNE_SOURCE_DIR=/absolute/path/to/your/project\ndocker compose -f deployments/app/compose.yaml run --rm ariadne config\ndocker compose -f deployments/app/compose.yaml run --rm ariadne generate --source project --dry-run\ndocker compose -f deployments/app/compose.yaml run --rm ariadne generate --source project --no-batch --yes\ndocker compose -f deployments/app/compose.yaml run --rm ariadne search 'How does authentication work?' --source project\n```",
+        "The cloud preset uses GPT-6 Astra with OpenAI `text-embedding-3-large` at 3072 dimensions. For Claude, set `llm.provider: anthropic`, `llm.model: claude-opus-5-5`, and `llm.api_key_env: ANTHROPIC_API_KEY` in `deployments/app/cloud.yaml`, export that key too, and choose fresh database paths. The mounted YAML is read-only; edit configuration on the host.\n\nFor a stdio MCP client, launch:\n\n```sh\ndocker compose -f deployments/app/compose.yaml run --rm -T ariadne mcp\n```",
+        "Run Compose from this checkout or give the client an absolute Compose file path. Source is mounted read-only. The named `ariadne-state` volume persists the library, sidecar and generated exports across container removal. Do not remove that volume to switch models.\n\nThe bundled cloud preset also supports running the image directly, without mounting a configuration file:",
+        "```sh\ndocker run --rm -e OPENAI_API_KEY \\\n  --mount type=bind,src=/absolute/path/to/your/project,dst=/workspace,readonly \\\n  --mount type=volume,src=ariadne-cloud-state,dst=/data \\\n  ariadne:local-model-support generate --source project --no-batch --yes\n```\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# Cloud suite / docker"
+        ],
+        [
+          "Cloud suite",
+          "## Cloud suite\n\nFrom the repository root, export `OPENAI_API_KEY` and set `ARIADNE_SOURCE_DIR` to an absolute path to the repository you want documented. The Compose file defaults to this checkout when that path is omitted.\n\n```sh\nexport ARIADNE_SOURCE_DIR=/absolute/path/to/your/project\ndocker compose -f deployments/app/compose.yaml run --rm ariadne config\ndocker compose -f deployments/app/compose.yaml run --rm ariadne generate --source project --dry-run\ndocker compose -f deployments/app/compose.yaml run --rm ariadne generate --source project --no-batch --yes\ndocker compose -f deployments/app/compose.yaml run --rm ariadne search 'How does authentication work?' --source project\n```\n\nThe cloud preset uses GPT-6 Astra with OpenAI `text-embedding-3-large` at 3072 dimensions. For Claude, set `llm.provider: anthropic`, `llm.model: claude-opus-5-5`, and `llm.api_key_env: ANTHROPIC_API_KEY` in `deployments/app/cloud.yaml`, export that key too, and choose fresh database paths. The mounted YAML is read-only; edit configuration on the host.\n\nFor a stdio MCP client, launch:\n\n```sh\ndocker compose -f deployments/app/compose.yaml run --rm -T ariadne mcp\n```\n\nRun Compose from this checkout or give the client an absolute Compose file path. Source is mounted read-only. The named `ariadne-state` volume persists the library, sidecar and generated exports across container removal. Do not remove that volume to switch models.\n\nThe bundled cloud preset also supports running the image directly, without mounting a configuration file:\n\n```sh\ndocker run --rm -e OPENAI_API_KEY \\\n  --mount type=bind,src=/absolute/path/to/your/project,dst=/workspace,readonly \\\n  --mount type=volume,src=ariadne-cloud-state,dst=/data \\\n  ariadne:local-model-support generate --source project --no-batch --yes\n```"
+        ]
+      ]
+    },
+    {
+      "id": "container-local",
+      "title": "Local suite / docker",
+      "content": "# Local suite / docker\n\n## Local suite\n\nFirst provision and start the two GPU model servers using the [pinned serving recipe](../deployments/local-v1/README.md). This application image does not contain weights or start vLLM. The serving candidate still requires real GPU qualification.\n\nThe local Compose client shares the servers' internal network. Its bundled configuration uses `chat:8000` and `embeddings:8000`, the pinned BF16 model identities, and separate local database paths. It requires no cloud credentials or revision-placeholder edits.\n\n```sh\ndocker compose -f deployments/local-v1/compose.yaml --profile client run --rm ariadne config\ndocker compose -f deployments/local-v1/compose.yaml --profile client run --rm ariadne doctor --models\ndocker compose -f deployments/local-v1/compose.yaml --profile client run --rm ariadne generate --source project --batch --yes\ndocker compose -f deployments/local-v1/compose.yaml --profile client run --rm -T ariadne mcp\n```\n\nUse the same `ARIADNE_SOURCE_DIR` setting as the cloud suite. Switching Compose files selects a separate state volume and model pair; existing documents remain in their original library. Generated documents cannot be moved between incompatible model pairs through import or rebuild.\n",
+      "source_file": "docs/docker.md",
+      "source_lines": [
+        45,
+        59
+      ],
+      "source_sha256": "e54bf2ee6b268d90ad945c24c3bd186abb9624f41812d234ba274dc1d4d7ec97",
+      "chunks": [
+        "# Local suite / docker\n\n## Local suite\n\nFirst provision and start the two GPU model servers using the [pinned serving recipe](../deployments/local-v1/README.md). This application image does not contain weights or start vLLM. The serving candidate still requires real GPU qualification.",
+        "The local Compose client shares the servers' internal network. Its bundled configuration uses `chat:8000` and `embeddings:8000`, the pinned BF16 model identities, and separate local database paths. It requires no cloud credentials or revision-placeholder edits.",
+        "```sh\ndocker compose -f deployments/local-v1/compose.yaml --profile client run --rm ariadne config\ndocker compose -f deployments/local-v1/compose.yaml --profile client run --rm ariadne doctor --models\ndocker compose -f deployments/local-v1/compose.yaml --profile client run --rm ariadne generate --source project --batch --yes\ndocker compose -f deployments/local-v1/compose.yaml --profile client run --rm -T ariadne mcp\n```",
+        "Use the same `ARIADNE_SOURCE_DIR` setting as the cloud suite. Switching Compose files selects a separate state volume and model pair; existing documents remain in their original library. Generated documents cannot be moved between incompatible model pairs through import or rebuild.\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# Local suite / docker"
+        ],
+        [
+          "Local suite",
+          "## Local suite\n\nFirst provision and start the two GPU model servers using the [pinned serving recipe](../deployments/local-v1/README.md). This application image does not contain weights or start vLLM. The serving candidate still requires real GPU qualification.\n\nThe local Compose client shares the servers' internal network. Its bundled configuration uses `chat:8000` and `embeddings:8000`, the pinned BF16 model identities, and separate local database paths. It requires no cloud credentials or revision-placeholder edits.\n\n```sh\ndocker compose -f deployments/local-v1/compose.yaml --profile client run --rm ariadne config\ndocker compose -f deployments/local-v1/compose.yaml --profile client run --rm ariadne doctor --models\ndocker compose -f deployments/local-v1/compose.yaml --profile client run --rm ariadne generate --source project --batch --yes\ndocker compose -f deployments/local-v1/compose.yaml --profile client run --rm -T ariadne mcp\n```\n\nUse the same `ARIADNE_SOURCE_DIR` setting as the cloud suite. Switching Compose files selects a separate state volume and model pair; existing documents remain in their original library. Generated documents cannot be moved between incompatible model pairs through import or rebuild."
+        ]
+      ]
+    },
+    {
+      "id": "container-distribution",
+      "title": "Reproduce local distribution verification / docker",
+      "content": "# Reproduce local distribution verification / docker\n\n## Reproduce local distribution verification\n\n```sh\npython3 tests/container_distribution.py --output /path/to/new-distribution-check\n```\n\nThe runner starts a temporary registry and two independent Docker daemons on an internal network. The producer loads the existing application image and pushes it; the consumer starts with an empty image store and receives the image only through a registry pull. It compares filesystem layer hashes and runtime settings, checks the installed CLI/MCP workflows, verifies persisted databases and completed-batch replay after container removal, and runs both Compose configurations without an application checkout or build files.\n\nThe test requires Docker access and uses privileged Docker-in-Docker containers with private state and Unix sockets; no host Docker socket or credentials are mounted into them. Pinned test infrastructure images are downloaded if absent. Application tests use synthetic loopback model responses and make no paid API calls. Test containers, networks and temporary image archives are removed, while output logs and the original application image remain. Use a fresh output directory for every run. `--compose-only` rechecks distribution and Compose without repeating runtime checks.\n",
+      "source_file": "docs/docker.md",
+      "source_lines": [
+        64,
+        73
+      ],
+      "source_sha256": "e54bf2ee6b268d90ad945c24c3bd186abb9624f41812d234ba274dc1d4d7ec97",
+      "chunks": [
+        "# Reproduce local distribution verification / docker\n\n## Reproduce local distribution verification\n\n```sh\npython3 tests/container_distribution.py --output /path/to/new-distribution-check\n```",
+        "The runner starts a temporary registry and two independent Docker daemons on an internal network. The producer loads the existing application image and pushes it; the consumer starts with an empty image store and receives the image only through a registry pull.",
+        "receives the image only through a registry pull. It compares filesystem layer hashes and runtime settings, checks the installed CLI/MCP workflows, verifies persisted databases and completed-batch replay after container removal, and runs both Compose configurations without an application checkout or build files.",
+        "The test requires Docker access and uses privileged Docker-in-Docker containers with private state and Unix sockets; no host Docker socket or credentials are mounted into them. Pinned test infrastructure images are downloaded if absent. Application tests use synthetic loopback model responses and make no paid API calls. Test containers, networks and temporary image archives are removed, while output logs and the original application image remain. Use a fresh output directory for every run.",
+        "main. Use a fresh output directory for every run. `--compose-only` rechecks distribution and Compose without repeating runtime checks."
+      ],
+      "sections": [
+        [
+          "",
+          "# Reproduce local distribution verification / docker"
+        ],
+        [
+          "Reproduce local distribution verification",
+          "## Reproduce local distribution verification\n\n```sh\npython3 tests/container_distribution.py --output /path/to/new-distribution-check\n```\n\nThe runner starts a temporary registry and two independent Docker daemons on an internal network. The producer loads the existing application image and pushes it; the consumer starts with an empty image store and receives the image only through a registry pull. It compares filesystem layer hashes and runtime settings, checks the installed CLI/MCP workflows, verifies persisted databases and completed-batch replay after container removal, and runs both Compose configurations without an application checkout or build files.\n\nThe test requires Docker access and uses privileged Docker-in-Docker containers with private state and Unix sockets; no host Docker socket or credentials are mounted into them. Pinned test infrastructure images are downloaded if absent. Application tests use synthetic loopback model responses and make no paid API calls. Test containers, networks and temporary image archives are removed, while output logs and the original application image remain. Use a fresh output directory for every run. `--compose-only` rechecks distribution and Compose without repeating runtime checks."
+        ]
+      ]
+    },
+    {
+      "id": "mcp-branches",
+      "title": "Branch-Aware Filtering / claude-code-integration",
+      "content": "# Branch-Aware Filtering / claude-code-integration\n\n## Branch-Aware Filtering\n\nExperimental docs can be hidden from main branch sessions.\n\nTag documents with metadata:\n```yaml\nmetadata:\n  status: experimental\n  branches: [\"feat/138-*\"]\n```\n\nThe session hook will only include experimental docs when working on matching branches.\n",
+      "source_file": "docs/claude-code-integration.md",
+      "source_lines": [
+        45,
+        57
+      ],
+      "source_sha256": "c1c44e0e6969576e2935aa57f80921706c4af28c3cff06dc5bd7a8de4144b663",
+      "chunks": [],
+      "sections": [
+        [
+          "",
+          "# Branch-Aware Filtering / claude-code-integration"
+        ],
+        [
+          "Branch-Aware Filtering",
+          "## Branch-Aware Filtering\n\nExperimental docs can be hidden from main branch sessions.\n\nTag documents with metadata:\n```yaml\nmetadata:\n  status: experimental\n  branches: [\"feat/138-*\"]\n```\n\nThe session hook will only include experimental docs when working on matching branches."
+        ]
+      ]
+    },
+    {
+      "id": "mcp-instructions",
+      "title": "How MCP Instructions Work / claude-code-integration",
+      "content": "# How MCP Instructions Work / claude-code-integration\n\n## How MCP Instructions Work\n\nThe MCP server includes a built-in `instructions` field (set in `ariadne_mcp/server.py` via `FastMCP(..., instructions=...)`). When Claude Code connects to the server, this directive is injected as a system-level instruction telling Claude to:\n\n1. Query Ariadne **before** using any other codebase exploration tool (Grep, Glob, Read, etc.)\n2. Use search results to guide follow-up code reads\n3. Report feedback via `ariadne_log_hit` / `ariadne_log_miss`\n\nThis means **even without CLAUDE.md guidance or session hooks**, Claude will prioritize Ariadne when MCP is connected. The hooks and CLAUDE.md provide additional context (the doc manifest at startup, instructions on saving findings), but the MCP instructions are the primary behavioral driver.\n",
+      "source_file": "docs/claude-code-integration.md",
+      "source_lines": [
+        167,
+        176
+      ],
+      "source_sha256": "c1c44e0e6969576e2935aa57f80921706c4af28c3cff06dc5bd7a8de4144b663",
+      "chunks": [
+        "# How MCP Instructions Work / claude-code-integration\n\n## How MCP Instructions Work\n\nThe MCP server includes a built-in `instructions` field (set in `ariadne_mcp/server.py` via `FastMCP(..., instructions=...)`). When Claude Code connects to the server, this directive is injected as a system-level instruction telling Claude to:",
+        "1. Query Ariadne **before** using any other codebase exploration tool (Grep, Glob, Read, etc.)\n2. Use search results to guide follow-up code reads\n3. Report feedback via `ariadne_log_hit` / `ariadne_log_miss`",
+        "This means **even without CLAUDE.md guidance or session hooks**, Claude will prioritize Ariadne when MCP is connected. The hooks and CLAUDE.md provide additional context (the doc manifest at startup, instructions on saving findings), but the MCP instructions are the primary behavioral driver.\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# How MCP Instructions Work / claude-code-integration"
+        ],
+        [
+          "How MCP Instructions Work",
+          "## How MCP Instructions Work\n\nThe MCP server includes a built-in `instructions` field (set in `ariadne_mcp/server.py` via `FastMCP(..., instructions=...)`). When Claude Code connects to the server, this directive is injected as a system-level instruction telling Claude to:\n\n1. Query Ariadne **before** using any other codebase exploration tool (Grep, Glob, Read, etc.)\n2. Use search results to guide follow-up code reads\n3. Report feedback via `ariadne_log_hit` / `ariadne_log_miss`\n\nThis means **even without CLAUDE.md guidance or session hooks**, Claude will prioritize Ariadne when MCP is connected. The hooks and CLAUDE.md provide additional context (the doc manifest at startup, instructions on saving findings), but the MCP instructions are the primary behavioral driver."
+        ]
+      ]
+    },
+    {
+      "id": "mcp-feedback",
+      "title": "Usage Tracking & Feedback / claude-code-integration",
+      "content": "# Usage Tracking & Feedback / claude-code-integration\n\n## Usage Tracking & Feedback\n\nAriadne tracks MCP tool usage to measure documentation effectiveness and identify gaps.\n\n### How It Works\n\n1. **Auto-logging**: Every MCP tool call is automatically recorded with a unique event ID\n2. **Event ID in output**: Each tool result ends with `[Usage event: <id>]`\n3. **Claude reports back**: After using results, Claude calls:\n   - `ariadne_log_hit(event_id, feedback?)` — result was useful\n   - `ariadne_log_miss(event_id, feedback)` — result wasn't helpful (feedback required)\n4. **Query statistics**: Use `ariadne_usage_stats` (MCP) or `ariadne usage` (CLI)\n5. **Gap analysis**: Use `ariadne_gaps` to see what documentation is missing\n\n### Behavioral Directive\n\nThe `mention_ariadne` configuration option injects a behavioral directive into the session manifest, telling Claude to casually mention when Ariadne helped answer a question. This is enabled by default.\n\n```yaml\n# In ariadne.yaml\nmention_ariadne:\n  enabled: true\n  # message: \"custom directive text...\"  # Optional override\n```\n\nThe directive appears in the manifest output alongside the document list, so Claude sees it at the start of every session.\n",
+      "source_file": "docs/claude-code-integration.md",
+      "source_lines": [
+        177,
+        203
+      ],
+      "source_sha256": "c1c44e0e6969576e2935aa57f80921706c4af28c3cff06dc5bd7a8de4144b663",
+      "chunks": [
+        "# Usage Tracking & Feedback / claude-code-integration\n\n## Usage Tracking & Feedback\n\nAriadne tracks MCP tool usage to measure documentation effectiveness and identify gaps.\n\n### How It Works",
+        "1. **Auto-logging**: Every MCP tool call is automatically recorded with a unique event ID\n2. **Event ID in output**: Each tool result ends with `[Usage event: <id>]`\n3. **Claude reports back**: After using results, Claude calls:\n   - `ariadne_log_hit(event_id, feedback?)` — result was useful\n   - `ariadne_log_miss(event_id, feedback)` — result wasn't helpful (feedback required)\n4. **Query statistics**: Use `ariadne_usage_stats` (MCP) or `ariadne usage` (CLI)\n5.",
+        "ne_usage_stats` (MCP) or `ariadne usage` (CLI)\n5. **Gap analysis**: Use `ariadne_gaps` to see what documentation is missing\n\n### Behavioral Directive\n\nThe `mention_ariadne` configuration option injects a behavioral directive into the session manifest, telling Claude to casually mention when Ariadne helped answer a question. This is enabled by default.\n\n```yaml\n# In ariadne.yaml\nmention_ariadne:\n  enabled: true\n  # message: \"custom directive text...\"  # Optional override\n```",
+        "The directive appears in the manifest output alongside the document list, so Claude sees it at the start of every session.\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# Usage Tracking & Feedback / claude-code-integration"
+        ],
+        [
+          "Usage Tracking & Feedback",
+          "## Usage Tracking & Feedback\n\nAriadne tracks MCP tool usage to measure documentation effectiveness and identify gaps.\n\n### How It Works\n\n1. **Auto-logging**: Every MCP tool call is automatically recorded with a unique event ID\n2. **Event ID in output**: Each tool result ends with `[Usage event: <id>]`\n3. **Claude reports back**: After using results, Claude calls:\n   - `ariadne_log_hit(event_id, feedback?)` — result was useful\n   - `ariadne_log_miss(event_id, feedback)` — result wasn't helpful (feedback required)\n4. **Query statistics**: Use `ariadne_usage_stats` (MCP) or `ariadne usage` (CLI)\n5. **Gap analysis**: Use `ariadne_gaps` to see what documentation is missing\n\n### Behavioral Directive\n\nThe `mention_ariadne` configuration option injects a behavioral directive into the session manifest, telling Claude to casually mention when Ariadne helped answer a question. This is enabled by default.\n\n```yaml\n# In ariadne.yaml\nmention_ariadne:\n  enabled: true\n  # message: \"custom directive text...\"  # Optional override\n```\n\nThe directive appears in the manifest output alongside the document list, so Claude sees it at the start of every session."
+        ]
+      ]
+    },
+    {
+      "id": "scip-setup",
+      "title": "Setup workflow / README",
+      "content": "# Setup workflow / README\n\n## Setup workflow\n\nYou author only the source's basic facts — `path`, `depends_on`, `exclude`, `exclude_dirs`. Ariadne fills in the SCIP-related fields:\n\n```yaml\n# What the user authors:\nsources:\n  scalaproject:\n    path: /path/to/scalaproject\n    depends_on: [shared]\n```\n\n```bash\n# 1. discover walks the tree, writes manifest, AND fills index_kinds + scip block in ariadne.yaml\nuv run ariadne discover --source scalaproject\n\n# 2. index runs scip-X for each detected language AND populates library_scip tables\nuv run ariadne index --source scalaproject\n```\n\nAfter `discover`, `ariadne.yaml` looks like:\n\n```yaml\nsources:\n  scalaproject:\n    path: /path/to/scalaproject\n    depends_on: [shared]\n    # Ariadne-managed below this line:\n    index_kinds:\n      java: scip\n      javascript: scip\n      scala: scip\n    scip:\n      artifact_path: /path/to/scalaproject/.ariadne/index.scip\n      max_staleness_days: 7\n```\n\nRe-running `discover` is idempotent — the YAML mtime stays untouched when nothing detected has changed. If you remove an auto-managed entry by hand, `discover` re-adds it on the next run.\n\n`ariadne discover` walks marker files (`__init__.py` for Python, `package.json` for JS/TS, `build.sbt`/`pom.xml`/`build.gradle*` for JVM) and writes `<source>/.ariadne/manifest.json` with the indexer plan. It also adds `.ariadne/` to the source's `.gitignore`. The artifact lives per-machine — never committed.\n\n`ariadne index` reads the manifest, invokes the appropriate SCIP indexer in each declared cwd (multiple indexers per source supported — polyglot repos can have Scala + JS + Python side by side), merges intermediates via `scip merge` into `<source>/.ariadne/index.scip`, then runs ten `persist_*` steps that fill `library_scip` tables (cross-source graph, API endpoints from Swagger + Akka HTTP + Flask/FastAPI + Express, HTTP client calls in Python / JS / Scala, plus a final URL→endpoint resolver). Every consumer of those tables (`ariadne callers`, `impact_radius`, `improve --dead-code`, the architecture-doc Dependents section, `ariadne_trace_flow`'s cross-language hops) gets fresh data at the end of every successful index.\n\n`ariadne sync` runs frequently (per commit / per pull) and reuses the persisted graph — no scip-X invocation. If sync detects a changed file in a language not yet declared in `index_kinds`, it triggers `discover --config-only` automatically to keep the YAML current and prints a hint to re-run `index` for the new language.\n",
+      "source_file": "README.md",
+      "source_lines": [
+        378,
+        422
+      ],
+      "source_sha256": "bb1e064187fb213ad6604649b189f28de9733143b7dddd54c78c699c31c85865",
+      "chunks": [
+        "# Setup workflow / README\n\n## Setup workflow\n\nYou author only the source's basic facts — `path`, `depends_on`, `exclude`, `exclude_dirs`. Ariadne fills in the SCIP-related fields:\n\n```yaml\n# What the user authors:\nsources:\n  scalaproject:\n    path: /path/to/scalaproject\n    depends_on: [shared]\n```\n\n```bash\n# 1. discover walks the tree, writes manifest, AND fills index_kinds + scip block in ariadne.yaml\nuv run ariadne discover --source scalaproject",
+        "# 2. index runs scip-X for each detected language AND populates library_scip tables\nuv run ariadne index --source scalaproject\n```\n\nAfter `discover`, `ariadne.yaml` looks like:\n\n```yaml\nsources:\n  scalaproject:\n    path: /path/to/scalaproject\n    depends_on: [shared]\n    # Ariadne-managed below this line:\n    index_kinds:\n      java: scip\n      javascript: scip\n      scala: scip\n    scip:\n      artifact_path: /path/to/scalaproject/.ariadne/index.scip\n      max_staleness_days: 7\n```",
+        "Re-running `discover` is idempotent — the YAML mtime stays untouched when nothing detected has changed. If you remove an auto-managed entry by hand, `discover` re-adds it on the next run.\n\n`ariadne discover` walks marker files (`__init__.py` for Python, `package.json` for JS/TS, `build.sbt`/`pom.xml`/`build.gradle*` for JVM) and writes `<source>/.ariadne/manifest.json` with the indexer plan. It also adds `.ariadne/` to the source's `.gitignore`. The artifact lives per-machine — never committed.",
+        "`ariadne index` reads the manifest, invokes the appropriate SCIP indexer in each declared cwd (multiple indexers per source supported — polyglot repos can have Scala + JS + Python side by side), merges intermediates via `scip merge` into `<source>/.ariadne/index.scip`, then runs ten `persist_*` steps that fill `library_scip` tables (cross-source graph, API endpoints from Swagger + Akka HTTP + Flask/FastAPI + Express, HTTP client calls in Python / JS / Scala, plus a final URL→endpoint resolver).",
+        "JS / Scala, plus a final URL→endpoint resolver). Every consumer of those tables (`ariadne callers`, `impact_radius`, `improve --dead-code`, the architecture-doc Dependents section, `ariadne_trace_flow`'s cross-language hops) gets fresh data at the end of every successful index.",
+        "`ariadne sync` runs frequently (per commit / per pull) and reuses the persisted graph — no scip-X invocation. If sync detects a changed file in a language not yet declared in `index_kinds`, it triggers `discover --config-only` automatically to keep the YAML current and prints a hint to re-run `index` for the new language.\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# Setup workflow / README"
+        ],
+        [
+          "Setup workflow",
+          "## Setup workflow\n\nYou author only the source's basic facts — `path`, `depends_on`, `exclude`, `exclude_dirs`. Ariadne fills in the SCIP-related fields:\n\n```yaml\n# What the user authors:\nsources:\n  scalaproject:\n    path: /path/to/scalaproject\n    depends_on: [shared]\n```\n\n```bash\n# 1. discover walks the tree, writes manifest, AND fills index_kinds + scip block in ariadne.yaml\nuv run ariadne discover --source scalaproject\n\n# 2. index runs scip-X for each detected language AND populates library_scip tables\nuv run ariadne index --source scalaproject\n```\n\nAfter `discover`, `ariadne.yaml` looks like:\n\n```yaml\nsources:\n  scalaproject:\n    path: /path/to/scalaproject\n    depends_on: [shared]\n    # Ariadne-managed below this line:\n    index_kinds:\n      java: scip\n      javascript: scip\n      scala: scip\n    scip:\n      artifact_path: /path/to/scalaproject/.ariadne/index.scip\n      max_staleness_days: 7\n```\n\nRe-running `discover` is idempotent — the YAML mtime stays untouched when nothing detected has changed. If you remove an auto-managed entry by hand, `discover` re-adds it on the next run.\n\n`ariadne discover` walks marker files (`__init__.py` for Python, `package.json` for JS/TS, `build.sbt`/`pom.xml`/`build.gradle*` for JVM) and writes `<source>/.ariadne/manifest.json` with the indexer plan. It also adds `.ariadne/` to the source's `.gitignore`. The artifact lives per-machine — never committed.\n\n`ariadne index` reads the manifest, invokes the appropriate SCIP indexer in each declared cwd (multiple indexers per source supported — polyglot repos can have Scala + JS + Python side by side), merges intermediates via `scip merge` into `<source>/.ariadne/index.scip`, then runs ten `persist_*` steps that fill `library_scip` tables (cross-source graph, API endpoints from Swagger + Akka HTTP + Flask/FastAPI + Express, HTTP client calls in Python / JS / Scala, plus a final URL→endpoint resolver). Every consumer of those tables (`ariadne callers`, `impact_radius`, `improve --dead-code`, the architecture-doc Dependents section, `ariadne_trace_flow`'s cross-language hops) gets fresh data at the end of every successful index.\n\n`ariadne sync` runs frequently (per commit / per pull) and reuses the persisted graph — no scip-X invocation. If sync detects a changed file in a language not yet declared in `index_kinds`, it triggers `discover --config-only` automatically to keep the YAML current and prints a hint to re-run `index` for the new language."
+        ]
+      ]
+    },
+    {
+      "id": "vue-indexing",
+      "title": "Vue-aware TypeScript indexing / README",
+      "content": "# Vue-aware TypeScript indexing / README\n\n## Vue-aware TypeScript indexing\n\n`scip-typescript` doesn't natively parse `.vue` Single File Components. Ariadne ships a Vue extractor (`scripts/scip/extract-vue-scripts.js`) that pulls `<script>` blocks into `*.vue.script.{js,ts}` companions before indexing. The line-mapping is preserved so SCIP positions resolve back to the original `.vue` files when consumed.\n\nTrigger automatically: if `ariadne index` detects any `.vue` files in cwd, the extractor runs first.\n\nThe extractor **borrows `@vue/compiler-sfc` from the indexed project's own `node_modules`** (resolved from the scope's cwd) so it matches the project's Vue version — both Vue 2.7's `parse({source, filename}) → descriptor` and Vue 3's `parse(source, {filename}) → {descriptor, errors}` shapes are handled. This means the project's dependencies must be **installed**: if `node_modules` is empty you'll see `Vue extractor: @vue/compiler-sfc not found` (and scip-typescript can't resolve types either) — run `npm ci`/`npm install` in that scope first.\n\n`discover` does **not** create a TypeScript scope for a directory whose only JS is vendored/minified (`*.min.js`), so bundled third-party libraries (jQuery, Highcharts, …) don't become spurious scopes that scip-typescript would reject with \"no files got indexed\".\n",
+      "source_file": "README.md",
+      "source_lines": [
+        452,
+        461
+      ],
+      "source_sha256": "bb1e064187fb213ad6604649b189f28de9733143b7dddd54c78c699c31c85865",
+      "chunks": [
+        "# Vue-aware TypeScript indexing / README\n\n## Vue-aware TypeScript indexing\n\n`scip-typescript` doesn't natively parse `.vue` Single File Components. Ariadne ships a Vue extractor (`scripts/scip/extract-vue-scripts.js`) that pulls `<script>` blocks into `*.vue.script.{js,ts}` companions before indexing. The line-mapping is preserved so SCIP positions resolve back to the original `.vue` files when consumed.",
+        "Trigger automatically: if `ariadne index` detects any `.vue` files in cwd, the extractor runs first.",
+        "The extractor **borrows `@vue/compiler-sfc` from the indexed project's own `node_modules`** (resolved from the scope's cwd) so it matches the project's Vue version — both Vue 2.7's `parse({source, filename}) → descriptor` and Vue 3's `parse(source, {filename}) → {descriptor, errors}` shapes are handled.",
+        "ame}) → {descriptor, errors}` shapes are handled. This means the project's dependencies must be **installed**: if `node_modules` is empty you'll see `Vue extractor: @vue/compiler-sfc not found` (and scip-typescript can't resolve types either) — run `npm ci`/`npm install` in that scope first.",
+        "`discover` does **not** create a TypeScript scope for a directory whose only JS is vendored/minified (`*.min.js`), so bundled third-party libraries (jQuery, Highcharts, …) don't become spurious scopes that scip-typescript would reject with \"no files got indexed\".\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# Vue-aware TypeScript indexing / README"
+        ],
+        [
+          "Vue-aware TypeScript indexing",
+          "## Vue-aware TypeScript indexing\n\n`scip-typescript` doesn't natively parse `.vue` Single File Components. Ariadne ships a Vue extractor (`scripts/scip/extract-vue-scripts.js`) that pulls `<script>` blocks into `*.vue.script.{js,ts}` companions before indexing. The line-mapping is preserved so SCIP positions resolve back to the original `.vue` files when consumed.\n\nTrigger automatically: if `ariadne index` detects any `.vue` files in cwd, the extractor runs first.\n\nThe extractor **borrows `@vue/compiler-sfc` from the indexed project's own `node_modules`** (resolved from the scope's cwd) so it matches the project's Vue version — both Vue 2.7's `parse({source, filename}) → descriptor` and Vue 3's `parse(source, {filename}) → {descriptor, errors}` shapes are handled. This means the project's dependencies must be **installed**: if `node_modules` is empty you'll see `Vue extractor: @vue/compiler-sfc not found` (and scip-typescript can't resolve types either) — run `npm ci`/`npm install` in that scope first.\n\n`discover` does **not** create a TypeScript scope for a directory whose only JS is vendored/minified (`*.min.js`), so bundled third-party libraries (jQuery, Highcharts, …) don't become spurious scopes that scip-typescript would reject with \"no files got indexed\"."
+        ]
+      ]
+    },
+    {
+      "id": "graph-queries",
+      "title": "Querying the cross-source graph / README",
+      "content": "# Querying the cross-source graph / README\n\n## Querying the cross-source graph\n\n```bash\n# Who calls this method?\nuv run ariadne callers LicenseService.validate_token\n\n# What does this method call?\nuv run ariadne callees auth.login\n\n# What files would be affected by a change to this symbol?\nuv run ariadne impact_radius LicenseService.validate_token --depth 3\n\n# Surface dead code in the source\nuv run ariadne improve --dead-code --source scalaproject\n```\n\nSymbol resolution is permissive: type a qualified name, a tail (e.g., `validate_token`), or a substring. If multiple candidates match, Ariadne returns a disambiguation list and exits non-zero so you can re-run with a more specific input.\n",
+      "source_file": "README.md",
+      "source_lines": [
+        462,
+        479
+      ],
+      "source_sha256": "bb1e064187fb213ad6604649b189f28de9733143b7dddd54c78c699c31c85865",
+      "chunks": [
+        "# Querying the cross-source graph / README\n\n## Querying the cross-source graph\n\n```bash\n# Who calls this method?\nuv run ariadne callers LicenseService.validate_token\n\n# What does this method call?\nuv run ariadne callees auth.login\n\n# What files would be affected by a change to this symbol?\nuv run ariadne impact_radius LicenseService.validate_token --depth 3\n\n# Surface dead code in the source\nuv run ariadne improve --dead-code --source scalaproject\n```",
+        "Symbol resolution is permissive: type a qualified name, a tail (e.g., `validate_token`), or a substring. If multiple candidates match, Ariadne returns a disambiguation list and exits non-zero so you can re-run with a more specific input.\n"
+      ],
+      "sections": [
+        [
+          "",
+          "# Querying the cross-source graph / README"
+        ],
+        [
+          "Querying the cross-source graph",
+          "## Querying the cross-source graph\n\n```bash\n# Who calls this method?\nuv run ariadne callers LicenseService.validate_token\n\n# What does this method call?\nuv run ariadne callees auth.login\n\n# What files would be affected by a change to this symbol?\nuv run ariadne impact_radius LicenseService.validate_token --depth 3\n\n# Surface dead code in the source\nuv run ariadne improve --dead-code --source scalaproject\n```\n\nSymbol resolution is permissive: type a qualified name, a tail (e.g., `validate_token`), or a substring. If multiple candidates match, Ariadne returns a disambiguation list and exits non-zero so you can re-run with a more specific input."
+        ]
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "id": "q01",
+      "question": "Does declaring a parent require listing it again as a dependency?",
+      "evidence": "The parent is automatically added as an implicit dependency",
+      "documents": [
+        "source-config"
+      ],
+      "chunks": [
+        "source-config:4"
+      ],
+      "sections": [
+        "source-config:1"
+      ]
+    },
+    {
+      "id": "q02",
+      "question": "How can I restrict a documentation source to feature branches?",
+      "evidence": "Git branch patterns where source is active",
+      "documents": [
+        "source-config"
+      ],
+      "chunks": [
+        "source-config:1"
+      ],
+      "sections": [
+        "source-config:1"
+      ]
+    },
+    {
+      "id": "q03",
+      "question": "Are a source's explicitly declared dependencies followed recursively?",
+      "evidence": "Dependencies are loaded transitively.",
+      "documents": [
+        "source-config"
+      ],
+      "chunks": [
+        "source-config:3"
+      ],
+      "sections": [
+        "source-config:1"
+      ]
+    },
+    {
+      "id": "q04",
+      "question": "Which source configuration field fixes an external library to a particular tag?",
+      "evidence": "Pin an external dependency to a specific git ref",
+      "documents": [
+        "source-config"
+      ],
+      "chunks": [
+        "source-config:5"
+      ],
+      "sections": [
+        "source-config:1"
+      ]
+    },
+    {
+      "id": "q05",
+      "question": "Can a source declare a parent outside its directory ancestry?",
+      "evidence": "The child's path must be a subdirectory of the parent's path.",
+      "documents": [
+        "source-config"
+      ],
+      "chunks": [
+        "source-config:3"
+      ],
+      "sections": [
+        "source-config:1"
+      ]
+    },
+    {
+      "id": "q06",
+      "question": "If several configured source directories contain my working directory, which one wins?",
+      "evidence": "Returns the most specific match",
+      "documents": [
+        "scope-resolution"
+      ],
+      "chunks": [
+        "scope-resolution:0"
+      ],
+      "sections": [
+        "scope-resolution:1"
+      ]
+    },
+    {
+      "id": "q07",
+      "question": "Which Python matching function interprets branch patterns?",
+      "evidence": "Branch patterns use Python's `fnmatch` module",
+      "documents": [
+        "scope-resolution"
+      ],
+      "chunks": [
+        "scope-resolution:1"
+      ],
+      "sections": [
+        "scope-resolution:1"
+      ]
+    },
+    {
+      "id": "q08",
+      "question": "How are equally scoped competing documents ordered when their modification times differ?",
+      "evidence": "**Most recently updated wins**",
+      "documents": [
+        "scope-conflicts"
+      ],
+      "chunks": [
+        "scope-conflicts:1"
+      ],
+      "sections": [
+        "scope-conflicts:1"
+      ]
+    },
+    {
+      "id": "q09",
+      "question": "How do I explicitly declare that a document replaces an older one?",
+      "evidence": "supersedes: old-caching-design",
+      "documents": [
+        "scope-conflicts"
+      ],
+      "chunks": [
+        "scope-conflicts:1"
+      ],
+      "sections": [
+        "scope-conflicts:1"
+      ]
+    },
+    {
+      "id": "q10",
+      "question": "Which manifest option disables filtering by git branch?",
+      "evidence": "`--no-branch-filter` - Disable branch filtering entirely",
+      "documents": [
+        "scope-commands"
+      ],
+      "chunks": [
+        "scope-commands:0"
+      ],
+      "sections": [
+        "scope-commands:1"
+      ]
+    },
+    {
+      "id": "q11",
+      "question": "How do I search documentation across every source regardless of the current scope?",
+      "evidence": "ariadne search \"caching\" --include-all",
+      "documents": [
+        "scope-commands"
+      ],
+      "chunks": [
+        "scope-commands:1"
+      ],
+      "sections": [
+        "scope-commands:1"
+      ]
+    },
+    {
+      "id": "q12",
+      "question": "Should a newly configured source path point to exported docs or to source code?",
+      "evidence": "The `path` should point to your source code root.",
+      "documents": [
+        "onboard-source"
+      ],
+      "chunks": [],
+      "sections": [
+        "onboard-source:1"
+      ]
+    },
+    {
+      "id": "q13",
+      "question": "Which generation option prints detailed validation failures?",
+      "evidence": "Use `--verbose` to see detailed validation output",
+      "documents": [
+        "generate-docs"
+      ],
+      "chunks": [
+        "generate-docs:2"
+      ],
+      "sections": [
+        "generate-docs:1"
+      ]
+    },
+    {
+      "id": "q14",
+      "question": "What project-level configuration file is created when MCP registration is not global?",
+      "evidence": "This creates a `.mcp.json` in the target project",
+      "documents": [
+        "integration-setup"
+      ],
+      "chunks": [
+        "integration-setup:2"
+      ],
+      "sections": [
+        "integration-setup:1"
+      ]
+    },
+    {
+      "id": "q15",
+      "question": "Does manually registering the MCP server install the session hooks as well?",
+      "evidence": "With manual registration, you won't get session hooks",
+      "documents": [
+        "integration-setup"
+      ],
+      "chunks": [
+        "integration-setup:3"
+      ],
+      "sections": [
+        "integration-setup:1"
+      ]
+    },
+    {
+      "id": "q16",
+      "question": "Where can a project allow read-only MCP tools without an approval for every call?",
+      "evidence": "add them to `.claude/settings.local.json`",
+      "documents": [
+        "mcp-permissions"
+      ],
+      "chunks": [
+        "mcp-permissions:0"
+      ],
+      "sections": [
+        "mcp-permissions:1"
+      ]
+    },
+    {
+      "id": "q17",
+      "question": "Which permissions example allows reporting a useful search result?",
+      "evidence": "mcp__ariadne__ariadne_log_hit",
+      "documents": [
+        "mcp-permissions"
+      ],
+      "chunks": [
+        "mcp-permissions:1"
+      ],
+      "sections": [
+        "mcp-permissions:1"
+      ]
+    },
+    {
+      "id": "q18",
+      "question": "What command previews documentation that needs updating after code changes?",
+      "evidence": "ariadne sync --status --source myproject",
+      "documents": [
+        "docs-freshness"
+      ],
+      "chunks": [],
+      "sections": [
+        "docs-freshness:1"
+      ]
+    },
+    {
+      "id": "q19",
+      "question": "What changes when local onboarding is run with approval?",
+      "evidence": "`--approve` binds the pair and executes structural/catalog work",
+      "documents": [
+        "local-onboard"
+      ],
+      "chunks": [
+        "local-onboard:1"
+      ],
+      "sections": [
+        "local-onboard:1"
+      ]
+    },
+    {
+      "id": "q20",
+      "question": "Can rebuilding or forcing generation change the model pair of an existing local library?",
+      "evidence": "`--force`, import and rebuild cannot migrate models.",
+      "documents": [
+        "local-profile"
+      ],
+      "chunks": [
+        "local-profile:8"
+      ],
+      "sections": [
+        "local-profile:1"
+      ]
+    },
+    {
+      "id": "q21",
+      "question": "How are native Qwen embedding vectors reduced before storage?",
+      "evidence": "Ariadne stores the normalized first 3072 components.",
+      "documents": [
+        "local-profile"
+      ],
+      "chunks": [
+        "local-profile:11"
+      ],
+      "sections": [
+        "local-profile:1"
+      ]
+    },
+    {
+      "id": "q22",
+      "question": "What text is used to embed a complete document?",
+      "evidence": "Documents retain the title plus the first 2000 content characters",
+      "documents": [
+        "local-profile"
+      ],
+      "chunks": [
+        "local-profile:11"
+      ],
+      "sections": [
+        "local-profile:1"
+      ]
+    },
+    {
+      "id": "q23",
+      "question": "Which embedding inputs receive the retrieval instruction?",
+      "evidence": "Only search queries receive the fixed retrieval instruction.",
+      "documents": [
+        "local-profile"
+      ],
+      "chunks": [
+        "local-profile:11"
+      ],
+      "sections": [
+        "local-profile:1"
+      ]
+    },
+    {
+      "id": "q24",
+      "question": "How much extra context headroom does local generation reserve beyond its requested output?",
+      "evidence": "complete requested output budget plus 64 tokens",
+      "documents": [
+        "local-profile"
+      ],
+      "chunks": [
+        "local-profile:5"
+      ],
+      "sections": [
+        "local-profile:1"
+      ]
+    },
+    {
+      "id": "q25",
+      "question": "Will resuming an interrupted embedding stage request another copy of the saved chat response?",
+      "evidence": "Saved chat responses and parsed results survive",
+      "documents": [
+        "local-jobs"
+      ],
+      "chunks": [
+        "local-jobs:2"
+      ],
+      "sections": [
+        "local-jobs:1"
+      ]
+    },
+    {
+      "id": "q26",
+      "question": "Is interrupting a local batch equivalent to explicitly cancelling it?",
+      "evidence": "Ctrl-C and process termination leave work resumable.",
+      "documents": [
+        "local-jobs"
+      ],
+      "chunks": [
+        "local-jobs:2"
+      ],
+      "sections": [
+        "local-jobs:1"
+      ]
+    },
+    {
+      "id": "q27",
+      "question": "What distinguishes staleness records for identical filenames from different sources?",
+      "evidence": "Sidecar keys include source name, generation scope and relative path.",
+      "documents": [
+        "local-jobs"
+      ],
+      "chunks": [
+        "local-jobs:5"
+      ],
+      "sections": [
+        "local-jobs:1"
+      ]
+    },
+    {
+      "id": "q28",
+      "question": "Can another process cancel work while the foreground worker holds the corpus write lock?",
+      "evidence": "Cancellation uses a short control-only transaction",
+      "documents": [
+        "local-jobs"
+      ],
+      "chunks": [
+        "local-jobs:3"
+      ],
+      "sections": [
+        "local-jobs:1"
+      ]
+    },
+    {
+      "id": "q29",
+      "question": "Which user ID and filesystem locations does the application container use?",
+      "evidence": "It runs as UID 1000, stores state under `/data`",
+      "documents": [
+        "container-layout"
+      ],
+      "chunks": [
+        "container-layout:0"
+      ],
+      "sections": [
+        "container-layout:1"
+      ]
+    },
+    {
+      "id": "q30",
+      "question": "Are language-specific SCIP indexers supplied in the application image?",
+      "evidence": "Language-specific SCIP indexers/build toolchains are not included",
+      "documents": [
+        "container-layout"
+      ],
+      "chunks": [
+        "container-layout:3"
+      ],
+      "sections": [
+        "container-layout:1"
+      ]
+    },
+    {
+      "id": "q31",
+      "question": "How can I point the cloud Compose client at a different repository?",
+      "evidence": "set `ARIADNE_SOURCE_DIR` to an absolute path",
+      "documents": [
+        "container-cloud"
+      ],
+      "chunks": [
+        "container-cloud:0"
+      ],
+      "sections": [
+        "container-cloud:1"
+      ]
+    },
+    {
+      "id": "q32",
+      "question": "Where does Compose retain database files and exports after the application container is removed?",
+      "evidence": "The named `ariadne-state` volume persists",
+      "documents": [
+        "container-cloud"
+      ],
+      "chunks": [
+        "container-cloud:3"
+      ],
+      "sections": [
+        "container-cloud:1"
+      ]
+    },
+    {
+      "id": "q33",
+      "question": "Should I edit the bundled cloud YAML inside the running Compose container?",
+      "evidence": "The mounted YAML is read-only; edit configuration on the host.",
+      "documents": [
+        "container-cloud"
+      ],
+      "chunks": [
+        "container-cloud:2"
+      ],
+      "sections": [
+        "container-cloud:1"
+      ]
+    },
+    {
+      "id": "q34",
+      "question": "Does launching the application container also launch vLLM and download weights?",
+      "evidence": "This application image does not contain weights or start vLLM.",
+      "documents": [
+        "container-local"
+      ],
+      "chunks": [
+        "container-local:0"
+      ],
+      "sections": [
+        "container-local:1"
+      ]
+    },
+    {
+      "id": "q35",
+      "question": "Which internal hostnames are in the local Compose client configuration?",
+      "evidence": "`chat:8000` and `embeddings:8000`",
+      "documents": [
+        "container-local"
+      ],
+      "chunks": [
+        "container-local:1"
+      ],
+      "sections": [
+        "container-local:1"
+      ]
+    },
+    {
+      "id": "q36",
+      "question": "How does the distribution test establish that the consumer really downloaded the image?",
+      "evidence": "consumer starts with an empty image store",
+      "documents": [
+        "container-distribution"
+      ],
+      "chunks": [
+        "container-distribution:1"
+      ],
+      "sections": [
+        "container-distribution:1"
+      ]
+    },
+    {
+      "id": "q37",
+      "question": "Does the registry verification mount the host Docker socket into its test daemons?",
+      "evidence": "no host Docker socket or credentials are mounted",
+      "documents": [
+        "container-distribution"
+      ],
+      "chunks": [
+        "container-distribution:3"
+      ],
+      "sections": [
+        "container-distribution:1"
+      ]
+    },
+    {
+      "id": "q38",
+      "question": "What metadata marks generated material as experimental for session filtering?",
+      "evidence": "status: experimental",
+      "documents": [
+        "mcp-branches"
+      ],
+      "chunks": [],
+      "sections": [
+        "mcp-branches:1"
+      ]
+    },
+    {
+      "id": "q39",
+      "question": "When will a session hook include an experimental document?",
+      "evidence": "only include experimental docs when working on matching branches",
+      "documents": [
+        "mcp-branches"
+      ],
+      "chunks": [],
+      "sections": [
+        "mcp-branches:1"
+      ]
+    },
+    {
+      "id": "q40",
+      "question": "How is the directive to query Ariadne before exploring code delivered without a session hook?",
+      "evidence": "built-in `instructions` field",
+      "documents": [
+        "mcp-instructions"
+      ],
+      "chunks": [
+        "mcp-instructions:0"
+      ],
+      "sections": [
+        "mcp-instructions:1"
+      ]
+    },
+    {
+      "id": "q41",
+      "question": "Does a negative result report require an explanation?",
+      "evidence": "feedback required",
+      "documents": [
+        "mcp-feedback"
+      ],
+      "chunks": [
+        "mcp-feedback:1"
+      ],
+      "sections": [
+        "mcp-feedback:1"
+      ]
+    },
+    {
+      "id": "q42",
+      "question": "How do tool results expose the identifier needed for later feedback?",
+      "evidence": "[Usage event: <id>]",
+      "documents": [
+        "mcp-feedback"
+      ],
+      "chunks": [
+        "mcp-feedback:1"
+      ],
+      "sections": [
+        "mcp-feedback:1"
+      ]
+    },
+    {
+      "id": "q43",
+      "question": "Which configuration controls whether the session manifest asks Claude to mention Ariadne?",
+      "evidence": "`mention_ariadne` configuration option",
+      "documents": [
+        "mcp-feedback"
+      ],
+      "chunks": [
+        "mcp-feedback:2"
+      ],
+      "sections": [
+        "mcp-feedback:1"
+      ]
+    },
+    {
+      "id": "q44",
+      "question": "Where does source discovery write the per-machine indexer plan?",
+      "evidence": "`<source>/.ariadne/manifest.json`",
+      "documents": [
+        "scip-setup"
+      ],
+      "chunks": [
+        "scip-setup:2"
+      ],
+      "sections": [
+        "scip-setup:1"
+      ]
+    },
+    {
+      "id": "q45",
+      "question": "Does frequent synchronization invoke language indexers again?",
+      "evidence": "reuses the persisted graph — no scip-X invocation",
+      "documents": [
+        "scip-setup"
+      ],
+      "chunks": [
+        "scip-setup:5"
+      ],
+      "sections": [
+        "scip-setup:1"
+      ]
+    },
+    {
+      "id": "q46",
+      "question": "What happens if synchronization finds a changed file in a previously undeclared language?",
+      "evidence": "it triggers `discover --config-only` automatically",
+      "documents": [
+        "scip-setup"
+      ],
+      "chunks": [
+        "scip-setup:5"
+      ],
+      "sections": [
+        "scip-setup:1"
+      ]
+    },
+    {
+      "id": "q47",
+      "question": "Where does the Vue extraction helper obtain its matching component compiler?",
+      "evidence": "indexed project's own `node_modules`",
+      "documents": [
+        "vue-indexing"
+      ],
+      "chunks": [
+        "vue-indexing:2"
+      ],
+      "sections": [
+        "vue-indexing:1"
+      ]
+    },
+    {
+      "id": "q48",
+      "question": "How are indexed positions mapped back from generated Vue script companions?",
+      "evidence": "line-mapping is preserved",
+      "documents": [
+        "vue-indexing"
+      ],
+      "chunks": [
+        "vue-indexing:0"
+      ],
+      "sections": [
+        "vue-indexing:1"
+      ]
+    },
+    {
+      "id": "q49",
+      "question": "What happens when an abbreviated symbol name identifies multiple candidates?",
+      "evidence": "returns a disambiguation list and exits non-zero",
+      "documents": [
+        "graph-queries"
+      ],
+      "chunks": [
+        "graph-queries:1"
+      ],
+      "sections": [
+        "graph-queries:1"
+      ]
+    },
+    {
+      "id": "q50",
+      "question": "How can I bound cross-source impact analysis to three hops?",
+      "evidence": "impact_radius LicenseService.validate_token --depth 3",
+      "documents": [
+        "graph-queries"
+      ],
+      "chunks": [
+        "graph-queries:0"
+      ],
+      "sections": [
+        "graph-queries:1"
+      ]
+    }
+  ]
+}

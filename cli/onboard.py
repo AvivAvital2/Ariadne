@@ -11,6 +11,7 @@ Wired into the parser via this module's ``register_commands`` + ``HANDLERS``
 from __future__ import annotations
 
 import argparse
+from cli.runtime import run_async
 import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -114,6 +115,47 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
     import config as _config_module
 
     cfg = _config_module.get_config()
+    if cfg.provider == 'local':
+        from cli.runtime import local_preview
+        from docgen.local_pipeline import run_onboard
+        from docgen.orchestrator import DocGenOrchestrator, OrchestratorConfig
+        from inference import current_context
+
+        context = current_context()
+        if context is None:
+            raise ValueError('Local onboarding requires the CLI inference context')
+        if not getattr(args, 'approve', False):
+            return local_preview(args, cfg, context)
+        source = args.source or cfg.default_source
+        root = cfg.resolve_source(source)
+        if root is None or not root.exists():
+            raise ValueError('A valid source is required for onboarding')
+        config = OrchestratorConfig(
+            source_path=root,
+            source_name=source,
+            db_path=context.db_path,
+            staleness_db_path=context.staleness_db_path,
+            model=context.settings.chat.model,
+            provider='local',
+            concurrency=1,
+            inference_context=context,
+            doc_types=tuple(
+                (
+                    getattr(args, 'types', None) or 'explanation,architecture,qa,gotcha,diagram'
+                ).split(',')
+            ),
+            dependencies=tuple(cfg.get_source_dependencies(source)),
+            themes_enabled=cfg.themes_enabled,
+            source_config=cfg.get_source_scip_config(source),
+        )
+        async with DocGenOrchestrator(
+            config, progress_callback=lambda msg, *_: console.print(msg)
+        ) as orchestrator:
+            result = await run_onboard(orchestrator)
+        console.print(
+            f'{result["run_id"]}: {result["state"]}; {result["applied"]} documents applied'
+        )
+        return int(result['state'] != 'completed')
     source_name = args.source or cfg.default_source
     if source_name is None:
         console.print(
@@ -222,7 +264,6 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
     console.print(
         f'  [dim]{result.docs_written} docs · {result.themes_found} themes[/dim]')
     return 0
-
 
 def _prompt_proceed() -> bool:
     """Ask whether to continue past the cost preview into the paid
@@ -584,5 +625,5 @@ def _prompt_detect_dependencies(source_name: str) -> bool:
 
 
 HANDLERS = {
-    'onboard': lambda args: asyncio.run(cmd_onboard(args)),
+    'onboard': lambda args: run_async(cmd_onboard(args)),
 }

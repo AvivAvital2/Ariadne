@@ -1,0 +1,39 @@
+# Matches deployments/local-v1/manifest.yaml and its Compose service names.
+default_source: project
+sources:
+  project:
+    path: /workspace
+    exclude: ['**/.env', '**/secrets.*']
+docs_base: /data/docs
+defaults:
+  db_path: /data/local.db
+  staleness_db_path: /data/local_staleness.db
+llm:
+  provider: local
+  model: Qwen/Qwen3.8-27B
+  model_revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
+  tokenizer_revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
+  weight_format: bf16
+  base_url: http://chat:8000/v1
+  api_key_env: null
+  context_window: 32768
+  max_output_tokens: 8192
+  max_concurrency: 1
+embeddings:
+  provider: local
+  model: Qwen/Qwen3-Embedding-8B
+  model_revision: 1d8ad4ca9b3dd8059ad90a75d4983776a23d44af
+  tokenizer_revision: 1d8ad4ca9b3dd8059ad90a75d4983776a23d44af
+  weight_format: bf16
+  base_url: http://embeddings:8000/v1
+  api_key_env: null
+  dimensions: 3072
+  recipe: qwen3-embedding-8b-3072-v1
+  max_input_tokens: 8192
+  batch_size: 16
+  batch_max_tokens: 16384
+  max_concurrency: 1
+execution:
+  batch_mode: auto
+  auto_batch_threshold: 200
+  max_attempts: 3

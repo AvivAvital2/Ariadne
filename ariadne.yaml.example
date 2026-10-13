@@ -23,5 +23,25 @@ mention_ariadne:
   enabled: true
 defaults:
   db_path: ariadne.db
+  staleness_db_path: ariadne_staleness.db
+llm:
   provider: anthropic
-  model: claude-opus-4-8
+  model: claude-opus-5-5
+  api_key_env: ANTHROPIC_API_KEY
+
+# For OpenAI generation, use provider: openai, model: gpt-6-astra and
+# api_key_env: OPENAI_API_KEY. Select fresh DB paths when changing the pair.
+# See docs/supported-models.md for configuration switching and verification.
+
+# Explicit embedding identity for newly created hosted libraries.
+# Existing populated, unbound hosted databases retain their legacy lifecycle.
+embeddings:
+  provider: openai
+  model: text-embedding-3-large
+  dimensions: 3072
+  api_key_env: OPENAI_API_KEY
+execution:
+  batch_mode: auto
+  auto_batch_threshold: 200
+  max_attempts: 3
+# For the local pair, start with ariadne.local.yaml.example and a fresh DB pair.

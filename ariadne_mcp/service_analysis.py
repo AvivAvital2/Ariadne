@@ -2,7 +2,15 @@
 from __future__ import annotations
 import re
 
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ariadne_mcp.service import AriadneService
+    from library import Library
+
 import logging
+
+from ariadne_mcp.service_search import _embed_query
 
 from ariadne_mcp.models import (
     AskResponse,
@@ -107,7 +115,9 @@ class AnalysisMixin:
     # Issue analysis
     # ------------------------------------------------------------------
 
-    async def analyze_issue(self, repo: str, issue_number: int) -> 'IssueAnalysisResponse':
+    async def analyze_issue(
+        self, repo: str, issue_number: int, source: str | None = None
+    ) -> 'IssueAnalysisResponse':
         """Read a GitHub issue and propose implementation using Ariadne docs."""
         import os
         import subprocess
@@ -137,6 +147,9 @@ class AnalysisMixin:
                 proposal='GitHub CLI (gh) not found. Install: https://cli.github.com/',
             )
         except Exception as e:
+            from inference import raise_inference_error
+
+            raise_inference_error(e)
             return IssueAnalysisResponse(
                 issue_title='(error)',
                 issue_number=issue_number,
@@ -150,7 +163,7 @@ class AnalysisMixin:
 
         # 2. Search Ariadne for relevant docs using issue title + body
         search_query = f'{title} {body[:500]}'
-        search_result = await self.search(query=search_query, limit=8)
+        search_result = await self.search(query=search_query, limit=8, source=source)
 
         relevant_docs = [d.title for d in search_result.documents]
         relevant_files: list[str] = []
@@ -159,7 +172,7 @@ class AnalysisMixin:
 
         # 3. Synthesize proposal with LLM
         api_key = os.environ.get('OPENAI_API_KEY')
-        if not api_key:
+        if not api_key and getattr(self, 'inference_context', None) is None:
             context = '\n'.join(f'- {d.title}: {d.content[:200]}' for d in search_result.documents[:3])
             return IssueAnalysisResponse(
                 issue_title=title,
@@ -209,6 +222,9 @@ class AnalysisMixin:
                 confidence=confidence,
             )
         except Exception as e:
+            from inference import raise_inference_error
+
+            raise_inference_error(e)
             return IssueAnalysisResponse(
                 issue_title=title,
                 issue_number=issue_number,
@@ -326,7 +342,7 @@ class AnalysisMixin:
                 ).fetchone() is not None
             if _has_precomputed_clews:
                 try:
-                    _precomputed_question_vector = await self.embedding_service.embed(question)
+                    _precomputed_question_vector = await _embed_query(self, question)
                 except Exception as _precomputed_embedding_error:  # noqa: BLE001
                     _precomputed_clew_diagnostics["error"] = str(
                         _precomputed_embedding_error)[:300]
@@ -372,7 +388,7 @@ class AnalysisMixin:
         # baseline only; PM queries see matching audience_response rows
         # plus the dev baseline as adapter context).
         search_result = await self.search(
-            query=question, branch=branch, limit=8, role=role, source=source,
+            query=question, branch=branch, limit=8, role='developer' if getattr(self, 'inference_context', None) is not None else role, source=source,
         )
         _phase_timings["search"] = time.perf_counter() - _search_started
         _trace("search", "end", _phase_timings["search"])
@@ -433,7 +449,7 @@ class AnalysisMixin:
                             (_scip_source,)).fetchone() is not None
                 if _has_embedded_clews:
                     try:
-                        _question_vector = await self.embedding_service.embed(question)
+                        _question_vector = await _embed_query(self, question)
                     except Exception as _embedding_error:  # noqa: BLE001 -- lexical fallback remains available
                         _logger.info("catalog positioning embedding skipped: %s", _embedding_error)
                 if str(self.config._config.get(
@@ -492,7 +508,7 @@ class AnalysisMixin:
                             if _question_vector is None:
                                 _clew_diagnostics["stage"] = "embed-question"
                                 try:
-                                    _question_vector = await self.embedding_service.embed(question)
+                                    _question_vector = await _embed_query(self, question)
                                 except Exception as _embedding_error:  # noqa: BLE001 -- local recall follows
                                     _clew_diagnostics["error"] = str(_embedding_error)[:300]
                                     _question_vector = None
@@ -699,6 +715,11 @@ class AnalysisMixin:
                 self.library, role=role, question=question,
                 spool_fp=_spool_fp,
                 allowed_sources=self._resolve_scope(source).closure,
+                **(
+                    {'scope_key': _audience_scope_key(self, source, branch)}
+                    if getattr(self, 'inference_context', None) is not None
+                    else {}
+                ),
             )
             if cached is not None:
                 return AskResponse(
@@ -720,6 +741,9 @@ class AnalysisMixin:
                     query=question,
                 )
             except Exception as e:
+                from inference import raise_inference_error
+
+                raise_inference_error(e)
                 _logger.warning('Role adapter failed: %s', e)
                 return AskResponse(
                     answer=badge + (
@@ -737,15 +761,30 @@ class AnalysisMixin:
             # Persist the adapted response so next identical question
             # is a cache hit.
             try:
-                _persist_audience_response(
-                    self.library,
-                    role=role,
-                    question=question,
-                    content=adapted,
-                    dev_docs=top_docs,
-                    spool_fp=_spool_fp,
-                )
+                if getattr(self, 'inference_context', None) is not None:
+                    await _persist_bound_audience_response(
+                        self,
+                        role=role,
+                        question=question,
+                        content=adapted,
+                        dev_docs=top_docs,
+                        spool_fp=_spool_fp,
+                        source=source,
+                        branch=branch,
+                    )
+                else:
+                    _persist_audience_response(
+                        self.library,
+                        role=role,
+                        question=question,
+                        content=adapted,
+                        dev_docs=top_docs,
+                        spool_fp=_spool_fp,
+                    )
             except Exception as e:
+                from inference import raise_inference_error
+
+                raise_inference_error(e)
                 # Persist failure shouldn't break the response.
                 _logger.warning(
                     'Failed to persist audience_response: %s', e,
@@ -770,7 +809,7 @@ class AnalysisMixin:
                             chain_citations=_citations,
                             graph_diagnostics = _graph_diagnostics)
         from llm import has_provider_key
-        if not has_provider_key():
+        if not has_provider_key() and getattr(self, 'inference_context', None) is None:
             return AskResponse(
                 answer=badge + f'Based on {len(sources)} docs:\n\n{context}',
                 sources=sources,
@@ -827,7 +866,7 @@ class AnalysisMixin:
                 _route_scores = {}
                 try:
                     if _question_vector is None and self.embedding_service is not None:
-                        _question_vector = await self.embedding_service.embed(question)
+                        _question_vector = await _embed_query(self, question)
                     if _question_vector is not None and menu.sections:
                         _all_section_scores = await asyncio.to_thread(
                             route_section_embedding_scores, self.library, menu,
@@ -843,7 +882,8 @@ class AnalysisMixin:
                     _logger.info("pre-scope route embedding skipped: %s", _route_embedding_error)
                 components = component_menu_for(graph, menu)
                 from library.chain_menu import (
-                    retain_obligation_routes,
+                    guarded_component_scope, guarded_route_selection,
+                    guarded_definition_body_selection, obligation_definition_body_symbols,
                     retain_obligation_target_occurrences,
                 )
                 _obligation_route_targets = tuple(dict.fromkeys(
@@ -851,6 +891,7 @@ class AnalysisMixin:
                     for pair in match.target_symbols))
                 _required_route_symbols = tuple(dict.fromkeys(
                     symbol for _obligation, symbol in _obligation_route_targets))
+                from library.selection_policy import signal_from_usage
                 _component_usage: list = []
                 _route_usage: list = []
                 _body_usage: list = []
@@ -883,14 +924,10 @@ class AnalysisMixin:
                     component_route_ids = resolve_component_selection(components, reply)
                     _post_walk["component_plan"] = str(reply or "").strip()[:1200]
                     _post_walk["component_routes"] = len(component_route_ids)
-                    _component_selection = retain_obligation_routes(
-                        menu, Selection(route_ids=tuple(component_route_ids)),
-                        _obligation_route_targets,
+                    menu, _post_walk["component_decision"] = guarded_component_scope(
+                        menu, components, reply, _obligation_route_targets,
                         question=question, obligations=_coverage_plan,
-                        require_target_overlap=True)
-                    component_route_ids = tuple(_component_selection.route_ids)
-                    if component_route_ids:
-                        menu = routes_for_modules(menu, component_route_ids)
+                        completion=signal_from_usage(_component_usage[-1] if _component_usage else None))
                     if _selector_mode == "deterministic":
                         menu = scope_route_menu(menu, question, route_scores=_route_scores, required_symbols=_required_route_symbols)
                     route_scope_retained = len(menu.routes)
@@ -911,11 +948,10 @@ class AnalysisMixin:
                             ],
                             max_tokens=MENU_MAX_TOKENS, phase="scip-exact-route-select",
                             usage_sink=_route_usage)
-                    selection = resolve_obligation_route_selection(menu, route_reply)
-                    selection = retain_obligation_routes(
-                        menu, selection, _obligation_route_targets,
+                    selection = guarded_route_selection(
+                        menu, route_reply, _obligation_route_targets,
                         question=question, obligations=_coverage_plan,
-                        require_target_overlap=True)
+                        completion=signal_from_usage(_route_usage[-1] if _route_usage else None))
                     _post_walk["exact_route_plan"] = str(route_reply or "").strip()[:1200]
                     if not selection.route_ids:
                         selection = all_route_selection(menu)
@@ -940,7 +976,7 @@ class AnalysisMixin:
                     _section_scores = {}
                     try:
                         if _question_vector is None and self.embedding_service is not None:
-                            _question_vector = await self.embedding_service.embed(question)
+                            _question_vector = await _embed_query(self, question)
                         if _question_vector is not None:
                             _section_scores = await asyncio.to_thread(
                                 route_section_embedding_scores, self.library, menu, selection,
@@ -969,6 +1005,14 @@ class AnalysisMixin:
                     if selection.symbols or selection.sections:
                         _body_menu = definition_body_menu(hops, selection)
                         _post_walk["body_candidates"] = len(_body_menu.symbols)
+                        _required_body_symbols = obligation_definition_body_symbols(
+                            _body_menu, _obligation_route_targets)
+                        from dataclasses import asdict
+                        from library.body_plan import derive_definition_body_plan
+                        _body_plan = derive_definition_body_plan(
+                            hops=hops, retained_symbols=selection.symbols,
+                            bindings=_obligation_route_targets)
+                        _post_walk["body_plan"] = asdict(_body_plan)
                         if not definition_body_selection_requires_llm(
                                 _body_menu, _selector_mode):
                             _body_selection = all_definition_body_selection(_body_menu)
@@ -983,11 +1027,13 @@ class AnalysisMixin:
                                 ],
                                 max_tokens=128, phase="scip-body-select",
                                 usage_sink=_body_usage)
-                            _body_selection = resolve_definition_body_selection(
-                                _body_menu, _body_reply)
+                            _body_selection = guarded_definition_body_selection(
+                                _body_menu, _body_reply,
+                                completion=signal_from_usage(_body_usage[-1] if _body_usage else None),
+                                required_symbols=_required_body_symbols)
                             _post_walk["body_reply"] = str(_body_reply or "").strip()[:400]
-                            if not _body_selection.symbols:
-                                _body_selection = all_definition_body_selection(_body_menu)
+                        _body_selection = complete_definition_body_selection(
+                            _body_menu, _body_selection, required_symbols=_required_body_symbols)
                         if _execution_bridge_body_symbols:
                             _available_bridge_bodies = tuple(
                                 symbol for symbol in _execution_bridge_body_symbols
@@ -1042,7 +1088,7 @@ class AnalysisMixin:
                         _route_scores = {}
                         try:
                             if _question_vector is None and self.embedding_service is not None:
-                                _question_vector = await self.embedding_service.embed(question)
+                                _question_vector = await _embed_query(self, question)
                             if _question_vector is not None and menu.sections:
                                 _all_section_scores = await asyncio.to_thread(
                                     route_section_embedding_scores, self.library, menu,
@@ -1280,6 +1326,9 @@ class AnalysisMixin:
                 selection_reasons=selection_reasons,
                 route_candidate_occurrences=route_candidate_occurrences, route_scope_total = route_scope_total, route_scope_retained = route_scope_retained, section_candidates = section_candidates, phase_timings = {**_phase_timings, "total": time.perf_counter() - _ask_started}, llm_calls = _llm_calls, graph_diagnostics = _graph_diagnostics)
         except Exception as e:
+            from inference import raise_inference_error
+
+            raise_inference_error(e)
             _logger.warning('LLM synthesis failed: %s', e)
             return AskResponse(
                 answer=badge + f'Based on {len(sources)} docs (LLM synthesis unavailable):\n\n{context}',
@@ -1421,7 +1470,11 @@ class AnalysisMixin:
 
                 # Semantic dedup: title differs but content describes the same gotcha
                 try:
-                    query_embedding = await self.embedding_service.embed(title)
+                    query_embedding = (
+                        await self.embedding_service.embed_query(title)
+                        if getattr(self, 'inference_context', None) is not None
+                        else await self.embedding_service.embed(title)
+                    )
                     results = self.library.search(query_embedding, k=3, content_type='gotcha')
                     for result in results:
                         if result.score > 0.9:
@@ -1439,7 +1492,10 @@ class AnalysisMixin:
                                     f'Gotcha "{dup.title}" incremented to encounter_count={meta["encounter_count"]}.'
                                 ),
                             )
-                except Exception:
+                except Exception as exc:
+                    from inference import raise_inference_error
+
+                    raise_inference_error(exc)
                     _logger.debug('Semantic dedup check failed, proceeding with new doc', exc_info=True)
 
             async with LibraryWriter(self.library) as writer:
@@ -1463,6 +1519,9 @@ class AnalysisMixin:
                 message=f'Document "{title}" saved with embeddings. Searchable immediately.',
             )
         except Exception as e:
+            from inference import raise_inference_error
+
+            raise_inference_error(e)
             _logger.exception('Failed to contribute document: %s', title)
             return ContributeResponse(
                 success=False,
@@ -1478,6 +1537,7 @@ class AnalysisMixin:
         task_description: str,
         changed_files: list[str] | None = None,
         design_doc: str | None = None,
+        source: str | None = None,
     ) -> 'ReviewResponse':
         """Composite architecture review for the Code Inspector.
 
@@ -1492,12 +1552,13 @@ class AnalysisMixin:
             'review', task_description,
             tuple(changed_files or []),
             design_key,
+            source,
         )
         if key in self._query_cache:
             return self._query_cache[key]
 
         result = await self._review_uncached(
-            task_description, changed_files, design_doc,
+            task_description, changed_files, design_doc, source,
         )
         self._query_cache[key] = result
         return result
@@ -1507,6 +1568,7 @@ class AnalysisMixin:
         task_description: str,
         changed_files: list[str] | None = None,
         design_doc: str | None = None,
+        source: str | None = None,
     ) -> 'ReviewResponse':
         """Uncached review implementation."""
         from ariadne_mcp.models import FileReviewContext, ReviewResponse
@@ -1514,7 +1576,7 @@ class AnalysisMixin:
         changed = changed_files or []
 
         # 1. Semantic search for relevant docs
-        search_result = await self.search(query=task_description, limit=8)
+        search_result = await self.search(query=task_description, limit=8, source=source)
         relevant_docs = search_result.documents
 
         # 2. Per-file context (explain + impact)
@@ -1633,6 +1695,9 @@ class AnalysisMixin:
                 max_tokens=1024,
             )
         except Exception as e:
+            from inference import raise_inference_error
+
+            raise_inference_error(e)
             _log.getLogger(__name__).warning(
                 'Design alignment check failed: %s', e,
             )
@@ -1955,7 +2020,7 @@ def audience_row_matches(metadata, role: str, spool_fp: str) -> bool:
 
 
 def _find_cached_audience_response(library, *, role: str, question: str,
-                                   spool_fp: str = '', allowed_sources=None):
+                                   spool_fp: str = '', allowed_sources=None, scope_key: str | None = None):
     """Look up an existing ``audience_response`` row for this
     (audience, question, spool-fingerprint). Exact-string match on the
     persisted ``metadata.question`` for v1. Returns the Document or None.
@@ -1987,6 +2052,9 @@ def _find_cached_audience_response(library, *, role: str, question: str,
         # is NOT source isolation; a row persisted under another source's
         # closure must not be served here. allowed_sources=None disables it.
         if allowed_sources is not None and getattr(row, "source_name", None) not in allowed_sources:
+            continue
+
+        if scope_key is not None and meta.get('scope_key') != scope_key:
             continue
 
         # Parent freshness check
@@ -2155,8 +2223,7 @@ async def _ask_compact(self, question, *, source, notes,
         if _has_embedded_clews:
             if _compact_question_vector is None:
                 try:
-                    _compact_question_vector = await _embedding_service.embed(
-                        question)
+                    _compact_question_vector = await _embed_query(self, question)
                     compact["embedding_calls"] = 1
                 except Exception as _embedding_error:  # noqa: BLE001 -- lexical recall follows
                     compact["embedding_error"] = str(_embedding_error)[:200]
@@ -2372,3 +2439,64 @@ def _compact_failure(self, question, source, compact, reason):
 
 AnalysisMixin._ask_compact = _ask_compact
 AnalysisMixin._compact_failure = _compact_failure
+
+
+def _audience_scope_key(
+    service: AriadneService, source: str | None, branch: str | None, *, revision_delta: int = 0
+) -> str:
+    from model_config import identity_hash
+
+    identity = service.inference_context.cache_identity
+    scope = service._resolve_scope(source)
+    return identity_hash(
+        {
+            'library_uuid': identity[0],
+            'embedding_space': identity[1],
+            'revision': identity[2] + revision_delta,
+            'source': service._resolve_source(source),
+            'closure': sorted(scope._closure),
+            'branch': branch or service.get_branch() or 'main',
+        }
+    )
+
+
+async def _persist_bound_audience_response(
+    service: AriadneService,
+    *,
+    role: str,
+    question: str,
+    content: str,
+    dev_docs: list[Any],
+    source: str | None,
+    branch: str | None,
+    spool_fp: str = '',
+) -> None:
+    from model_config import identity_hash
+    from schema import generate_deterministic_id
+    from writer import LibraryWriter
+
+    scope_key = _audience_scope_key(service, source, branch, revision_delta=1)
+    parents = [service.library.get_document(doc.id) for doc in dev_docs]
+    parents = [doc for doc in parents if doc is not None]
+    metadata = {
+        'audience': role,
+        'question': question,
+        'generated': True,
+        'scope_key': scope_key,
+        'spool_fp': spool_fp,
+        'derived_from': [doc.id for doc in parents],
+        'branch': branch or service.get_branch() or 'main',
+    }
+    doc_id = generate_deterministic_id(
+        'audience_response',
+        identity_hash([role, question, service._resolve_source(source), metadata['branch']]),
+    )
+    await LibraryWriter(service.library).add_document(
+        'audience_response',
+        f'{role} response: {question[:80]}',
+        content,
+        source_files=list(dict.fromkeys(path for doc in parents for path in doc.source_files)),
+        metadata=metadata,
+        source_name=service._resolve_source(source),
+        doc_id=doc_id,
+    )

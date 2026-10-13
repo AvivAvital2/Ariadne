@@ -14,14 +14,18 @@ import httpx
 import numpy as np
 from attrs import frozen
 
+from model_config import EMBEDDING_DIM, EmbeddingSettings
+
 if TYPE_CHECKING:
     from numpy.typing import NDArray
+
+    from inference import InferenceContext
 
 _logger = logging.getLogger(__name__)
 
 # Default embedding model
 DEFAULT_MODEL = 'text-embedding-3-large'
-EMBEDDING_DIM = 3072
+VECTOR_NORM_TOLERANCE = 1e-5
 
 # Max chars of a document's content folded into its embedding text.
 _DOC_EMBED_CONTENT_CHARS = 2000
@@ -72,15 +76,32 @@ class EmbeddingConfig:
     api_key: str | None = None
     base_url: str | None = None  # None = read from OPENAI_BASE_URL env or default
     dimensions: int | None = EMBEDDING_DIM
+    provider: str = 'openai'
+    local_settings: EmbeddingSettings | None = None
+
+    @classmethod
+    def from_settings(cls, settings: EmbeddingSettings) -> EmbeddingConfig:
+        return cls(
+            model=settings.request_model,
+            base_url=settings.base_url,
+            dimensions=settings.dimensions,
+            provider=settings.provider,
+            local_settings=settings if settings.provider == 'local' else None,
+            api_key=settings.credential(),
+        )
 
     def get_base_url(self) -> str:
         """Get API base URL from config, env var, or default."""
+        if self.provider == 'local' and not self.base_url:
+            raise ValueError('Local embedding base_url is required')
         if self.base_url is not None:
             return self.base_url
         return os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1')
 
     def get_api_key(self) -> str:
         """Get the API key, falling back to environment variable."""
+        if self.provider == 'local':
+            return self.local_settings.credential() or ''
         if self.api_key is not None:
             return self.api_key
         key = os.environ.get('OPENAI_API_KEY')
@@ -100,14 +121,51 @@ class EmbeddingService:
         >>> embeddings = await service.embed_batch(["Hello", "World"])
     """
 
-    def __init__(self, config: EmbeddingConfig | None = None) -> None:
+    def __init__(self, config: EmbeddingConfig | None = None, *, context: InferenceContext | None = None) -> None:
         """Initialize the embedding service.
 
         Args:
             config: Embedding configuration. Uses defaults if not provided.
         """
+        from inference import current_context
+        from library.model_binding import ModelBindingMismatch
+
+        self.context = context or current_context()
+        if config is None and self.context is not None:
+            config = EmbeddingConfig.from_settings(self.context.settings.embeddings)
         self.config = config or EmbeddingConfig()
         self._client: httpx.AsyncClient | None = None
+        self._local_transport = None
+        self.embedding_space_id = None
+        if self.config.provider == 'local':
+            if self.context is None or self.config.local_settings is None:
+                raise ModelBindingMismatch('Local embeddings require a bound InferenceContext')
+            self.embedding_space_id = self.config.local_settings.embedding_space_id
+            self.context.validate_producer(
+                model=self.config.model,
+                provider='local',
+                embedding_space_id=self.embedding_space_id,
+            )
+            from docgen.llm.local import LocalTransport
+
+            self._local_transport = LocalTransport(
+                self.config.local_settings, attempts=self.context.settings.execution.max_attempts
+            )
+        elif self.context is not None and self.context.local:
+            raise ModelBindingMismatch(
+                'A hosted embedding service cannot be used in a local context'
+            )
+        elif self.context is not None and self.context.binding is not None:
+            expected = self.context.settings.embeddings
+            if (self.config.provider, self.config.model, self.config.dimensions) != (
+                expected.provider,
+                expected.request_model,
+                expected.dimensions,
+            ):
+                raise ModelBindingMismatch(
+                    'Embedding configuration differs from the bound model or dimensions'
+                )
+            self.embedding_space_id = expected.embedding_space_id
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create the async HTTP client."""
@@ -121,6 +179,8 @@ class EmbeddingService:
 
     async def close(self) -> None:
         """Close the HTTP client."""
+        if self._local_transport is not None:
+            await self._local_transport.aclose()
         if self._client is not None:
             await self._client.aclose()
             self._client = None
@@ -130,7 +190,8 @@ class EmbeddingService:
 
     async def __aexit__(self, *_: object) -> None:
         await self.close()
-    async def embed(self, text: str) -> NDArray[np.float32]:
+
+    async def embed(self, text: str, *, purpose: str | None = None) -> NDArray[np.float32]:
         """Generate an embedding for a single text.
 
     Identical texts within one service lifetime resolve to one
@@ -141,16 +202,16 @@ class EmbeddingService:
         memo = getattr(self, "_embed_memo", None)
         if memo is None:
             memo = self._embed_memo = {}
-        cached = memo.get(text)
+        cached = memo.get((purpose, text))
         if cached is not None:
             return cached
-        embeddings = await self.embed_batch([text])
-        memo[text] = embeddings[0]
+        embeddings = await self.embed_batch([text], **({'purpose': purpose} if purpose is not None else {}))
+        memo[purpose, text] = embeddings[0]
         if len(memo) > 32:
             memo.pop(next(iter(memo)))
         return embeddings[0]
 
-    async def embed_batch(self, texts: list[str]) -> list[NDArray[np.float32]]:
+    async def embed_batch(self, texts: list[str], *, purpose: str | None = None) -> list[NDArray[np.float32]]:
         """Generate embeddings for multiple texts.
 
         Args:
@@ -159,6 +220,14 @@ class EmbeddingService:
         Returns:
             List of numpy arrays, each of shape (dimensions,).
         """
+        if self.config.provider == 'local':
+            if purpose == 'query':
+                return [await self.embed_query(text) for text in texts]
+            if purpose == 'document':
+                return await self.embed_documents(texts)
+            raise ValueError(
+                'Local embed/embed_batch requires an explicit query or document purpose'
+            )
         if not texts:
             return []
         # Empty/whitespace texts get zero vectors IN PLACE — the API would
@@ -246,11 +315,135 @@ class EmbeddingService:
             return aligned
         return embeddings
 
+    async def embed_query(self, text: str) -> NDArray[np.float32]:
+        if self.config.provider != 'local':
+            return await self.embed(text)
+        from model_config import query_input
+
+        return (await self._embed_local([query_input(text)]))[0]
+
+    async def embed_documents(self, texts: list[str]) -> list[NDArray[np.float32]]:
+        if self.config.provider != 'local':
+            return await self.embed_batch(list(texts))
+        return await self._embed_local(list(texts))
+
+    async def _embed_local(
+        self, texts: list[str], *, attempts: int | None = None
+    ) -> list[NDArray[np.float32]]:
+        from docgen.llm.local import ContextOverflow, token_count
+        from model_config import tokenize_url
+
+        invalid = [
+            i for i, text in enumerate(texts) if not isinstance(text, str) or not text.strip()
+        ]
+        if invalid:
+            raise ValueError(f'Empty embedding inputs at indices {invalid}')
+        if not texts:
+            return []
+        self.context.validate(credentials=True)
+        attempts = attempts or self.context.transport_attempts
+        self.context.validate_producer(
+            model=self.config.model, provider='local', embedding_space_id=self.embedding_space_id
+        )
+        settings = self.config.local_settings
+        transport = self._local_transport
+        results = []
+        async with self.context.embedding_limit:
+            await transport.ready(attempts=attempts)
+            counts = []
+            for text in texts:
+                data = await transport.request(
+                    'POST',
+                    tokenize_url(settings.base_url),
+                    payload={
+                        'model': settings.request_model,
+                        'prompt': text,
+                        'add_special_tokens': True,
+                    },
+                    attempts=attempts,
+                )
+                count, server_limit = token_count(data)
+                if count > min(settings.max_input_tokens, settings.batch_max_tokens, server_limit):
+                    raise ContextOverflow(
+                        f'Embedding input {len(counts)} exceeds the configured token limit'
+                    )
+                counts.append(count)
+            start = 0
+            while start < len(texts):
+                end, total = start, 0
+                while (
+                    end < len(texts)
+                    and end - start < settings.batch_size
+                    and total + counts[end] <= settings.batch_max_tokens
+                ):
+                    total += counts[end]
+                    end += 1
+                data = await transport.request(
+                    'POST',
+                    settings.base_url + '/embeddings',
+                    payload={
+                        'model': settings.request_model,
+                        'input': texts[start:end],
+                        'encoding_format': 'float',
+                    },
+                    attempts=attempts,
+                )
+                results.extend(reduce_local_embeddings(data, end - start))
+                start = end
+        return results
+
+
+def reduce_local_embeddings(data: dict, expected: int) -> list[NDArray[np.float32]]:
+    """Validate native Qwen output, retain its prefix, then normalize in float64."""
+    from docgen.llm.local import EmbeddingContractError
+    from model_config import NATIVE_DIM
+
+    rows = data.get('data')
+    if not isinstance(rows, list) or len(rows) != expected:
+        raise EmbeddingContractError('Wrong embedding response cardinality')
+    if any(not isinstance(row, dict) or type(row.get('index')) is not int for row in rows):
+        raise EmbeddingContractError('Missing or invalid embedding indices')
+    rows = sorted(rows, key=lambda row: row['index'])
+    if any(row['index'] != index for index, row in enumerate(rows)):
+        raise EmbeddingContractError('Duplicate, missing or out-of-range embedding indices')
+    result = []
+    for row in rows:
+        values = row.get('embedding')
+        if (
+            not isinstance(values, list)
+            or len(values) != NATIVE_DIM
+            or any(type(value) not in (float, int) for value in values)
+        ):
+            raise EmbeddingContractError(
+                f'Local endpoint must return {NATIVE_DIM} numeric components'
+            )
+        try:
+            native = np.asarray(values, dtype=np.float64)
+        except (ValueError, OverflowError) as exc:
+            raise EmbeddingContractError('Invalid embedding components') from exc
+        if not np.isfinite(native).all():
+            raise EmbeddingContractError('Nonfinite native embedding')
+        prefix = native[:EMBEDDING_DIM]
+        scale = np.max(np.abs(prefix))
+        if scale == 0:
+            raise EmbeddingContractError('Zero retained embedding norm')
+        scaled = prefix / scale
+        normalized = (scaled / np.linalg.norm(scaled)).astype(np.float32)
+        if (
+            not np.isfinite(normalized).all()
+            or abs(float(np.linalg.norm(normalized.astype(np.float64))) - 1) > VECTOR_NORM_TOLERANCE
+        ):
+            raise EmbeddingContractError('Invalid reduced embedding norm')
+        result.append(normalized)
+    return result
+
 
 # Synchronous wrapper for convenience
 def embed_sync(
     text: str,
     config: EmbeddingConfig | None = None,
+    *,
+    purpose: str | None = None,
 ) -> NDArray[np.float32]:
     """Generate an embedding synchronously.
 
@@ -265,21 +458,25 @@ def embed_sync(
         A numpy array of shape (dimensions,) containing the embedding.
     """
     import asyncio
-    return asyncio.run(_embed_sync_impl(text, config))
+    return asyncio.run(_embed_sync_impl(text, config, purpose=purpose))
 
 
 async def _embed_sync_impl(
     text: str,
     config: EmbeddingConfig | None = None,
+    *,
+    purpose: str | None = None,
 ) -> NDArray[np.float32]:
     """Implementation of sync embedding."""
     async with EmbeddingService(config) as service:
-        return await service.embed(text)
+        return await service.embed(text, purpose=purpose)
 
 
 def embed_batch_sync(
     texts: list[str],
     config: EmbeddingConfig | None = None,
+    *,
+    purpose: str | None = None,
 ) -> list[NDArray[np.float32]]:
     """Generate embeddings for multiple texts synchronously.
 
@@ -291,13 +488,15 @@ def embed_batch_sync(
         List of numpy arrays.
     """
     import asyncio
-    return asyncio.run(_embed_batch_sync_impl(texts, config))
+    return asyncio.run(_embed_batch_sync_impl(texts, config, purpose=purpose))
 
 
 async def _embed_batch_sync_impl(
     texts: list[str],
     config: EmbeddingConfig | None = None,
+    *,
+    purpose: str | None = None,
 ) -> list[NDArray[np.float32]]:
     """Implementation of sync batch embedding."""
     async with EmbeddingService(config) as service:
-        return await service.embed_batch(texts)
+        return await service.embed_batch(texts, purpose=purpose)

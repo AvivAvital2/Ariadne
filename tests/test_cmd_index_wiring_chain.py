@@ -46,6 +46,11 @@ def restore_global_config():
     config_module._global_config = saved
 
 
+@pytest.fixture(autouse=True)
+def enable_akka_phase(monkeypatch):
+    monkeypatch.setattr('docgen.build_dependencies.uses_akka_http', lambda root: True)
+
+
 class _FakeAdapter:
     """Minimal adapter that writes a synthetic ``.scip`` payload so
     cmd_index reaches the persist phase. Accepts every kwarg cli_core

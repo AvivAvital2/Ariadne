@@ -8,6 +8,10 @@
 # writing the DB (the brain) — see the single-writer rule in the blueprint.
 set -eu
 
+if [ "$#" -gt 0 ]; then
+    exec ariadne "$@"
+fi
+
 BRAIN_HOST=0.0.0.0     # bind 0.0.0.0 so the host port-mapping can reach it, and
 BRAIN_PORT=8000        # so FastMCP's Host-allowlist (127.0.0.1/localhost only) is
 WEB_HOST=0.0.0.0       # not auto-triggered (mcp server.py:177-183).

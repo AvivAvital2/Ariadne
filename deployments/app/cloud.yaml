@@ -1,0 +1,19 @@
+# Container paths; mount the repository at /workspace and persistent state at /data.
+default_source: project
+sources:
+  project:
+    path: /workspace
+    exclude: ['**/.env', '**/secrets.*']
+docs_base: /data/docs
+defaults:
+  db_path: /data/cloud.db
+  staleness_db_path: /data/cloud_staleness.db
+llm:
+  provider: openai
+  model: gpt-6-astra
+  api_key_env: OPENAI_API_KEY
+embeddings:
+  provider: openai
+  model: text-embedding-3-large
+  dimensions: 3072
+  api_key_env: OPENAI_API_KEY

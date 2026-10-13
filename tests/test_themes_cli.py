@@ -33,6 +33,7 @@ def _add_doc(
     content_type: str = 'theme',
     title: str | None = None,
     content: str = 'content',
+    source_name: str | None = None,
 ) -> None:
     library.add_document(
         content_type=content_type,  # type: ignore[arg-type]
@@ -42,6 +43,7 @@ def _add_doc(
         embedding=_unit([1.0, 0, 0, 0, 0, 0, 0, 0]),
         metadata={},
         doc_id=doc_id,
+        source_name=source_name,
     )
 
 
@@ -313,7 +315,7 @@ class TestThemesConcurrency:
 
     @pytest.mark.asyncio
     async def test_build_with_none_concurrency_parallelizes_not_crashes(
-        self, patched_get_library: Library, monkeypatch,
+        self, patched_get_library: Library, monkeypatch, tmp_path,
     ) -> None:
         """`concurrency=None` is the intended "use the default parallelism"
         signal — `onboard` forwards its own ``--concurrency`` (default None)
@@ -326,9 +328,11 @@ class TestThemesConcurrency:
         Semaphore is built); a 2-member cluster is below `min_cluster_size`, so
         nothing is dirty and no summarization runs.
         """
+        from tests._scoped_config_fixture import install_test_config
+        install_test_config(monkeypatch, tmp_path, 'test')
         lib = patched_get_library
-        _add_doc(lib, 'el1', content_type='catalog', title='el1')
-        _add_doc(lib, 'el2', content_type='catalog', title='el2')
+        _add_doc(lib, 'el1', content_type='catalog', title='el1', source_name='test')
+        _add_doc(lib, 'el2', content_type='catalog', title='el2', source_name='test')
 
         # Belt-and-suspenders: never make a real LLM call even if a theme
         # were dirty (the crash is upstream of this, at the Semaphore).

@@ -42,7 +42,7 @@ def _seed_chain_db(db_path: Path) -> None:
         )
     conn.execute(
         'INSERT INTO scip_edges VALUES (?, ?, ?, ?, ?, ?)',
-        ('A', 'B', 'reference', 'app.py', 7, 'scip'),
+        ('A', 'B', 'call', 'app.py', 7, 'scip'),
     )
     conn.commit()
     conn.close()
@@ -204,7 +204,7 @@ class TestMcpWrapper:
         ):
             conn.execute(
                 'INSERT INTO scip_edges VALUES (?, ?, ?, ?, ?, ?)',
-                (caller, callee, 'reference', 'app.py', 1, 'scip'),
+                (caller, callee, 'call', 'app.py', 1, 'scip'),
             )
         conn.commit()
         conn.close()
@@ -247,7 +247,7 @@ class TestSequenceDiagram:
         )
         conn.execute(
             'INSERT INTO scip_edges VALUES (?, ?, ?, ?, ?, ?)',
-            ('A', 'B', 'reference', 'app.py', 7, 'scip'),
+            ('A', 'B', 'call', 'app.py', 7, 'scip'),
         )
         conn.commit()
         conn.close()

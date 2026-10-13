@@ -1600,6 +1600,13 @@ def cmd_discover(args: argparse.Namespace) -> int:
                     artifact_path=artifact_path,
                 )
                 if rewrote:
+                    from config import Config
+
+                    # Subsequent index/catalog phases in this operation need the
+                    # discovered source routing; model settings remain frozen.
+                    cfg._config['sources'][source_name] = Config(Path(config_path))._config[
+                        'sources'
+                    ][source_name]
                     console.print(
                         f'[green]Updated {config_path} '
                         f'(index_kinds: {sorted(catalog_scip_languages)})'
@@ -1611,7 +1618,6 @@ def cmd_discover(args: argparse.Namespace) -> int:
                 )
 
     return 0
-
 
 HANDLERS = {
     'discover': lambda args: cmd_discover(args),

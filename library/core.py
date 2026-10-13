@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -12,6 +13,8 @@ from schema import CATALOG_KIND_ELEMENT, CATALOG_KIND_FILE_INDEX, Chunk, Content
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
+
+    from library.prepared import PreparedDocument
 
 _logger = logging.getLogger(__name__)
 
@@ -125,6 +128,9 @@ class CoreMixin:
         never blocks on token counting. NULL rows can be filled later via                                                                                               
         `backfill_token_counts()`.                                                                                                                                      
         """     
+        context = getattr(self, 'inference_context', None)
+        if context is not None and context.local:
+            return None
         try:                                                                                                                                                            
             import anthropic
             client = anthropic.Anthropic()
@@ -145,6 +151,9 @@ class CoreMixin:
  
         Returns {processed, filled, errors, remaining_after}.                                                                                                           
         """     
+        context = getattr(self, 'inference_context', None)
+        if context is not None and context.local:
+            raise ValueError('Stored token-count backfill is not supported for local libraries')
         import logging
         log = logging.getLogger(__name__)                                                                                                                               
         with self._conn_provider.acquire() as conn:
@@ -188,6 +197,14 @@ class CoreMixin:
                 
     def _insert_document(self, doc: Document) -> None:
         """Insert a document into the database."""
+        context = getattr(self, 'inference_context', None)
+        if context is not None:
+            context.require_writer()
+            context.validate()
+            if context.local and doc.embedding is not None:
+                raise ValueError(
+                    'Local vector writes require a prepared document from the bound writer'
+                )
         token_count = self._count_tokens(doc.content)
         with self._conn_provider.acquire() as conn:
             conn.execute(
@@ -232,7 +249,7 @@ class CoreMixin:
 
     def _row_to_document(self, row: tuple[object, ...]) -> Document:
         """Convert a database row to a Document."""
-        return Document(
+        document = Document(
             id=str(row[0]),
             content_type=row[1],  # type: ignore[arg-type]
             title=str(row[2]),
@@ -244,6 +261,9 @@ class CoreMixin:
             metadata=row[8],  # type: ignore[arg-type]
             source_name=str(row[9]) if len(row) > 9 and row[9] else None,
         )
+        if document.embedding is not None and not self.read_only:
+            self._validate_stored_vectors([document.embedding])
+        return document
 
     def list_documents(
         self,
@@ -381,6 +401,7 @@ class CoreMixin:
         Returns a dict mapping doc_id to embedding (skipping docs without embeddings).
         Much lighter than loading full documents when only embeddings are needed for ranking.
         """
+        self.require_semantic_context()
         if not doc_ids:
             return {}
 
@@ -396,7 +417,21 @@ class CoreMixin:
                     emb_blob = row[1]
                     if emb_blob:
                         result[str(row[0])] = np.frombuffer(emb_blob, dtype=np.float32).copy()
+        self._validate_stored_vectors(list(result.values()))
         return result
+
+    def _validate_stored_vectors(self, vectors: list[NDArray[np.float32]]) -> None:
+        from inference import local_context
+
+        if local_context(self):
+            from docgen.llm.local import EmbeddingContractError
+            from library.prepared import validate_vector
+
+            try:
+                for vector in vectors:
+                    validate_vector(vector)
+            except ValueError as exc:
+                raise EmbeddingContractError(f'Invalid stored embedding: {exc}') from exc
 
     def get_documents_batch(self, doc_ids: list[str]) -> list[Document]:
         """Fetch multiple documents in a single query.
@@ -455,6 +490,19 @@ class CoreMixin:
         if existing is None:
             return None
         content_changed = content is not None and content != existing.content
+        title_changed = title is not None and title != existing.title
+
+        context = getattr(self, 'inference_context', None)
+        if context is not None:
+            context.require_writer()
+            context.validate()
+            if context.local and (
+                embedding is not None
+                or (existing.embedding is not None and (content is not None or title is not None))
+            ):
+                raise ValueError(
+                    'Local content/vector replacements must use LibraryWriter.replace_document'
+                )
 
         updates: list[str] = []
         params: list[object] = []
@@ -465,6 +513,8 @@ class CoreMixin:
         if content is not None:
             updates.append('content = ?')
             params.append(content)
+            if content != existing.content:
+                updates.append('content_token_count = NULL')
         if source_files is not None:
             updates.append('source_files = ?')
             params.append(json.dumps(source_files))
@@ -474,10 +524,10 @@ class CoreMixin:
         if metadata is not None:
             updates.append('metadata = ?')
             params.append(json.dumps(metadata))
-        # Content changed without a fresh embedding: the stored vector (and
-        # chunks) are now stale. NULL it so the incremental embed path re-does
-        # this doc; drop the stale chunks below.
-        if content_changed and embedding is None:
+        # Title/content changed without a fresh embedding: NULL the stale
+        # vector so the incremental embed path re-does this doc. Content
+        # changes also invalidate the chunks below.
+        if (content_changed or title_changed) and embedding is None:
             updates.append('embedding = NULL')
 
         if updates:
@@ -495,6 +545,62 @@ class CoreMixin:
             self.delete_chunks(doc_id)
 
         return self.get_document(doc_id)
+
+    def apply_prepared_document(
+        self,
+        prepared: PreparedDocument,
+        *,
+        job_id: str | None = None,
+        check_inputs: Callable[[], None] | None = None,
+        delete_versions: dict[str, str] | None = None,
+    ) -> Document:
+        """Atomically replace text/vectors/children and an optional spool marker."""
+        from library.model_binding import ModelBindingMismatch
+        from library.prepared import apply_document
+
+        context = self.inference_context
+        if context is None:
+            raise ModelBindingMismatch('Prepared application requires a bound inference context')
+        context.require_writer()
+        context.validate()
+        if prepared.embedding_space_id != context.settings.embeddings.embedding_space_id:
+            raise ModelBindingMismatch('Prepared document belongs to another embedding space')
+        with self._conn_provider.acquire() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if job_id is not None:
+                job = conn.execute(
+                    'SELECT j.state, r.cancel_requested FROM spool_jobs j JOIN spool_runs r USING(run_id) WHERE job_id=?',
+                    (job_id,),
+                ).fetchone()
+                if job is None:
+                    raise ValueError('Unknown spool job')
+                if job[0] == 'applied':
+                    # Return without a write, preserving timestamps and vectors.
+                    row = conn.execute(
+                        'SELECT id, content_type, title, content, source_files, embedding, created_at, updated_at, metadata, source_name FROM documents WHERE id=?',
+                        (prepared.document.id,),
+                    ).fetchone()
+                    return self._row_to_document(row)
+                if job[1] or job[0] != 'apply_pending':
+                    raise ValueError('Spool job is cancelled or not ready for application')
+            if check_inputs is not None:
+                check_inputs()
+            for removed_id, expected in (delete_versions or {}).items():
+                from library.prepared import ObsoleteInput
+
+                row = conn.execute(
+                    'SELECT updated_at FROM documents WHERE id=?', (removed_id,)
+                ).fetchone()
+                if row is None or row[0] != expected:
+                    raise ObsoleteInput(f'Catalog removal target changed: {removed_id}')
+                conn.execute('DELETE FROM documents WHERE id=?', (removed_id,))
+            doc = apply_document(conn, prepared)
+            if job_id is not None:
+                conn.execute(
+                    "UPDATE spool_jobs SET state='applied', updated_at=? WHERE job_id=?",
+                    (doc.updated_at, job_id),
+                )
+        return doc
 
     def delete_document(self, doc_id: str) -> bool:
         """Delete a document and its chunks.
@@ -518,6 +624,12 @@ class CoreMixin:
         Args:
             chunk: The Chunk to add.
         """
+        if self.inference_context is not None and self.inference_context.local:
+            from library.model_binding import ModelBindingMismatch
+
+            raise ModelBindingMismatch(
+                'Local vector replacement requires a complete prepared document bundle'
+            )
         with self._conn_provider.acquire() as conn:
             conn.execute(
                 '''INSERT INTO chunks (id, document_id, chunk_index, content, embedding)
@@ -539,6 +651,12 @@ class CoreMixin:
         """
         if not chunks:
             return
+        if self.inference_context is not None and self.inference_context.local:
+            from library.model_binding import ModelBindingMismatch
+
+            raise ModelBindingMismatch(
+                'Local vector replacement requires a complete prepared document bundle'
+            )
         with self._conn_provider.acquire() as conn:
             conn.executemany(
                 '''INSERT INTO chunks (id, document_id, chunk_index, content, embedding)
@@ -593,6 +711,12 @@ class CoreMixin:
 
     def store_sections(self, document_id: str, sections: list[Section]) -> None:
         """Replace all sections for a document in a single transaction."""
+        if self.inference_context is not None and self.inference_context.local:
+            from library.model_binding import ModelBindingMismatch
+
+            raise ModelBindingMismatch(
+                'Local vector replacement requires a complete prepared document bundle'
+            )
         with self._conn_provider.acquire() as conn:
             conn.execute('DELETE FROM sections WHERE document_id = ?', (document_id,))
             if sections:
@@ -650,16 +774,19 @@ class CoreMixin:
 
         Returns list of (section_index, embedding) tuples, skipping sections without embeddings.
         """
+        self.require_semantic_context()
         with self._conn_provider.acquire() as conn:
             rows = conn.execute(
                 '''SELECT idx, embedding FROM sections
                    WHERE document_id = ? AND embedding IS NOT NULL ORDER BY idx''',
                 (document_id,),
             ).fetchall()
-        return [
+        result = [
             (int(row[0]), np.frombuffer(row[1], dtype=np.float32).copy())
             for row in rows if row[1]
         ]
+        self._validate_stored_vectors([vector for _, vector in result])
+        return result
 
     # Database maintenance
 

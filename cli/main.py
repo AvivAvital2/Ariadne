@@ -32,11 +32,9 @@ console = Console()
 
 def get_library(db_path: Path | None = None) -> 'Library':
     """Get or create a library instance."""
-    from library import Library
-    if db_path is None:
-        cfg = get_config()
-        db_path = Path(cfg.db_path)
-    return Library(db_path)
+    from cli.runtime import get_library as open_library
+
+    return open_library(db_path)
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -55,6 +53,12 @@ def create_parser() -> argparse.ArgumentParser:
         '--debug',
         action='store_true',
         help='Verbose logging: API retry/backoff chatter, request details',
+    )
+    parser.add_argument(
+        '--staleness-db',
+        type=Path,
+        default=None,
+        help='Explicit staleness database for this library',
     )
 
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
@@ -191,7 +195,9 @@ def main() -> int:
         return 1
 
     try:
-        return handler(args)
+        from cli.runtime import run_command
+
+        return run_command(handler, args, get_config())
     except KeyboardInterrupt:
         console.print('\n[yellow]Interrupted.[/yellow]')
         return 130

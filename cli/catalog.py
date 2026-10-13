@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from rich.console import Console
 
+from cli.runtime import ConcurrencyAction, run_async
 from config import get_config
 
 if TYPE_CHECKING:
@@ -39,6 +40,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     # catalog-sync
     catalog_sync_parser = subparsers.add_parser('catalog-sync',
         help='Sync structural code catalog via ast-grep (per-element docs)')
+    catalog_sync_parser.set_defaults(concurrency_explicit=False)
     catalog_sync_parser.add_argument('--source', '-s', default=None,
         help='Source name (default from config)')
     catalog_sync_parser.add_argument('--allow-degraded', action='store_true',
@@ -49,6 +51,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         ),
     )
     catalog_sync_parser.add_argument('--concurrency', '-c', type=int, default=4,
+        action=ConcurrencyAction,
         help=(
             'Max concurrent files to process (default: 4). Catalog-sync is '
             'network-bound on the embedding API; raise to 8-16 if your tier '
@@ -73,7 +76,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help='Regenerate descriptions even if already present')
     catalog_desc_parser.add_argument('--model', '-m', default=None,
         help='LLM model to use (default from config)')
-    catalog_desc_parser.add_argument('--concurrency', '-c', type=int, default=4,
+    catalog_desc_parser.add_argument('--concurrency', '-c', type=int, default=None,
         help='Max concurrent LLM requests (default: 4)')
     catalog_desc_parser.add_argument('--max-calls', type=int, default=None,
         help='Cap on LLM calls')
@@ -133,6 +136,25 @@ async def cmd_catalog_sync(args: argparse.Namespace) -> int:
     library = get_library(args.db)
     try:
         from cli.progress import make_progress
+
+        from inference import local_context
+
+        if local_context(library):
+            from docgen.local_pipeline import run_catalog_sync
+
+            result = await run_catalog_sync(
+                library,
+                source_name,
+                source_path,
+                source_config=scip_config,
+                exclude_patterns=exclude_patterns,
+                exclude_dir_names=exclude_dir_names,
+                force=getattr(args, 'force', False),
+            )
+            console.print(
+                f'{result["run_id"]}: {result["state"]}; {result["applied"]} catalog documents applied'
+            )
+            return int(result['state'] != 'completed')
 
         with make_progress(
             console=console, transient=getattr(args, 'quiet', False),
@@ -335,6 +357,38 @@ async def cmd_catalog_describe(args: argparse.Namespace) -> int:
 
     library = get_library(args.db)
     try:
+        from inference import local_context
+
+        if local_context(library) and (
+            getattr(args, 'batch', False) or getattr(args, 'resume', False)
+        ):
+            from docgen.local_pipeline import resume_run, run_catalog_descriptions
+            from docgen.spool import SpoolStore
+
+            if getattr(args, 'resume', False):
+                import json
+
+                store = SpoolStore(library.inference_context, library)
+                runs = [
+                    r
+                    for r in store.list_runs()
+                    if r['operation_kind'] == 'catalog-describe'
+                    and json.loads(store.get_run(r['run_id'])['scope_json'])['source_name']
+                    == source_name
+                ]
+                if not runs:
+                    raise ValueError(
+                        'No local catalog run for this source; use --batch to create one'
+                    )
+                summary = await resume_run(library, runs[0]['run_id'])
+            else:
+                summary = await run_catalog_descriptions(
+                    library, source_name=source_name, force=args.force, max_calls=args.max_calls
+                )
+            console.print(
+                f'{summary["run_id"]}: {summary["state"]}; {summary["responses"]} responses saved; {summary["applied"]} descriptions applied'
+            )
+            return int(summary['state'] != 'completed')
         if getattr(args, 'dry_run', False):
             if getattr(args, 'resume', False):
                 console.print(
@@ -560,8 +614,7 @@ async def cmd_catalog_describe(args: argparse.Namespace) -> int:
     finally:
         library.close()
 
-
 HANDLERS = {
-    'catalog-sync': lambda args: asyncio.run(cmd_catalog_sync(args)),
-    'catalog-describe': lambda args: asyncio.run(cmd_catalog_describe(args)),
+    'catalog-sync': lambda args: run_async(cmd_catalog_sync(args)),
+    'catalog-describe': lambda args: run_async(cmd_catalog_describe(args)),
 }

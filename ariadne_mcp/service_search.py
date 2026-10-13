@@ -4,10 +4,17 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 
 from ariadne_mcp.models import DocumentResult, SearchResponse, SectionResult
 
 _logger = logging.getLogger(__name__)
+
+
+async def _embed_query(service, text):
+    if getattr(service, 'inference_context', None) is not None:
+        return await service.embedding_service.embed_query(text)
+    return await service.embedding_service.embed(text)
 
 
 def _is_catalog_bloat(title: str) -> bool:
@@ -93,6 +100,7 @@ def _trim_related_documents(content: str, max_links: int = 5) -> str:
 _RETRIEVAL_CACHE_VERSION = 13
 
 class SearchMixin:
+
     """Search implementation with multi-phase ranking.
 
     Expects the composed class to provide:
@@ -206,12 +214,12 @@ class SearchMixin:
         from spools import resolve_spools
         spool_resolution = resolve_spools(self.config)
         spool_fp = spool_resolution.fingerprint()
-        key = self._cache_key('search', query, feature, branch, status, limit, context_file, sections_only, role, source, spool_fp)
+        key = self._cache_key('search-v2', query, feature, branch, status, limit, context_file, sections_only, role, source, spool_fp)
         if key in self._query_cache:
             return self._query_cache[key]
 
         # Persistent cache (cross-session, branch-aware, 30-day TTL)
-        p_key = self._persistent_cache_key('search', branch, query, feature, status, limit, context_file, sections_only, role, source, spool_fp)
+        p_key = self._persistent_cache_key('search-v2', branch, query, feature, status, limit, context_file, sections_only, role, source, spool_fp, getattr(self, '_semantic_identity', lambda: None)())
         cached_json = self.library.cache_get(p_key)
         if cached_json is not None:
             try:
@@ -302,7 +310,7 @@ class SearchMixin:
         query_embedding = None
         if route.regime in ('fuse', 'expert-only') or route.fallback_enabled:
             try:
-                query_embedding = await self.embedding_service.embed(query)
+                query_embedding = await _embed_query(self, query)
             except Exception:
                 _logger.debug(
                     'lens: query embed failed — entity admissions only',
@@ -734,13 +742,19 @@ class SearchMixin:
         try:
             from library.embedding_ranking import select_ranker
 
-            query_embedding = await self.embedding_service.embed(query)
+            query_embedding = (
+                await self.embedding_service.embed_query(query)
+                if getattr(self, 'inference_context', None) is not None
+                else await _embed_query(self, query)
+            )
             ranker = select_ranker(len(doc_ids), self._get_embedding_matrix, self.library)
             ranked = ranker.rank(query_embedding, doc_ids, limit, weights=weights)
             if ranked:
                 return ranked
             return [(did, 0.0) for did in self._rank_by_query_ids(doc_ids, query, limit)]
         except Exception:
+            if getattr(self, 'inference_context', None) is not None:
+                raise
             _logger.debug('Embedding ranking failed, falling back to text matching', exc_info=True)
             return [(did, 0.0) for did in self._rank_by_query_ids(doc_ids, query, limit)]
 
@@ -758,7 +772,7 @@ class SearchMixin:
 
         from library.anchored_retrieval import anchored_rank
 
-        query_embedding = await self.embedding_service.embed(query)
+        query_embedding = await _embed_query(self, query)
         floor = max(1, limit // 2)          # the repo keeps at least half the slots
         window_a = max(limit * 2, 20)       # per-side pre-rank windows keep the
         window_g = max(limit * 5, 50)       # anchored combine O(window), not O(N)
@@ -881,7 +895,11 @@ class SearchMixin:
 
         from search import batch_dot_similarity
 
-        query_embedding = await self.embedding_service.embed(query)
+        query_embedding = (
+            await self.embedding_service.embed_query(query)
+            if getattr(self, 'inference_context', None) is not None
+            else await _embed_query(self, query)
+        )
         result: dict[str, list[SectionResult]] = {}
 
         for doc_id in doc_ids:
@@ -911,9 +929,17 @@ class SearchMixin:
                             score=float(sim),
                         ))
 
-            # Always include at least the top section (overview) if we have sections
+            # Fall back to the first section with a body. Markdown titles can
+            # become standalone Introduction sections and provide no context.
             if not relevant and sections:
-                sec = sections[0]
+                sec = next(
+                    (
+                        s
+                        for s in sections
+                        if re.sub(r'(?m)^ {0,3}#{1,6}(?:[ \t]+.*)?$', '', s.content).strip()
+                    ),
+                    sections[0],
+                )
                 relevant.append(SectionResult(
                     heading=sec.heading, description=sec.description,
                     content=sec.content, score=0.0,

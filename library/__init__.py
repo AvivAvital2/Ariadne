@@ -53,15 +53,22 @@ _logger = logging.getLogger(__name__)
 @frozen
 class _ConnectionProvider:
     """Thread-local SQLite connection provider with WAL mode."""
-    path: Path
+    path: Path = field(converter=Path)
+    context: object | None = None
+    read_only: bool = False
+    initialize: bool = True
     _local: threading.local = field(init=False, factory=threading.local)
     _closed: threading.Event = field(init=False, factory=threading.Event)
 
     def _open_connection(self) -> Connection:
         """Open a new connection with WAL mode enabled."""
-        conn = sqlite3.connect(self.path, check_same_thread=True)
-        conn.execute('PRAGMA journal_mode=WAL')
-        conn.execute('PRAGMA synchronous=normal')
+        if self.read_only or not self.initialize:
+            mode = 'ro' if self.read_only else 'rw'
+            conn = sqlite3.connect(self.path.resolve().as_uri() + '?mode=' + mode, uri=True)
+        else:
+            conn = sqlite3.connect(self.path, check_same_thread=True)
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('PRAGMA synchronous=normal')
         conn.execute('PRAGMA foreign_keys=ON')
         return conn
 
@@ -77,12 +84,85 @@ class _ConnectionProvider:
             conn = self._open_connection()
             self._local.conn = conn
 
+        depth = getattr(self._local, 'depth', 0)
+        self._local.depth = depth + 1
+        changes_before = conn.total_changes
+        touched: set[str] = set()
+        if self.context is not None and depth == 0:
+
+            def authorize(
+                action: int,
+                table: str | None,
+                column: str | None,
+                database: str | None,
+                trigger: str | None,
+            ) -> int:
+                del column, database, trigger
+                if (
+                    action
+                    in (
+                        sqlite3.SQLITE_CREATE_TABLE,
+                        sqlite3.SQLITE_DROP_TABLE,
+                        sqlite3.SQLITE_ALTER_TABLE,
+                        sqlite3.SQLITE_CREATE_INDEX,
+                        sqlite3.SQLITE_DROP_INDEX,
+                        sqlite3.SQLITE_CREATE_TRIGGER,
+                        sqlite3.SQLITE_DROP_TRIGGER,
+                        sqlite3.SQLITE_CREATE_VIEW,
+                        sqlite3.SQLITE_DROP_VIEW,
+                        sqlite3.SQLITE_ATTACH,
+                        sqlite3.SQLITE_DETACH,
+                    )
+                    and self.context.session is None
+                ):
+                    return sqlite3.SQLITE_DENY
+                if action in (
+                    sqlite3.SQLITE_INSERT,
+                    sqlite3.SQLITE_UPDATE,
+                    sqlite3.SQLITE_DELETE,
+                ) and table not in {
+                    'query_cache',
+                    'usage_events',
+                    'sqlite_master',
+                    'sqlite_sequence',
+                }:
+                    if self.context.session is None:
+                        return sqlite3.SQLITE_DENY
+                    touched.add(table)
+                return sqlite3.SQLITE_OK
+
+            # Reset on each acquisition, including cached SQL statements.
+            conn.set_authorizer(authorize)
         try:
             yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
+            if depth == 0:
+                if (
+                    self.context is not None
+                    and self.context.binding is not None
+                    and conn.total_changes > changes_before
+                    and touched
+                    - {
+                        'spool_runs',
+                        'spool_jobs',
+                        'library_state',
+                        'library_model_binding',
+                        'calibration',
+                        'sync_state',
+                    }
+                ):
+                    conn.execute('DELETE FROM query_cache')
+                    conn.execute(
+                        'UPDATE library_state SET corpus_revision=corpus_revision+1 WHERE singleton_id=1'
+                    )
+                conn.commit()
+        except BaseException:
+            if depth == 0:
+                conn.rollback()
             raise
+        finally:
+            self._local.depth = depth
+            if depth == 0:
+                conn.set_authorizer(None)
 
     def close(self) -> None:
         """Close all connections."""
@@ -257,15 +337,44 @@ class Library(
     Args:
         path: Path to the SQLite database file.
     """
-    path: Path
+    path: Path = field(converter=Path)
+    inference_context: object | None = None
+    initialize: bool = True
+    read_only: bool = False
     _conn_provider: _ConnectionProvider = field(init=False)
 
     @_conn_provider.default
     def _conn_provider_init(self) -> _ConnectionProvider:
-        return _ConnectionProvider(self.path)
+        return _ConnectionProvider(
+            self.path, self.inference_context, self.read_only, self.initialize
+        )
 
     def __attrs_post_init__(self) -> None:
         """Initialize the database schema."""
+        from inference import current_context
+        from library.model_binding import ModelBindingMismatch, check_binding, inspect_binding
+
+        context = self.inference_context or current_context()
+        if context is not None and self.path.resolve() != context.db_path:
+            raise ModelBindingMismatch(
+                'Nested library handle does not match the operation database'
+            )
+        if context is not None and self.path.resolve() == context.db_path:
+            self.inference_context = context
+            check_binding(inspect_binding(self.path), context.settings, self.path)
+            if self.initialize:
+                context.require_writer()
+            self._conn_provider = _ConnectionProvider(
+                self.path, context, self.read_only, self.initialize
+            )
+        elif inspect_binding(self.path) is not None:
+            # Bare handles may inspect/export a bound library, but cannot
+            # silently migrate, normalize or mutate it without its context.
+            self.initialize = False
+            self.read_only = True
+            self._conn_provider = _ConnectionProvider(self.path, read_only=True, initialize=False)
+        if not self.initialize:
+            return
         with self._conn_provider.acquire() as conn:
             conn.execute(_DOCUMENTS_SCHEMA)
             conn.execute(_CHUNKS_SCHEMA)
@@ -330,7 +439,18 @@ class Library(
                 conn.execute('ALTER TABLE documents ADD COLUMN content_token_count INTEGER')                                                                            
                 conn.execute('CREATE INDEX IF NOT EXISTS idx_documents_token_count ON documents(content_token_count)')                                                  
             # Migration: normalize existing embeddings for dot-product search
-            self._migrate_normalize_embeddings(conn)
+            if self.inference_context is None or not self.inference_context.local:
+                self._migrate_normalize_embeddings(conn)
+
+    def require_semantic_context(self) -> None:
+        from library.model_binding import ModelBindingMismatch, inspect_binding
+
+        if self.inference_context is not None:
+            self.inference_context.validate(credentials=True)
+        elif inspect_binding(self.path) is not None:
+            raise ModelBindingMismatch(
+                'Semantic access to a bound library requires its InferenceContext'
+            )
 
     def _migrate_normalize_embeddings(self, conn: Connection) -> None:
         """Normalize all stored embeddings to unit vectors (one-time migration).
@@ -679,10 +799,9 @@ class ScopedLibrary:
         admitted_themes = self._admitted_theme_ids(
             [d for d, needs_gate in candidates if needs_gate],
         )
-        return [
-            d for d, needs_gate in candidates
-            if not needs_gate or d in admitted_themes
-        ]
+        allowed = {d for d, needs_gate in candidates if not needs_gate or d in admitted_themes}
+        # Preserve the caller's relevance order after the scope and theme gates.
+        return [doc_id for doc_id in doc_ids if doc_id in allowed]
 
     def _theme_association_admitted(self, association: str) -> bool:
         """A non-empty scoped ``association`` passes the closure gate.

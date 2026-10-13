@@ -2,7 +2,7 @@
 
 Talks to OpenAI's ``/chat/completions`` endpoint. Extracted from the
 historical ``DocGenerator._call_llm`` so the same logic is now reusable
-through the ``LLMProvider`` Protocol. GPT-5.x uses ``max_completion_tokens``;
+through the ``LLMProvider`` Protocol. GPT-5/6 use ``max_completion_tokens``;
 older models use ``max_tokens``.
 """
 from __future__ import annotations
@@ -21,12 +21,12 @@ _logger = logging.getLogger(__name__)
 
 
 def token_limit_field(model: str) -> str:
-    """OpenAI's token-limit param name for ``model``: gpt-5.x renamed
-    ``max_tokens`` to ``max_completion_tokens``; older models keep
+    """OpenAI's token-limit param name for ``model``: GPT-5/6 use
+    ``max_completion_tokens``; older models keep
     ``max_tokens`` (and neither sends ``temperature`` — modern models reject
     it). Shared by the unary path, the batch strategy, and the trace-flow
     bridge so the rule lives in one place."""
-    return 'max_completion_tokens' if model.startswith('gpt-5') else 'max_tokens'
+    return 'max_completion_tokens' if model.startswith(('gpt-5', 'gpt-6')) else 'max_tokens'
 
 
 @define

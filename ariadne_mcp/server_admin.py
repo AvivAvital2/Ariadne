@@ -344,19 +344,24 @@ async def ariadne_trace_flow(
             f'Tracing flow from {start_symbol} (depth={depth})',
         )
 
-    bridge = None
-    if enable_llm_bridge:
-        bridge = build_llm_bridge()
-
     cfg = get_config()
-    conn = sqlite3.connect(cfg.db_path)
+    from contextlib import nullcontext
+
+    from ariadne_mcp.service import AriadneService
+
+    inference = AriadneService.get().inference_context if enable_llm_bridge else None
+    if inference is not None:
+        inference.validate(credentials=True)
+    conn = sqlite3.connect(f'file:{cfg.db_path}?mode=ro', uri=True)
     try:
-        result = trace_flow(
-            start_symbol=start_symbol,
-            depth=depth,
-            conn=conn,
-            llm_bridge=bridge,
-        )
+        with inference.activate() if inference is not None else nullcontext():
+            bridge = build_llm_bridge() if enable_llm_bridge else None
+            result = trace_flow(
+                start_symbol=start_symbol,
+                depth=depth,
+                conn=conn,
+                llm_bridge=bridge,
+            )
         response = trace_result_to_dict(result)
         # Environment considerations: spool docs relevant to the traced symbol's
         # file (empty unless a spool is enabled and something clears the gate).

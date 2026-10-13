@@ -16,6 +16,7 @@ from __future__ import annotations
 __all__ = ['ChunkConfig', 'LibraryWriter', 'chunk_text', 'split_into_sections']
 
 import re
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from attrs import frozen
@@ -26,7 +27,7 @@ from library import Library
 from schema import CATALOG_KIND_FILE_INDEX, Chunk, ContentType, Document, Section
 
 if TYPE_CHECKING:
-    pass
+    from library.prepared import PreparedDocument
 
 # Default chunking parameters
 DEFAULT_CHUNK_SIZE = 500  # characters
@@ -200,16 +201,56 @@ class LibraryWriter:
         self.embedding_config = embedding_config
         self.chunk_config = chunk_config or ChunkConfig()
         self._embedding_service: EmbeddingService | None = None
+        from inference import InferenceContext
+
+        candidate = getattr(library, 'inference_context', None)
+        self.inference_context = candidate if isinstance(candidate, InferenceContext) else None
+        if (
+            self.inference_context is not None
+            and self.inference_context.local
+            and embedding_config is not None
+        ):
+            settings = embedding_config.local_settings
+            if (
+                settings is None
+                or settings.embedding_space_id
+                != self.inference_context.settings.embeddings.embedding_space_id
+            ):
+                from library.model_binding import ModelBindingMismatch
+
+                raise ModelBindingMismatch(
+                    'Explicit embedding configuration differs from the library profile'
+                )
+        elif (
+            self.inference_context is not None
+            and self.inference_context.binding is not None
+            and embedding_config is not None
+        ):
+            expected = self.inference_context.settings.embeddings
+            if (embedding_config.provider, embedding_config.model, embedding_config.dimensions) != (
+                expected.provider,
+                expected.request_model,
+                expected.dimensions,
+            ):
+                from library.model_binding import ModelBindingMismatch
+
+                raise ModelBindingMismatch(
+                    'Explicit embedding configuration differs from the bound library'
+                )
 
     async def _get_embedding_service(self) -> EmbeddingService:
         """Get or create the embedding service."""
         if self._embedding_service is None:
-            self._embedding_service = EmbeddingService(self.embedding_config)
+            self._embedding_service = (
+                self.inference_context.embeddings
+                if self.inference_context is not None
+                else EmbeddingService(self.embedding_config)
+            )
         return self._embedding_service
 
     async def close(self) -> None:
         """Close resources."""
-        if self._embedding_service is not None:
+        if self._embedding_service is not None and self.inference_context is None:
             await self._embedding_service.close()
             self._embedding_service = None
 
@@ -229,6 +270,7 @@ class LibraryWriter:
         create_chunks: bool = True,
         doc_id: str | None = None,
         source_name: str | None = None,
+        check_inputs: Callable[[], None] | None = None,
     ) -> Document:
         """Add a document with automatic embedding generation.
 
@@ -244,6 +286,39 @@ class LibraryWriter:
         Returns:
             The created Document.
         """
+        if self.inference_context is not None and self.inference_context.binding is not None:
+            from attrs import evolve
+
+            with self.inference_context.nested_write():
+                previous = self.library.get_document(doc_id) if doc_id else None
+                doc = Document(
+                    content_type=content_type,
+                    title=title,
+                    content=content,
+                    source_files=source_files or [],
+                    metadata=metadata or {},
+                    source_name=source_name,
+                )
+                if doc_id:
+                    doc = evolve(doc, id=doc_id)
+                if previous is not None:
+                    doc = evolve(
+                        doc,
+                        metadata={**previous.metadata, **doc.metadata},
+                        source_name=source_name or previous.source_name,
+                    )
+                    if (
+                        previous.content == doc.content
+                        and previous.title == doc.title
+                        and previous.metadata == doc.metadata
+                        and previous.source_files == doc.source_files
+                        and previous.source_name == doc.source_name
+                        and previous.embedding is not None
+                    ):
+                        return previous
+                prepared = await self.prepare_document(doc, create_chunks=create_chunks)
+                return self.library.apply_prepared_document(prepared, check_inputs=check_inputs)
+
         service = await self._get_embedding_service()
 
         # Generate embedding for the full document
@@ -271,6 +346,111 @@ class LibraryWriter:
         await self._create_sections(doc.id, content, service)
 
         return doc
+
+    async def prepare_document(
+        self, doc: Document, *, create_chunks: bool = True, theme_update: dict | None = None
+    ) -> PreparedDocument:
+        """Prepare every child and vector outside SQLite, preserving the input recipe."""
+        from attrs import evolve
+
+        from library.prepared import PreparedDocument
+        from model_config import document_input
+
+        context = self.inference_context
+        if context is None:
+            raise ValueError('Prepared writes require an inference context')
+        context.require_writer()
+        context.validate()
+        previous = self.library.get_document(doc.id)
+        from library.model_binding import ModelBindingMismatch
+
+        provenance = doc.metadata.get('model_provenance')
+        if provenance and provenance.get('profile_hash') != context.settings.profile_hash:
+            raise ModelBindingMismatch('Document provenance belongs to another model profile')
+        doc = evolve(
+            doc,
+            metadata={
+                **doc.metadata,
+                'model_provenance': {
+                    'version': 1,
+                    'profile_hash': context.settings.profile_hash,
+                    'kind': 'generated' if doc.metadata.get('generated') else 'authored',
+                },
+            },
+        )
+        chunks = (
+            chunk_text(doc.content, self.chunk_config)
+            if create_chunks and len(doc.content) > self.chunk_config.chunk_size
+            else []
+        )
+        raw_sections = split_into_sections(doc.content)
+        if len(raw_sections) <= 1:
+            raw_sections = []
+        headings = [heading or 'Introduction' for heading, _ in raw_sections]
+        inputs = [document_input(doc.title, doc.content), *chunks, *headings]
+        service = await self._get_embedding_service()
+        vectors = await service.embed_documents(inputs)
+        return PreparedDocument(
+            document=evolve(doc, embedding=vectors[0]),
+            chunks=tuple(
+                Chunk(document_id=doc.id, chunk_index=i, content=text, embedding=vectors[1 + i])
+                for i, text in enumerate(chunks)
+            ),
+            sections=tuple(
+                Section(
+                    document_id=doc.id,
+                    index=i,
+                    heading=headings[i],
+                    description=headings[i],
+                    content=text,
+                    embedding=vectors[1 + len(chunks) + i],
+                )
+                for i, (_, text) in enumerate(raw_sections)
+            ),
+            expected_version=previous.updated_at if previous else None,
+            embedding_space_id=context.settings.embeddings.embedding_space_id,
+            theme_update=theme_update or {},
+        )
+
+    async def replace_document(
+        self,
+        doc_id: str,
+        *,
+        content: str | None = None,
+        title: str | None = None,
+        metadata: dict | None = None,
+        theme_update: dict | None = None,
+    ) -> Document | None:
+        """Replace an existing local document together with all derived vectors."""
+        from attrs import evolve
+
+        context = self.inference_context
+        if context is None or context.binding is None:
+            doc = self.library.update_document(
+                doc_id, content=content, title=title, metadata=metadata
+            )
+            if doc:
+                await self.update_document_embedding(doc_id)
+            return doc
+        with context.nested_write():
+            old = self.library.get_document(doc_id)
+            if old is None:
+                return None
+            doc = evolve(
+                old,
+                content=content if content is not None else old.content,
+                title=title if title is not None else old.title,
+                metadata={**old.metadata, **(metadata or {})},
+            )
+            if (
+                doc.content == old.content
+                and doc.title == old.title
+                and doc.metadata == old.metadata
+                and not theme_update
+            ):
+                return old
+            prepared = await self.prepare_document(doc, theme_update=theme_update)
+            return self.library.apply_prepared_document(prepared)
 
     async def _create_chunks(
         self,
@@ -438,6 +618,10 @@ class LibraryWriter:
         if doc is None:
             return None
 
+        if self.inference_context is not None and self.inference_context.binding is not None:
+            with self.inference_context.nested_write():
+                return self.library.apply_prepared_document(await self.prepare_document(doc))
+
         service = await self._get_embedding_service()
         doc_text = doc_embedding_text(doc.title, doc.content)
         new_embedding = await service.embed(doc_text)
@@ -459,6 +643,13 @@ class LibraryWriter:
         running done-count and the total work size, so a caller (the CLI) can
         drive a progress bar / ETA. When omitted, progress is silent.
         """
+        if self.inference_context is not None and self.inference_context.binding is not None:
+            with self.inference_context.nested_write():
+                docs = self.library.list_documents()
+                for doc in docs:
+                    self.library.apply_prepared_document(await self.prepare_document(doc))
+                return len(docs)
+
         import asyncio
 
         docs = (

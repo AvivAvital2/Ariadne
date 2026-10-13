@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from docgen.cluster import cluster_themes
 from docgen.prompts import THEME_SYSTEM_PROMPT, THEME_USER_TEMPLATE
+from inference import local_context
 from llm import chat_complete
 from schema import _now_iso
 
@@ -180,6 +181,7 @@ async def _apply_theme_response(
     path filters errored (``None``) results out before calling this.
     """
     response = response.strip()
+    local = local_context(writer) is not None
     if not response:
         # An empty (or whitespace-only) completion isn't a usable doc. Leave the
         # theme dirty — retried on the next run — rather than overwriting the
@@ -191,13 +193,29 @@ async def _apply_theme_response(
             req.cluster_id,
         )
         return False
-    if response.startswith('INCOHERENT'):
+    if not local and response.startswith('INCOHERENT'):
         _set_theme_coherent(library, req.cluster_id, coherent=False)
         return False
 
     new_hash = compute_summary_hash(
         req.member_ids, req.summaries, req.resolution,
     )
+    if local:
+        members, summaries = _gather_member_data(library, req.cluster_id)
+        if compute_summary_hash(members, summaries, req.resolution) != new_hash:
+            from library.prepared import ObsoleteInput
+
+            raise ObsoleteInput('Theme membership changed before application')
+    if response.startswith('INCOHERENT'):
+        if local:
+            with library._conn_provider.acquire() as conn:
+                conn.execute(
+                    'UPDATE themes SET coherent=0, dirty=0, summary_hash=?, last_summarized_at=? WHERE cluster_id=?',
+                    (new_hash, _now_iso(), req.cluster_id),
+                )
+            return False
+        _set_theme_coherent(library, req.cluster_id, coherent=False)
+        return False
 
     existing_doc = library.get_document(req.doc_id)
     old_meta = (
@@ -210,6 +228,16 @@ async def _apply_theme_response(
     title_line = response.split('\n', 1)[0].lstrip('#').strip()
     if title_line:
         new_meta['theme_title'] = title_line[:120]
+
+    if local:
+        await writer.replace_document(
+            req.doc_id,
+            title=title_line[:120] or f'Theme {req.cluster_id[:12]}',
+            content=response,
+            metadata=new_meta,
+            theme_update={'cluster_id': req.cluster_id, 'summary_hash': new_hash, 'coherent': True},
+        )
+        return True
 
     library.update_document(
         req.doc_id,

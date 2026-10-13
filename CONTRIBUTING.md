@@ -30,9 +30,10 @@ Prerequisites:
 
 - Python 3.12 or newer
 - [`uv`](https://docs.astral.sh/uv/) for dependency management
-- An `OPENAI_API_KEY` (required for embeddings) and optionally
+- An `OPENAI_API_KEY` (required for cloud embeddings) and optionally
   `ANTHROPIC_API_KEY` (for generation) in a local `.env` file —
-  `.env` is gitignored.
+  `.env` is gitignored. The fixed local Qwen pair instead needs its
+  configured endpoints; see [supported models](docs/supported-models.md).
 
 ```bash
 git clone https://github.com/AvivAvital2/ariadne.git
@@ -48,8 +49,13 @@ cp ariadne.yaml.example ariadne.yaml
 ```
 
 `ariadne.yaml` is gitignored — your local paths stay local.
+For local inference, use `ariadne.local.yaml.example` and fresh library/
+staleness paths. `ARIADNE_CONFIG` selects an alternate configuration file;
+model changes cannot reuse a library bound to a different pair.
 
 ## Running tests
+
+Ordinary tests use fixtures and need no provider keys or model servers.
 
 ```bash
 uv run pytest                              # full suite
@@ -70,6 +76,12 @@ Or run it manually before pushing:
 ```bash
 uvx ty check
 ```
+
+Hosted Qwen, Claude and OpenAI verification is opt-in and paid; use the
+[live-model guide](docs/live-model-verification.md) with an explicit
+spending cap. Keep raw evidence and distinguish provider/model output
+failures from implementation defects. The [qualification report](docs/local-model-qualification.md)
+records known baseline failures and outstanding GPU measurements.
 
 ## Code style
 

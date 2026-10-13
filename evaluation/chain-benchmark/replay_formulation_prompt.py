@@ -14,7 +14,26 @@ ROOT = HERE.parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(HERE))
 
-import profile_evidence_walk as profiler
+def recorded_route_specs(answer: dict) -> list[dict]:
+    """Read the recorded candidate routes without depending on a profiling script."""
+    return [
+        {"id": route_id, "route": tuple(route)}
+        for route_id, route in (answer.get("route_candidates") or {}).items()
+        if route
+    ]
+
+
+def recorded_matches(specs: list[dict], question: dict, source: str):
+    """Position the replay at recorded compiler routes without model inference."""
+    from library.clews import Clew, ClewMatch
+
+    return [
+        ClewMatch(clew=Clew(
+            id=spec["id"], source_name=source, entry_symbol=spec["route"][0],
+            route=list(spec["route"]), strategy="recorded",
+            question=question.get("question")), similarity=1.0)
+        for spec in specs
+    ]
 
 
 def recorded_selection(answer: dict):
@@ -82,7 +101,7 @@ def scoped_all_selection(menu, question: str, *, max_routes: int = 32):
 
 def replay_prompt(answer: dict, question: dict, *, source: str, selection_mode: str = "recorded", max_routes: int = 32) -> tuple[dict, str]:
     """Rebuild the post-selection evidence IR and audit reviewed fragments."""
-    specs = profiler.recorded_route_specs(answer)
+    specs = recorded_route_specs(answer)
     if not specs:
         raise ValueError("no recorded routes available")
 
@@ -93,7 +112,7 @@ def replay_prompt(answer: dict, question: dict, *, source: str, selection_mode: 
     from library.chain_story import build_story_ir, render_story_evidence
 
     service = AriadneService.get()
-    matches = profiler._matches(specs, question, source)
+    matches = recorded_matches(specs, question, source)
     evidence = evidence_for(
         service.library, [],
         question=str(answer.get("question") or question.get("question") or ""),

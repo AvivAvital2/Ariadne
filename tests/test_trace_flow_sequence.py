@@ -149,7 +149,7 @@ def _ins_sym(conn: sqlite3.Connection, cid: str, source: str, qn: str) -> None:
 def _ins_edge(conn: sqlite3.Connection, caller: str, callee: str) -> None:
     conn.execute(
         'INSERT INTO scip_edges VALUES (?, ?, ?, ?, ?, ?)',
-        (caller, callee, 'reference', 'app.py', 5, 'scip'),
+        (caller, callee, 'call', 'app.py', 5, 'scip'),
     )
 
 

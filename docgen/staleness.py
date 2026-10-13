@@ -95,11 +95,57 @@ class StalenessTracker:
     # excludes), {language: (doc_type, ...)}: caps the effective set per
     # language so the gate/estimate ignore an excluded format. Default {}.
     doc_types_by_language: dict = field(factory=dict)
+    inference_context: object | None = None
+    source_name: str = ''
+    generation_scope: str = 'stable'
+    read_only: bool = False
+    _bound: bool = field(default=False, init=False)
     _conn: sqlite3.Connection | None = field(default=None, init=False)
     _lock: asyncio.Lock = field(factory=asyncio.Lock, init=False)
 
+    def _require_write(self) -> None:
+        if self._bound:
+            from library.locking import LibraryBusy
+
+            if self.inference_context is None:
+                raise LibraryBusy(
+                    'Bound sidecar writes require an inference context and writer session'
+                )
+            self.inference_context.require_writer()
+            self.inference_context.validate()
+
     def __attrs_post_init__(self) -> None:
         """Initialize the database connection and schema."""
+        from inference import current_context
+        from library.model_binding import ModelBindingMismatch, readonly, table_exists
+
+        context = self.inference_context or current_context()
+        if self.db_path.exists() and self.db_path.stat().st_size:
+            with readonly(self.db_path) as conn:
+                self._bound = table_exists(conn, 'staleness_owner')
+        if self.read_only or (self._bound and context is not None and context.session is None):
+            if self._bound and context is not None:
+                if context.staleness_db_path != self.db_path.resolve():
+                    raise ModelBindingMismatch(
+                        'Nested operation requested a different staleness database'
+                    )
+                context.validate()
+            self._conn = sqlite3.connect(self.db_path.resolve().as_uri() + '?mode=ro', uri=True)
+            self._conn.row_factory = sqlite3.Row
+            return
+        if self._bound:
+            if context is not None:
+                if context.staleness_db_path != self.db_path.resolve():
+                    raise ModelBindingMismatch(
+                        'Nested operation requested a different staleness database'
+                    )
+                context.require_writer()
+                context.validate()
+                self.inference_context = context
+            else:
+                self._conn = sqlite3.connect(self.db_path.resolve().as_uri() + '?mode=ro', uri=True)
+                self._conn.row_factory = sqlite3.Row
+                return
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
@@ -109,6 +155,11 @@ class StalenessTracker:
         if self._conn is None:
             return
 
+        if self._bound:
+            self._conn.execute("""CREATE TABLE IF NOT EXISTS source_records (
+                path TEXT NOT NULL, source_name TEXT NOT NULL, generation_scope TEXT NOT NULL,
+                hash TEXT NOT NULL, documented_at TEXT NOT NULL, doc_ids TEXT NOT NULL DEFAULT '[]',
+                PRIMARY KEY(source_name,generation_scope,path))""")  # noqa: Q001 - repository quote rule conflicts with the formatter.
         self._conn.execute('''
             CREATE TABLE IF NOT EXISTS source_records (
                 path TEXT PRIMARY KEY,
@@ -197,10 +248,12 @@ class StalenessTracker:
 
     def record_documentation(
         self,
-        source_path,
-        doc_ids,
-        base_path=None,
-    ):
+        source_path: Path,
+        doc_ids: list[str],
+        base_path: Path | None = None,
+        *,
+        processed_hash: str | None = None,
+    ) -> SourceRecord:
         """Record that a source file has been documented.
 
         Merges ``doc_ids`` with any existing record's doc_ids so a partial-type
@@ -210,6 +263,7 @@ class StalenessTracker:
         so the union dedupes cleanly — a regenerated type keeps its id, no stale
         accumulation. A re-run sees the now-complete file and skips it.
         """
+        self._require_write()
         if self._conn is None:
             msg = 'Database connection not open'
             raise RuntimeError(msg)
@@ -219,7 +273,10 @@ class StalenessTracker:
         else:
             rel_path = str(source_path)
 
-        file_hash = _compute_file_hash(source_path)
+        # Compute current hash
+        if self._bound and processed_hash is None:
+            raise ValueError('Bound staleness records require the captured processed_hash')
+        file_hash = processed_hash or _compute_file_hash(source_path)
         documented_at = datetime.now(UTC).isoformat()
 
         existing = self.get_record(rel_path)
@@ -227,13 +284,29 @@ class StalenessTracker:
             [*(existing.doc_ids if existing else ()), *doc_ids]
         ))
 
-        self._conn.execute(
-            '''
-            INSERT OR REPLACE INTO source_records (path, hash, documented_at, doc_ids)
-            VALUES (?, ?, ?, ?)
-            ''',
-            (rel_path, file_hash, documented_at, json.dumps(merged)),
-        )
+        # Store record
+        if self._bound:
+            self._conn.execute(
+                """INSERT INTO source_records(path,source_name,generation_scope,hash,documented_at,doc_ids)
+                VALUES (?,?,?,?,?,?) ON CONFLICT(source_name,generation_scope,path) DO UPDATE SET
+                hash=excluded.hash,documented_at=excluded.documented_at,doc_ids=excluded.doc_ids""",  # noqa: Q001 - repository quote rule conflicts with the formatter.
+                (
+                    rel_path,
+                    self.source_name,
+                    self.generation_scope,
+                    file_hash,
+                    documented_at,
+                    json.dumps(merged),
+                ),
+            )
+        else:
+            self._conn.execute(
+                '''
+                INSERT OR REPLACE INTO source_records (path, hash, documented_at, doc_ids)
+                VALUES (?, ?, ?, ?)
+                ''',
+                (rel_path, file_hash, documented_at, json.dumps(merged)),
+            )
         self._conn.commit()
 
         return SourceRecord(
@@ -248,6 +321,8 @@ class StalenessTracker:
         source_path: Path,
         doc_ids: list[str],
         base_path: Path | None = None,
+        *,
+        processed_hash: str | None = None,
     ) -> SourceRecord:
         """Async version with locking for concurrent access.
 
@@ -260,7 +335,9 @@ class StalenessTracker:
             The created SourceRecord.
         """
         async with self._lock:
-            return self.record_documentation(source_path, doc_ids, base_path)
+            return self.record_documentation(
+                source_path, doc_ids, base_path, processed_hash=processed_hash
+            )
 
     def get_record(self, source_path: Path | str) -> SourceRecord | None:
         """Get the record for a source file.
@@ -276,8 +353,9 @@ class StalenessTracker:
 
         path_str = str(source_path)
         cursor = self._conn.execute(
-            'SELECT * FROM source_records WHERE path = ?',
-            (path_str,),
+            'SELECT * FROM source_records WHERE path = ?'
+            + (' AND source_name=? AND generation_scope=?' if self._bound else ''),
+            (path_str, self.source_name, self.generation_scope) if self._bound else (path_str,),
         )
         row = cursor.fetchone()
 
@@ -538,8 +616,7 @@ class StalenessTracker:
             return requested
         return set(filter_doc_types_for_language(tuple(requested), lang, override=self.doc_types_by_language))
 
-    @staticmethod
-    def _existing_doc_types(record, library):
+    def _existing_doc_types(self, record, library):
         """Content types already documented for ``record``, resolved precisely via
         its ``doc_ids`` (never basename-matched). Callers pass a non-None
         ``library``. Single source of truth for the existing-types lookup shared
@@ -547,7 +624,14 @@ class StalenessTracker:
         existing = set()
         for doc_id in record.doc_ids:
             doc = library.get_document(doc_id)
-            if doc is not None:
+            if doc is not None and (
+                not self._bound
+                or (
+                    doc.source_name == self.source_name
+                    and doc.metadata.get('generation_scope', 'stable') == self.generation_scope
+                    and doc.metadata.get('processed_hash') == record.hash
+                )
+            ):
                 existing.add(doc.content_type)
         return existing
 
@@ -581,7 +665,12 @@ class StalenessTracker:
         if self._conn is None:
             return
 
-        cursor = self._conn.execute('SELECT * FROM source_records ORDER BY path')
+        cursor = self._conn.execute(
+            'SELECT * FROM source_records'
+            + (' WHERE source_name=? AND generation_scope=?' if self._bound else '')
+            + ' ORDER BY path',
+            (self.source_name, self.generation_scope) if self._bound else (),
+        )
         for row in cursor:
             yield SourceRecord(
                 path=row['path'],
@@ -599,13 +688,15 @@ class StalenessTracker:
         Returns:
             True if a record was removed, False otherwise.
         """
+        self._require_write()
         if self._conn is None:
             return False
 
         path_str = str(source_path)
         cursor = self._conn.execute(
-            'DELETE FROM source_records WHERE path = ?',
-            (path_str,),
+            'DELETE FROM source_records WHERE path = ?'
+            + (' AND source_name=? AND generation_scope=?' if self._bound else ''),
+            (path_str, self.source_name, self.generation_scope) if self._bound else (path_str,),
         )
         self._conn.commit()
         return cursor.rowcount > 0
@@ -616,10 +707,15 @@ class StalenessTracker:
         Returns:
             Number of records removed.
         """
+        self._require_write()
         if self._conn is None:
             return 0
 
-        cursor = self._conn.execute('DELETE FROM source_records')
+        cursor = self._conn.execute(
+            'DELETE FROM source_records'
+            + (' WHERE source_name=? AND generation_scope=?' if self._bound else ''),
+            (self.source_name, self.generation_scope) if self._bound else (),
+        )
         self._conn.commit()
         return cursor.rowcount
 
@@ -644,6 +740,11 @@ class StalenessTracker:
         batch IDs are server-assigned, so duplicate ``batch_id`` only
         happens on user error or harness re-runs.
         """
+        self._require_write()
+        if self.inference_context is not None and self.inference_context.local:
+            raise ValueError(
+                'Local work belongs to the main database spool, not cloud pending batches'
+            )
         if self._conn is None:
             msg = 'Database connection not open'
             raise RuntimeError(msg)
@@ -674,6 +775,11 @@ class StalenessTracker:
         (and doesn't raise) so ``ariadne batch clear`` can safely
         run on a typo or already-cleared id.
         """
+        self._require_write()
+        if self.inference_context is not None and self.inference_context.local:
+            raise ValueError(
+                'Local work belongs to the main database spool, not cloud pending batches'
+            )
         if self._conn is None:
             return False
         cursor = self._conn.execute(
@@ -760,6 +866,9 @@ class StalenessTracker:
             List of (old_path, new_path) tuples for every record that
             was updated.
         """
+        self._require_write()
+        if self._bound:
+            return []  # New bound records are already canonical and namespaced.
         if self._conn is None:
             return []
 

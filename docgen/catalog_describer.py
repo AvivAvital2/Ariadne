@@ -8,6 +8,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from inference import local_context
 from llm import chat_complete
 
 if TYPE_CHECKING:
@@ -56,6 +57,10 @@ def build_describe_prompt(metadata: dict) -> str:
         line_start=location.get('line_start', 0),
         line_end=location.get('line_end', 0),
     )
+
+
+# Shared with the local live and durable pipeline.
+description_prompt = build_describe_prompt
 
 
 async def describe_element(metadata: dict, *, model: str | None = None) -> str:
@@ -137,15 +142,25 @@ async def describe_source_elements(
                     raise _EmptyDescriptionError('empty description')
                 new_metadata = dict(doc.metadata)
                 new_metadata['description'] = desc
-                new_content = (doc.content or '').rstrip() + '\n\nDescription: ' + desc
-                library.update_document(doc.id, content=new_content, metadata=new_metadata)
-                await writer.update_document_embedding(doc.id)
+                if local_context(writer) is not None:
+                    original = (doc.content or '').split('\n\nDescription: ', 1)[0].rstrip()
+                    new_content = original + '\n\nDescription: ' + desc
+                    await writer.replace_document(
+                        doc.id, content=new_content, metadata=new_metadata
+                    )
+                else:
+                    new_content = (doc.content or '').rstrip() + '\n\nDescription: ' + desc
+                    library.update_document(doc.id, content=new_content, metadata=new_metadata)
+                    await writer.update_document_embedding(doc.id)
                 async with lock:
                     described += 1
             except _EmptyDescriptionError as e:
                 failure_category = 'empty_response'
                 failure_detail = str(e)
             except Exception as e:
+                from inference import raise_inference_error
+
+                raise_inference_error(e)
                 # Classify by exception type so the summary tells a
                 # story (transient network blip vs. content refusal
                 # vs. provider bug).
@@ -413,26 +428,14 @@ async def describe_source_elements_batched(
 
     # Build one BatchRequest per element. ``custom_id`` is the element's
     # doc_id so we can re-attach the description when results come back.
-    requests = []
-    for doc in to_describe:
-        location = doc.metadata.get('location') or {}
-        prompt = _PROMPT.format(
-            subtype=doc.metadata.get('subtype', ''),
-            qualified_name=doc.metadata.get('qualified_name', ''),
-            parent=(
-                doc.metadata.get('parent_qualified_name')
-                or '(module-level)'
-            ),
-            signature=doc.metadata.get('signature', ''),
-            file=doc.metadata.get('file', ''),
-            line_start=location.get('line_start', 0),
-            line_end=location.get('line_end', 0),
-        )
-        requests.append(BatchRequest(
+    requests = [
+        BatchRequest(
             custom_id=doc.id,
             system_prompt='',
-            user_prompt=prompt,
-        ))
+            user_prompt=description_prompt(doc.metadata),
+        )
+        for doc in to_describe
+    ]
 
     if on_stage is not None:
         on_stage('submit', 0, len(requests))

@@ -25,7 +25,7 @@ Embeddings — the vectors that power search — are **not** written to the mark
 - `export` drops them; the markdown is pure text.
 - `import` **rebuilds** them on the importing machine, which therefore needs access to an embedding model.
 
-By default the embedding model is OpenAI's `text-embedding-3-large` (`OPENAI_API_KEY`). To embed against a local or self-hosted model instead, point `OPENAI_BASE_URL` at any OpenAI-compatible embeddings endpoint.
+By default the embedding model is OpenAI's `text-embedding-3-large` (`OPENAI_API_KEY`). The supported local suite uses `Qwen/Qwen3-Embedding-8B` with its fixed embedding recipe and the Qwen chat model; configure both through [supported models](supported-models.md).
 
 Pass `--skip-embeddings` to import the text without embedding (fast, no API calls) — but search and `ask` won't work until you build them:
 
@@ -34,7 +34,7 @@ ariadne import --skip-embeddings   # text only; search disabled
 ariadne rebuild                    # build embeddings later
 ```
 
-On a large import the embedding rebuild shows the projected cost and **prompts** you to choose live vs batched embeddings first. `--live` / `--batch` skip that prompt (`--batch` routes through OpenAI's Batch API for roughly **half the price** when you're not in a hurry), and `--yes` approves the cost without prompting — the combination you want in CI. Because import is a delta, only the docs that actually changed get re-embedded.
+On a large cloud import the embedding rebuild shows the projected cost and **prompts** you to choose live vs batched embeddings first. `--live` / `--batch` skip that prompt (`--batch` routes through OpenAI's Batch API for roughly **half the price** when you're not in a hurry), and `--yes` approves the cost without prompting — the combination you want in CI. Because import is a delta, only the docs that actually changed get re-embedded.
 
 ## Team / multi-machine workflow
 
@@ -56,12 +56,8 @@ A useful consequence of the round-trip: the LLM that **writes** the docs and the
 - **Authoring LLM** (`ariadne generate`) does the expensive work of writing the documentation; then you `export`. It is **never called again** at consumption time.
 - **Consuming LLM** is an agent that reasons over the knowledge base — via the MCP server's `ariadne_search`, or `ariadne ask`. Because the exported docs are plain markdown and retrieval is embedding similarity (not generation), **the consuming LLM can be anything — including a locally-run model** (Ollama, LM Studio, llama.cpp, …).
 
-So a common deployment is: author the KB once with a strong cloud model, commit it, then `import` it onto a remote or local box where a smaller or local LLM serves it.
+An external MCP agent can use a smaller or local model to read a cloud-generated library. Moving generated documentation to Ariadne's bound local suite requires regeneration with that pair.
 
-To make consumption **fully local** (no cloud calls):
+To make consumption **fully local** (no cloud calls), configure the fixed Qwen chat/embedding pair and fresh library paths as described in [local models](local-models.md). Query vectors and document vectors must use the same bound embedding recipe.
 
-1. `import` on the local machine with `OPENAI_BASE_URL` pointed at a local OpenAI-compatible **embeddings** endpoint, so both the embedding rebuild and later query-embedding run locally. (`import` re-embeds everything fresh, so the database is self-consistent regardless of what the authoring machine used.)
-2. Point your agent at the local Ariadne MCP server and have it call `ariadne_search`. A plain `search` runs **no generation LLM** — it's pure vector retrieval — so the only model it needs is the local embedder; your agent's own local LLM does all the reasoning.
-3. Only if you use Ariadne's built-in `ariadne ask` (which *does* synthesize an answer) set Ariadne's `provider` / `model` in `ariadne.yaml` to your local model too. The agent-driven pattern (agent retrieves, then reasons itself) doesn't need this.
-
-The one invariant: within a given database, query vectors and document vectors must come from the **same** embedding model. Since `import` rebuilds all embeddings locally, that's automatic.
+Bound exports carry model provenance. Importing generated documentation into a different model pair is rejected; changing providers requires regenerating it in a fresh library. Authored text can be added through explicit authored ingestion under the target pair. An external MCP agent can still use its own model independently; Ariadne's built-in `ask` uses the library's configured chat model.

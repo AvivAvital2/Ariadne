@@ -86,6 +86,8 @@ def test_cmd_index_reuses_scope_when_intermediate_fresh(tmp_path, monkeypatch):
     inter.parent.mkdir(parents=True, exist_ok=True)
     inter.write_bytes(b'\x08\x01cached')
     (source_root / '.ariadne' / 'index.scip').write_bytes(b'\x08\x01merged')
+    from docgen.scip_index_marker import write_marker
+    write_marker(source_root / ".ariadne", indexer_versions={}, corpus_shas={})
     _patch_persist(monkeypatch)
 
     adapter = _RecordingAdapter()
@@ -110,6 +112,8 @@ def test_cmd_index_reruns_scope_when_intermediate_missing(tmp_path, monkeypatch)
     # skipped. This is the per-scope reuse contract: reuse what's built, retry
     # what's missing, without --force re-indexing everything.
     (source_root / '.ariadne' / 'index.scip').write_bytes(b'\x08\x01merged')
+    from docgen.scip_index_marker import write_marker
+    write_marker(source_root / ".ariadne", indexer_versions={}, corpus_shas={})
     _patch_persist(monkeypatch)
 
     adapter = _RecordingAdapter()
@@ -143,6 +147,8 @@ def test_cmd_index_mixed_reuses_fresh_and_reruns_missing(tmp_path, monkeypatch):
     # python cached, java missing
     (adir / 'intermediate').mkdir()
     (adir / 'intermediate' / 'index-python.scip').write_bytes(b'\x08\x01cached')
+    from docgen.scip_index_marker import write_marker
+    write_marker(source_root / ".ariadne", indexer_versions={}, corpus_shas={})
     _patch_persist(monkeypatch)
 
     class _Merger:

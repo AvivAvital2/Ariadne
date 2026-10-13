@@ -208,7 +208,10 @@ def estimate_cost(
         discounts that produced ``total_cost_usd``.
     """
     files_list = list(files)
-    rates = LLM_PRICING.get(model)
+    from model_config import CHAT_MODEL
+
+    local = model == CHAT_MODEL
+    rates = (0.0, 0.0) if local else LLM_PRICING.get(model)
 
     # Track per-doc-type call counts so cache reuse can be priced per type.
     calls_per_type: dict[str, int] = {}
@@ -283,7 +286,7 @@ def estimate_cost(
     # Baseline LLM cost (no caching, no batch) for comparison. Embedding is
     # tracked separately so the savings rows below stay apples-to-apples.
     baseline_llm = (input_tokens * in_rate + output_tokens * out_rate) / 1_000_000
-    embedding_cost = (embedding_tokens * EMBEDDING_PRICING_PER_M) / 1_000_000
+    embedding_cost = 0.0 if local else (embedding_tokens * EMBEDDING_PRICING_PER_M) / 1_000_000
 
     # Apply caching: each doc-type's static prefix is paid once at 1.25× then
     # 0.1× per subsequent call. A doc-type with n calls contributes
@@ -340,6 +343,10 @@ def per_doc_generation_cost(model: str) -> float:
     fixed constant. Falls back to a Sonnet-ish midpoint for models not
     in ``LLM_PRICING`` so ROI never silently zeroes out.
     """
+    from model_config import CHAT_MODEL
+
+    if model == CHAT_MODEL:
+        return 0.0
     in_rate, out_rate = LLM_PRICING.get(model, (3.0, 15.0))
     # Representative single-call token counts (scaffolding + a ~6 KB
     # file's worth of input, one doc body out).

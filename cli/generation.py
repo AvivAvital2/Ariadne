@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from rich.console import Console
 
+from cli.runtime import ConcurrencyAction, run_async
 from config import get_config
 
 if TYPE_CHECKING:
@@ -133,6 +134,7 @@ async def cmd_topic(args: argparse.Namespace) -> int:
     api_key = os.environ.get('OPENAI_API_KEY')
     gen_config = GeneratorConfig(
         model=cfg.model,
+        provider=cfg.provider,
         api_key=api_key,
     )
 
@@ -315,20 +317,32 @@ async def cmd_improve(args: argparse.Namespace) -> int:
             source_path=source_path,
             db_path=Path(args.db or DEFAULT_DB_PATH),
             model=cfg.model,
+            provider=cfg.provider,
+            concurrency=1 if cfg.provider == 'local' else 3,
             source_name=source_name,
             dry_run=False,
             source_config=scip_config,
         ignore_staleness=cfg.source_ignore_staleness(source_name))
 
+        from inference import local_context
+
+        failures = 0
         async with DocGenOrchestrator(gen_config) as orch:
             for f in files_to_gen:
                 rel = f.relative_to(source_path) if f.is_relative_to(source_path) else f
                 console.print(f'  Generating: {rel}...')
                 try:
                     result = await orch._process_file(f)
+                    failures += result.docs_failed
                     console.print(f'    Created {result.docs_generated} docs')
                 except Exception as e:
                     console.print(f'    [red]Failed: {e}[/red]')
+                    failures += 1
+
+            if local_context(library):
+                if failures:
+                    raise ValueError('Local improvement generation is incomplete')
+                await orch._post_process([])
 
         console.print('\n[green]Improvement cycle complete.[/green]')
         return 0
@@ -383,6 +397,7 @@ async def cmd_docs(args: argparse.Namespace) -> int:
 async def cmd_notify_changed(args: argparse.Namespace) -> int:
     """Notify Ariadne that a batch of files has changed in a source."""
     from docgen.catalog_writer import notify_changed
+    from inference import local_context
     from writer import LibraryWriter
 
     cfg = get_config()
@@ -436,6 +451,9 @@ async def cmd_notify_changed(args: argparse.Namespace) -> int:
                 db_path=Path(cfg.db_path),
                 staleness_db_path=Path(cfg.staleness_db_path),
                 model=cfg.model,
+                provider=cfg.provider,
+                source_name=source_name,
+                concurrency=1 if cfg.provider == 'local' else 3,
                 doc_types=('explanation', 'architecture', 'catalog', 'qa', 'gotcha', 'diagram'),
                 force_regenerate=True,
             ignore_staleness=cfg.source_ignore_staleness(source_name))
@@ -461,6 +479,13 @@ async def cmd_notify_changed(args: argparse.Namespace) -> int:
                 f'[green]Regenerated docs: {docs_created} created, '
                 f'{docs_failed} failed[/green]'
             )
+            if local_context(library) and docs_failed:
+                raise ValueError('Local regeneration is incomplete')
+
+        if local_context(library):
+            from docgen.local_pipeline import refresh_incremental
+
+            await refresh_incremental(library, source_name, source_path)
 
         return 0
     finally:
@@ -468,10 +493,10 @@ async def cmd_notify_changed(args: argparse.Namespace) -> int:
 
 
 HANDLERS = {
-    'generate': lambda args: asyncio.run(cmd_generate(args)),
-    'improve': lambda args: asyncio.run(cmd_improve(args)),
-    'topic': lambda args: asyncio.run(cmd_topic(args)),
-    'docs': lambda args: asyncio.run(cmd_docs(args)),
-    'notify-changed': lambda args: asyncio.run(cmd_notify_changed(args)),
+    'generate': lambda args: run_async(cmd_generate(args)),
+    'improve': lambda args: run_async(cmd_improve(args)),
+    'topic': lambda args: run_async(cmd_topic(args)),
+    'docs': lambda args: run_async(cmd_docs(args)),
+    'notify-changed': lambda args: run_async(cmd_notify_changed(args)),
     'batch': lambda args: __import__('cli.batch', fromlist=['cmd_batch']).cmd_batch(args),
 }

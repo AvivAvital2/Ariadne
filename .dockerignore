@@ -41,3 +41,9 @@ userhub/
 # The compose file itself isn't needed inside the image
 compose.yaml
 docker-compose.yml
+
+# Test inputs and generated verification output are not runtime inputs.
+tests/
+evaluation/
+evals/
+designs/

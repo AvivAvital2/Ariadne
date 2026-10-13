@@ -2,6 +2,8 @@
 
 Ariadne generates and manages documentation that helps Claude understand codebases.
 
+Its backend can use OpenAI, Anthropic or the fixed local Qwen pair independently of the consuming agent's model. See [supported models](docs/supported-models.md) for configuration, credentials and verification scope.
+
 ## Documentation Layout
 
 `docs/` holds **hand-written guides** at the top level — e.g. `new-project-onboarding.md`, `claude-code-integration.md`, `directory-scoping.md` — which are authoritative and linked from the README (fine to read). Exported per-source docs under `docs/{source}/` are **generated** and duplicate README/source content, so skip those to save context.
@@ -203,3 +205,7 @@ docs/{source}/
   findings/            # Session discoveries and conclusions
     sqlbackedfeature-vs-join_strategies.md
 ```
+
+## Local model operation
+
+Read [docs/local-models.md](docs/local-models.md) for the local model pair and durable spool rules. Reuse `InferenceContext` across nested calls, acquire the corpus write session before mutation, and use prepared document replacement for generated local text. Explicit local endpoints never fall back to cloud URLs or credentials. Query and document embedding inputs have distinct roles. A populated unbound library cannot be relabeled local; model changes need fresh main and staleness databases. `doctor --models` and local previews are read-only. Hardware qualification remains separate from HTTP fixture tests.

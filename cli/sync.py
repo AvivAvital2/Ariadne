@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from rich.console import Console
 
+from cli.runtime import ConcurrencyAction, run_async
 from config import get_config
 
 if TYPE_CHECKING:
@@ -55,7 +56,8 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
                               help='Compare against main branch instead of last sync point')
     sync_parser.add_argument('--branch', action='store_true',
                               help='Tag regenerated docs as branch-specific (experimental, with TTL)')
-    sync_parser.add_argument('--concurrency', '-c', type=int, default=3, help='Max concurrent LLM calls for regeneration and theme summarization')
+    sync_parser.set_defaults(concurrency_explicit=False)
+    sync_parser.add_argument('--concurrency', '-c', type=int, default=3, action=ConcurrencyAction, help='Max concurrent LLM calls for regeneration and theme summarization')
 
 
 def _maybe_auto_discover_for_new_language(
@@ -183,6 +185,8 @@ async def cmd_sync(args: argparse.Namespace) -> int:
 
     from rich.progress import Progress, SpinnerColumn, TextColumn
 
+    from inference import local_context
+
     cfg = get_config()
 
     # Resolve source
@@ -293,10 +297,12 @@ async def cmd_sync(args: argparse.Namespace) -> int:
                     # defaults to 'openai' and 404's every Anthropic request.
                     provider=resolve_provider(
                         cli_provider=None, cfg_provider=cfg.configured_provider, model=cfg.model),
+                    source_name=source_name,
                     doc_types=('explanation', 'architecture', 'catalog', 'qa', 'gotcha', 'diagram'),
+                    generation_scope=f'branch:{current_branch}',
                     force_regenerate=True,
                     source_config=_scip_cfg,
-                ignore_staleness=cfg.source_ignore_staleness(source_name), concurrency=args.concurrency)
+                ignore_staleness=cfg.source_ignore_staleness(source_name), concurrency=1 if cfg.provider == 'local' else args.concurrency)
 
                 docs_created = 0
                 docs_failed = 0
@@ -367,10 +373,18 @@ async def cmd_sync(args: argparse.Namespace) -> int:
 
                 if docs_failed > 0:
                     console.print(f'[yellow]{docs_failed} failed[/yellow]')
+                    if local_context(library):
+                        raise ValueError('Local branch generation is incomplete')
+
+            if local_context(library):
+                from docgen.local_pipeline import refresh_incremental
+
+                await refresh_incremental(library, source_name, source_path)
 
             # Refresh themes (cross-cutting clusters) — pull-based, gated by config.
             try:
-                await _refresh_themes_after_regen(library, cfg, concurrency=args.concurrency)
+                if not local_context(library):
+                    await _refresh_themes_after_regen(library, cfg, concurrency=1 if cfg.provider == 'local' else args.concurrency)
             except Exception as e:
                 console.print(f'[yellow]Themes refresh failed: {e}[/yellow]')
 
@@ -525,10 +539,11 @@ async def cmd_sync(args: argparse.Namespace) -> int:
                 # conflicting provider fail-fasts.
                 provider=resolve_provider(
                     cli_provider=None, cfg_provider=cfg.configured_provider, model=cfg.model),
+                source_name=source_name,
                 doc_types=('explanation', 'architecture', 'catalog', 'qa', 'gotcha', 'diagram'),
                 force_regenerate=True,
                 source_config=_scip_cfg,
-            ignore_staleness=cfg.source_ignore_staleness(source_name), concurrency=args.concurrency)
+            ignore_staleness=cfg.source_ignore_staleness(source_name), concurrency=1 if cfg.provider == 'local' else args.concurrency)
 
             docs_created = 0
             docs_failed = 0
@@ -588,10 +603,18 @@ async def cmd_sync(args: argparse.Namespace) -> int:
                         console.print(f'[red]Error: {error}[/red]')
 
             console.print(f'Regenerated: {docs_created} documents ({docs_failed} failed)')
+            if local_context(library) and docs_failed:
+                raise ValueError('Local sync generation is incomplete; sync point was not advanced')
+
+        if local_context(library):
+            from docgen.local_pipeline import refresh_incremental
+
+            await refresh_incremental(library, source_name, source_path)
 
         # Refresh themes (cross-cutting clusters) — pull-based, gated by config.
         try:
-            await _refresh_themes_after_regen(library, cfg, concurrency=args.concurrency)
+            if not local_context(library):
+                await _refresh_themes_after_regen(library, cfg, concurrency=1 if cfg.provider == 'local' else args.concurrency)
         except Exception as e:
             console.print(f'[yellow]Themes refresh failed: {e}[/yellow]')
 
@@ -626,6 +649,6 @@ async def cmd_sync(args: argparse.Namespace) -> int:
 
 
 HANDLERS = {
-    'sync': lambda args: asyncio.run(cmd_sync(args)),
+    'sync': lambda args: run_async(cmd_sync(args)),
     
 }

@@ -2,6 +2,8 @@
 
 Set up Ariadne to provide documentation context to Claude Code.
 
+Claude Code is the MCP client; Ariadne's generation and embedding backend can independently use the [OpenAI, Anthropic or local Qwen configuration](supported-models.md). Keep `ARIADNE_CONFIG` consistent between generation commands and the MCP process, and restart MCP when switching configurations. Each model pair requires its own library and staleness database.
+
 > **New to Ariadne?** See [new-project-onboarding.md](new-project-onboarding.md) for a step-by-step guide covering the full setup from scratch.
 
 ## Quick Start
@@ -200,3 +202,7 @@ mention_ariadne:
 ```
 
 The directive appears in the manifest output alongside the document list, so Claude sees it at the start of every session.
+
+## Local inference configuration
+
+MCP reads the same `ariadne.yaml` model pair as the CLI. Configure both local endpoints and use the same bound main/sidecar pair; cloud environment variables do not change local routing. Search, section selection, ask, audience adaptation, contributions and generation share the operation context. Independent corpus writers return a busy error. Cache identity includes the library UUID, embedding space and corpus revision so a CLI write invalidates MCP retrieval caches. See [local models](local-models.md) for deployment and resume commands.

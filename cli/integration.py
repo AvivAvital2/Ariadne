@@ -459,6 +459,14 @@ def cmd_config(args: argparse.Namespace) -> int:
 
     console.print(table)
 
+    from inference import current_context
+
+    context = current_context()
+    if context is not None:
+        console.print_json(data=context.settings.display())
+        if context.local:
+            console.print('Provider token charges: $0. Hardware/runtime cost: unestimated.')
+
     if cfg.sources:
         console.print()
         sources_table = Table(title='Configured Sources')

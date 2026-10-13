@@ -24,7 +24,7 @@ from __future__ import annotations
 # anthropic → Message Batches API, openai → Batch API. Both trade up to 24h
 # of latency for ~50% off. cli.generate keeps its batch_eligible precompute in
 # sync with this set.
-BATCH_ELIGIBLE_PROVIDERS = frozenset({'anthropic', 'openai'})
+BATCH_ELIGIBLE_PROVIDERS = frozenset({'anthropic', 'openai', 'local'})
 
 
 def resolve_batch_decision(

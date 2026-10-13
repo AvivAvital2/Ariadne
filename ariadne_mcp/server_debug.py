@@ -299,6 +299,7 @@ def ariadne_list_issues(
 async def ariadne_analyze_issue(
     repo: str,
     issue_number: int,
+    source: str | None = None,
 ) -> IssueAnalysisResponse:
     """Read a GitHub issue and propose implementation based on Ariadne's knowledge.
 
@@ -308,10 +309,11 @@ async def ariadne_analyze_issue(
     Args:
         repo: GitHub repo in "owner/name" format (e.g., "ExampleCorp/myproject").
         issue_number: Issue number.
+        source: Source name used to scope retrieval.
     """
     from ariadne_mcp.service import AriadneService
 
-    return await AriadneService.get().analyze_issue(repo, issue_number)
+    return await AriadneService.get().analyze_issue(repo, issue_number, source=source)
 
 
 def register_tools(mcp) -> None:

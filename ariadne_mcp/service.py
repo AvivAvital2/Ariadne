@@ -12,6 +12,11 @@ The service is composed from domain-specific mixins:
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from inference import InferenceContext
+
 import logging
 from pathlib import Path
 from typing import Any, ClassVar
@@ -20,6 +25,7 @@ from ariadne_mcp.service_admin import AdminMixin
 from ariadne_mcp.service_analysis import AnalysisMixin
 from ariadne_mcp.service_facades import FacadesMixin
 from ariadne_mcp.service_search import SearchMixin
+from inference import service_operation
 
 _logger = logging.getLogger(__name__)
 
@@ -108,15 +114,48 @@ class AriadneService(
         self._cached_branch: str | None | type[_UNSET] = _UNSET
         self._branch_cached_at: float = 0.0
         self._query_cache: dict[int, Any] = {}
+        self._inference_context = None
+        self._last_corpus_identity = None
 
     # ------------------------------------------------------------------
     # Query cache (event-invalidated, no TTL)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _cache_key(func_name: str, *args: object, **kwargs: object) -> int:
+    def _cache_key(self, func_name: str, *args: object, **kwargs: object) -> int:
         """Hash function name + arguments into a cache key."""
-        return hash((func_name, args, tuple(sorted(kwargs.items()))))
+        identity = self._semantic_identity()
+        return hash((identity, func_name, args, tuple(sorted(kwargs.items()))))
+
+    @property
+    def inference_context(self) -> InferenceContext | None:
+        if self._inference_context is None:
+            from config import Config
+            from inference import InferenceContext
+
+            if isinstance(self.config, Config):
+                # Explicitly supplied legacy hosted handles keep their original
+                # unverified lifecycle. Bound/local handles cannot use it.
+                from library import Library
+                from library.model_binding import inspect_binding
+
+                if (
+                    self.config.provider != 'local'
+                    and isinstance(self._library, Library)
+                    and inspect_binding(Path(self._library.path)) is None
+                ):
+                    return None
+                self._inference_context = InferenceContext.from_config(self.config)
+        return self._inference_context
+
+    def _semantic_identity(self) -> tuple[str, str, int] | None:
+        context = self.inference_context
+        if context is None:
+            return None
+        identity = context.cache_identity
+        if identity != self._last_corpus_identity:
+            self._query_cache.clear()
+            self._last_corpus_identity = identity
+        return identity
 
     def clear_cache(self) -> None:
         """Invalidate all cached query results (in-memory and persistent)."""
@@ -153,7 +192,14 @@ class AriadneService(
         """Lazy-loaded Library instance (opened once, kept alive)."""
         if self._library is None:
             from library import Library
-            self._library = Library(Path(self.config.db_path))
+
+            context = self.inference_context
+            if context is not None and (context.local or context.binding is not None):
+                self._library = context.open_library(operation='semantic')
+            else:
+                # Structural onboarding remains available without provider keys.
+                self._library = Library(Path(self.config.db_path))
+                self._inference_context = None
         return self._library
 
     @property
@@ -161,7 +207,11 @@ class AriadneService(
         """Lazy-loaded, cached EmbeddingService (reuses httpx connection pool)."""
         if self._embedding_service is None:
             from embedding import EmbeddingConfig, EmbeddingService
-            self._embedding_service = EmbeddingService(EmbeddingConfig())
+
+            context = self.inference_context
+            self._embedding_service = (
+                context.embeddings if context is not None else EmbeddingService(EmbeddingConfig())
+            )
         return self._embedding_service
 
     def get_branch(self, ttl_seconds: float = 30.0) -> str | None:
@@ -182,6 +232,9 @@ class AriadneService(
         if self._library is not None:
             self._library.close()
             self._library = None
+        if self._inference_context is not None:
+            await self._inference_context.aclose()
+            self._inference_context = None
 
     def _resolve_source(self, source: str | None) -> str | None:
         """Resolve a source name, falling back to the default."""
@@ -209,3 +262,11 @@ class AriadneService(
         return make_scoped_library(
             self.config, self.library, source, use_cwd=False,
         )
+
+
+# Request boundaries, rather than the service lifetime, own writer sessions.
+for _name in ('search', 'ask', 'analyze_issue', 'review', 'task_context', 'gap_analysis'):
+    if hasattr(AriadneService, _name):
+        setattr(AriadneService, _name, service_operation(getattr(AriadneService, _name)))
+for _name in ('contribute', 'generate_file'):
+    setattr(AriadneService, _name, service_operation(getattr(AriadneService, _name), write=True))

@@ -48,7 +48,12 @@ def register_commands(subparsers):
     diff_parser.add_argument('--staged', action='store_true', help='Check staged changes only')
 
     # doctor
-    subparsers.add_parser('doctor', help='Run health check on the Ariadne library')
+    doctor = subparsers.add_parser('doctor', help='Run health check on the Ariadne library')
+    doctor.add_argument(
+        '--models',
+        action='store_true',
+        help='Inspect binding and probe local model/tokenization endpoints',
+    )
 
 
 def cmd_lint_docs(args: argparse.Namespace) -> int:
@@ -330,6 +335,28 @@ def cmd_diff_impact(args: argparse.Namespace) -> int:
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Run health check on the Ariadne library."""
+    if getattr(args, 'models', False):
+        from config import get_config
+        from inference import InferenceContext, current_context
+        from library.model_binding import inspect_pair
+
+        context = current_context() or InferenceContext.from_config(get_config(), db=args.db)
+        binding = inspect_pair(context.db_path, context.staleness_db_path, context.settings)
+        console.print_json(
+            data={
+                **context.settings.display(),
+                'library': str(context.db_path),
+                'staleness': str(context.staleness_db_path),
+                'binding': binding.manifest if binding else None,
+            }
+        )
+        if context.local:
+            from cli.runtime import run_async
+            from docgen.llm.local import check_endpoints
+
+            console.print_json(data=run_async(check_endpoints(context.settings)))
+        console.print('Endpoint readiness does not attest serving weights or model quality.')
+        return 0
     library = get_library(args.db)
 
     try:

@@ -48,6 +48,13 @@ optional `branches`/`ref` scoping. You only author structural facts — the
 SCIP-related fields (`index_kinds`, `scip:`) are filled in for you by
 discovery.
 
+Choose the model pair in `llm` and `embeddings`: OpenAI GPT-6 Astra or
+Anthropic Claude Opus 5.5 with OpenAI embeddings, or the fixed local
+Qwen3.8-27B/Qwen3-Embedding-8B pair. Select configurations with
+`ARIADNE_CONFIG`, using separate main and staleness databases for each
+pair. The local deployment still needs GPU qualification; see
+[supported models](docs/supported-models.md) for configuration and evidence.
+
 ## 2. The user runs `ariadne discover`
 
 Ariadne walks the tree and classifies every directory by language. It
@@ -76,6 +83,8 @@ A deterministic pass extracts every class/function/method via ast-grep
 a **`catalog` element row** per symbol (qualified name, signature,
 location) and a **`file_index` row per file** (the assembly anchor listing
 its elements). Deterministic UUID5 IDs make this idempotent.
+Extracting the catalog text needs no generation model; storing its vectors
+does call the configured embedding endpoint.
 
 ## 5. The user runs `ariadne generate` (LLM docs)
 
@@ -86,13 +95,25 @@ with a Dependents section back-filled from the SCIP graph), **`qa`**
 Generation is concurrent, validated, retried, and idempotent (same input →
 same row).
 
+Local `--batch` execution journals work in the library and runs one
+foreground worker. Saved responses survive interruption; resume through
+`ariadne batch resume local:RUN_UUID`. Cloud batching uses the configured
+OpenAI or Anthropic provider's batch API.
+
 ## 6. Embeddings are created for every doc
 
 Each document — and each heading-bounded **section chunk** — gets an
-OpenAI `text-embedding-3-large` (3072-dim) vector, stored in the
-`embeddings` table joined by `doc_id`. This is what makes search by
+OpenAI `text-embedding-3-large` (3072-dim) vector in cloud configurations,
+stored with its corresponding database row. This is what makes search by
 *intent* ("rate limiting") rather than keyword possible, and lets a query
 return the one relevant paragraph instead of a 10KB doc.
+
+Local Qwen3-Embedding-8B returns 4096 components; Ariadne retains the first
+3072 and normalizes them. Only Qwen search queries receive the fixed
+retrieval instruction. Vectors from different model pairs never share a
+library. Section retrieval falls back to the first section with body text
+when none meets the threshold, or returns full content for documents
+without stored sections.
 
 ## 7. Themes are discovered via a hybrid graph + Leiden
 
@@ -107,8 +128,13 @@ spans languages and repos, a theme can cut across all of them.
 ## 8. Everything lives in one SQLite library
 
 `ariadne.db` combines it all: `documents` (the retrieval unit),
-`embeddings`, `themes`/`theme_members`, and the `library_scip` graph
+`chunks`, `sections`, `themes`/`theme_members`, and the `library_scip` graph
 tables. WAL mode lets long generation runs coexist with concurrent reads.
+
+A separate staleness database tracks source completion. New libraries
+bind to one model pair; local durable jobs live in the main database.
+An operation-scoped writer lock serializes corpus changes. Document text,
+chunks and sections are replaced atomically with their vectors.
 
 ## 9. The user (or Claude) asks a question
 

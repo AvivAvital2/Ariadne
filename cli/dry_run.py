@@ -10,6 +10,7 @@ from __future__ import annotations
 from schema import CATALOG_KIND_ELEMENT
 
 import argparse
+from cli.runtime import run_async
 import asyncio
 import io
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -290,6 +291,16 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
     # import time and ignores monkeypatches done after that.
     import config as _config_module
     cfg = _config_module.get_config()
+    from inference import InferenceContext, current_context
+
+    if cfg.provider == 'local':
+        from cli.runtime import local_preview
+
+        return local_preview(
+            args,
+            cfg,
+            current_context() or InferenceContext.from_config(cfg, db=getattr(args, 'db', None)),
+        )
     source_name = args.source or cfg.default_source
     if source_name is None:
         console.print(
@@ -878,7 +889,6 @@ async def cmd_dry_run(args: argparse.Namespace) -> int:
     finally:
         library.close()
 
-
 def _print_phase(
     name: str, *, calls: int, in_tokens: int, out_tokens: int,
     cost: float | None,
@@ -909,5 +919,5 @@ def _print_phase(
 
 
 HANDLERS = {
-    'dry-run': lambda args: asyncio.run(cmd_dry_run(args)),
+    'dry-run': lambda args: run_async(cmd_dry_run(args)),
 }

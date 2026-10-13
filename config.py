@@ -5,6 +5,11 @@ supporting both local and global configuration.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from model_config import ModelSettings
+
 __all__ = [
     'Config',
     'ConfigError',
@@ -76,6 +81,7 @@ class ConfigError(ValueError):
 DEFAULT_EXCLUDE_POLICY: tuple[str, ...] = (
     # VCS metadata
     '.git', '.hg', '.svn',
+    '.ariadne',
     # Python venvs / caches / build
     '.venv', 'venv', 'env', '.env',
     '__pycache__', 'site-packages', '.eggs',
@@ -282,6 +288,7 @@ class Config:
                         standard locations (cwd, then home dir).
         """
         self._config: dict[str, Any] = dict(DEFAULTS)
+        self._explicit: dict[str, Any] = {}
         self._config_path: Path | None = None
         # Keys the user set EXPLICITLY (file top-level or under ``defaults:``),
         # so accessors can distinguish an explicit value from the DEFAULTS seed
@@ -326,17 +333,17 @@ class Config:
 
         self._config_path = Path(path) if not isinstance(path, Path) else path
 
-        # Merge loaded config with defaults
-        for key, value in data.items():
-            if key == 'defaults':
-                # Handle nested defaults section
-                for dk, dv in value.items():
-                    if dk in DEFAULTS:
-                        self._config[dk] = dv
-                        self._explicit_keys.add(dk)
-            else:
-                self._config[key] = value
-                self._explicit_keys.add(key)
+        if not isinstance(data, dict):
+            raise ConfigError('Configuration must be a mapping')
+        self._explicit = data
+        defaults = data.get('defaults', {}) or {}
+        if not isinstance(defaults, dict):
+            raise ConfigError('defaults must be a mapping')
+        # Top-level legacy aliases win independently of YAML key order.
+        self._config.update(defaults)
+        self._config.update(data)
+        self._explicit_keys.update(defaults)
+        self._explicit_keys.update(data)
 
         self._validate()
 
@@ -537,7 +544,9 @@ class Config:
         Reads ``model:`` from top-level first, then from the optional
         ``defaults:`` section in ``ariadne.yaml``.
         """
-        return self._from_defaults('model', DEFAULTS['model'])
+        return self._config.get('llm', {}).get(
+            'model', self._from_defaults('model', DEFAULTS['model'])
+        )
 
     @property
     def spools_model(self) -> str | None:
@@ -559,7 +568,15 @@ class Config:
         ``ariadne.yaml``, or top-level. Top-level wins on conflict.
         Defaults to ``"openai"`` for backwards-compat.
         """
-        return self._from_defaults('provider', 'openai')
+        return self._config.get('llm', {}).get(
+            'provider', self._from_defaults('provider', 'openai')
+        )
+
+    def model_settings(self, **overrides: Any) -> ModelSettings:
+        """Resolve immutable settings without credentials, HTTP or storage effects."""
+        from model_config import resolve_models
+
+        return resolve_models(self._explicit, **overrides)
 
     @property
     def configured_provider(self) -> str | None:
@@ -572,7 +589,10 @@ class Config:
         Claude model needs no manual ``provider: anthropic``; only an
         explicit-but-conflicting provider fails fast.
         """
-        return self._from_defaults('provider', None) if 'provider' in self._explicit_keys else None
+        return self._config.get('llm', {}).get(
+            'provider',
+            self._from_defaults('provider', None) if 'provider' in self._explicit_keys else None,
+        )
 
     @property
     def db_path(self) -> str:

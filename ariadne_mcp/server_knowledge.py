@@ -36,6 +36,8 @@ def ariadne_review_checklist(
 async def ariadne_review(
     task_description: str,
     changed_files: list[str] | None = None,
+    design_doc: str | None = None,
+    source: str | None = None,
 ) -> ReviewResponse:
     """Composite architecture review for design deliberation.
 
@@ -46,10 +48,14 @@ async def ariadne_review(
     Args:
         task_description: What the task/feature is about.
         changed_files: List of files being modified.
+        design_doc: Optional design text to check against the changes.
+        source: Source name used to scope retrieval.
     """
     from ariadne_mcp.service import AriadneService
 
-    return await AriadneService.get().review(task_description, changed_files)
+    return await AriadneService.get().review(
+        task_description, changed_files, design_doc, source=source
+    )
 
 
 async def ariadne_task_context(
@@ -351,7 +357,7 @@ def register_tools(mcp) -> None:
 
     mcp.tool(annotations=ToolAnnotations(
         title='Ask Question',
-        readOnlyHint=True,
+        readOnlyHint=False,
         openWorldHint=True,
     ))(ariadne_ask)
     mcp.tool(annotations=ToolAnnotations(

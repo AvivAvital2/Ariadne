@@ -413,6 +413,7 @@ class TestDryRunPipeline:
     async def test_default_mode_shows_elapsed_time_during_phases(
         self, tmp_path: Path, monkeypatch, capfd,
     ) -> None:
+        monkeypatch.setenv("TERM", "xterm")
         # ``capfd`` (not ``capsys``) — the progress widget writes to
         # ``sys.__stderr__`` which capsys can't see (capsys hooks
         # sys.stderr but the spinner uses the original fd 2 directly).

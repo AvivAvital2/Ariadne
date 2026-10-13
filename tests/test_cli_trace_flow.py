@@ -63,7 +63,7 @@ def _seed_chain(
                 seen.add(sym)
         conn.execute(
             'INSERT INTO scip_edges VALUES (?, ?, ?, ?, ?, ?)',
-            (caller, callee, 'reference', 'app.py', 5, 'scip'),
+            (caller, callee, 'call', 'app.py', 5, 'scip'),
         )
     conn.commit()
     conn.close()

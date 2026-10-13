@@ -67,6 +67,17 @@ class ImportConflictError(ValueError):
     """A merge hit pre-existing document ids while ``on_conflict='fail'``."""
 
 
+def _require_unbound(*paths: str | Path) -> None:
+    from library.model_binding import ModelBindingMismatch, inspect_binding
+
+    for path in paths:
+        if inspect_binding(Path(path)) is not None:
+            raise ModelBindingMismatch(
+                'SQLite slices do not carry model-pair provenance. '
+                'Use markdown export/import for model-bound libraries.'
+            )
+
+
 @frozen
 class SliceManifest:
     """Summary of what an export wrote into the bundle."""
@@ -217,6 +228,7 @@ def export_source_db(
     """
     from library import Library
 
+    _require_unbound(source_db_path, out_path)
     src = sqlite3.connect(str(source_db_path))
     try:
         if not _source_exists(src, source_name):
@@ -352,6 +364,7 @@ def import_source_db(
     if on_conflict not in ('replace', 'skip', 'fail'):
         raise ValueError(f'invalid on_conflict: {on_conflict!r}')
 
+    _require_unbound(target_db_path, bundle_path)
     bnd = sqlite3.connect(str(bundle_path))
     try:
         stamped = bnd.execute(

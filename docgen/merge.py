@@ -314,7 +314,14 @@ def preview_merge(
     if source_path is None or not source_path.exists():
         return f'Error: Source path not found: {source_path}'
 
-    library = Library(Path(cfg.db_path))
+    from inference import current_context
+
+    context = current_context()
+    library = (
+        context.open_library(operation='inspect')
+        if context is not None
+        else Library(Path(cfg.db_path))
+    )
     try:
         experimental = collect_experimental_docs(library)
         if not experimental:
@@ -452,6 +459,9 @@ async def execute_merge(
             db_path=actual_db_path,
             staleness_db_path=Path(cfg.staleness_db_path),
             model=cfg.model,
+            provider=cfg.provider,
+            source_name=source_name,
+            concurrency=1 if cfg.provider == 'local' else 3,
             doc_types=('explanation', 'architecture'),
             force_regenerate=True,
             source_config=scip_config,
@@ -480,6 +490,13 @@ async def execute_merge(
                 docs_failed += failed
             files_regenerated = len(catalog_files)
 
+    from inference import local_context
+
+    if local_context(library) and docs_failed:
+        raise ValueError(
+            'Local merge generation is incomplete; experimental documents were retained'
+        )
+
     # Step 4: Deprecate or delete consumed docs
     docs_deprecated = 0
     docs_deleted = 0
@@ -493,6 +510,11 @@ async def execute_merge(
             updated_metadata['status'] = 'deprecated'
             library.update_document(doc.id, metadata=updated_metadata)
             docs_deprecated += 1
+
+    if local_context(library):
+        from docgen.local_pipeline import refresh_incremental
+
+        await refresh_incremental(library, source_name, source_path)
 
     # Step 5: Export
     if not no_export:

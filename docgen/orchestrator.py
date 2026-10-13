@@ -25,6 +25,7 @@ from docgen.prompts import DocType
 from docgen.staleness import StalenessTracker, find_catalog_files, find_python_files
 from docgen.validator import ContentValidator, ValidationResult
 from diagram_format import split_description_and_dot
+from inference import local_context
 from library import Library
 from schema import Document
 from writer import LibraryWriter
@@ -160,6 +161,8 @@ class OrchestratorConfig:
     # still reported). Each round is a full batch cycle — see
     # ``_batch_validation_retry``.
     max_batch_validation_retries: int = 3
+    inference_context: object | None = None
+    generation_scope: str = 'stable'
 
     def __attrs_post_init__(self) -> None:
         """Resolve source_path to prevent relative path mismatches."""
@@ -422,7 +425,14 @@ class DocGenOrchestrator:
         # over every documents/chunks row. On a populated DB (5K+ docs) this
         # can take 10-30s; signaling here removes the "stuck on Starting" UX.
         self._emit('Opening library DB and running schema migrations...')
-        self._library = Library(self.config.db_path)
+        from inference import current_context
+
+        context = self.config.inference_context or current_context()
+        if context is not None:
+            context.validate_producer(model=self.config.model, provider=self.config.provider)
+            self._library = context.open_library(operation='write')
+        else:
+            self._library = Library(self.config.db_path)
         self._writer = LibraryWriter(self._library)
 
         # Load the cross-source SCIP graph once so each ``enrich_file``
@@ -440,7 +450,9 @@ class DocGenOrchestrator:
         # Resolve API key per provider — Anthropic uses ANTHROPIC_API_KEY,
         # everything else falls back to OPENAI_API_KEY (covers OpenAI direct
         # and OpenAI-compatible proxies).
-        if self.config.api_key:
+        if context is not None and context.local:
+            api_key = context.settings.chat.credential()
+        elif self.config.api_key:
             api_key = self.config.api_key
         elif self.config.provider == 'anthropic':
             api_key = os.environ.get('ANTHROPIC_API_KEY', '')
@@ -452,6 +464,8 @@ class DocGenOrchestrator:
         # user sticks with the default but selects Anthropic, swap to the
         # Anthropic default so requests don't 404 against api.openai.com.
         base_url = self.config.base_url
+        if context is not None and context.local:
+            base_url = context.settings.chat.base_url
         if (
             self.config.provider == 'anthropic'
             and base_url == 'https://api.openai.com/v1'
@@ -465,12 +479,22 @@ class DocGenOrchestrator:
             base_url=base_url,
             doc_types=self.config.doc_types,
             provider=self.config.provider,
+            inference_context=context,
         )
         self._generator = DocGenerator(config=gen_config, analyzer=self._analyzer)
         await self._generator.__aenter__()
 
         self._emit('Opening staleness DB...')
-        self._staleness = StalenessTracker(self.config.staleness_db_path, doc_types_by_language=self.config.doc_types_by_language)
+        if context is not None and context.binding is not None:
+            self._staleness = StalenessTracker(
+                context.staleness_db_path,
+                inference_context=context,
+                source_name=self.config.source_name or '',
+                generation_scope=self.config.generation_scope,
+                doc_types_by_language=self.config.doc_types_by_language,
+            )
+        else:
+            self._staleness = StalenessTracker(self.config.staleness_db_path, doc_types_by_language=self.config.doc_types_by_language)
 
         return self
 
@@ -825,6 +849,16 @@ class DocGenOrchestrator:
             msg = 'Components not initialized'
             raise RuntimeError(msg)
 
+        import hashlib
+
+        bound = (
+            self._library.inference_context is not None
+            and self._library.inference_context.binding is not None
+        )
+        processed_hash = (
+            hashlib.sha256(await asyncio.to_thread(path.read_bytes)).hexdigest() if bound else None
+        )
+
         if self.config.catalog_only_generator:
             generated_docs, line_count = await self._catalog_generate(path)
         else:
@@ -842,7 +876,11 @@ class DocGenOrchestrator:
             return GenerationResult(
                 source_path=path,
                 docs_generated=0,
-                docs_failed=len(self.config.doc_types),
+                docs_failed=len(
+                    self._staleness._filter_requested_by_language(
+                        path, set(self.config.doc_types) - {'catalog'}
+                    )
+                ),
             )
 
         # Validate (with retry on failure) and store
@@ -880,15 +918,40 @@ class DocGenOrchestrator:
                 gen_doc = final_doc
 
             if not self.config.dry_run:
+                if bound:
+                    from library.prepared import ObsoleteInput
+
+                    if hashlib.sha256(
+                        await asyncio.to_thread(path.read_bytes)
+                    ).hexdigest() != processed_hash or (
+                        gen_doc.source_snapshot is not None
+                        and gen_doc.source_snapshot != processed_hash
+                    ):
+                        raise ObsoleteInput(f'Source changed while generating {path}')
+                    gen_doc.metadata.update(
+                        processed_hash=processed_hash,
+                        generation_scope=self._staleness.generation_scope,
+                    )
+                    if self.config.generation_scope.startswith('branch:'):
+                        gen_doc.metadata.update(
+                            status='experimental',
+                            branches=[self.config.generation_scope.removeprefix('branch:')],
+                        )
                 doc = await self._store_document(gen_doc)
                 if doc:
                     doc_ids.append(doc.id)
                 else:
                     failed += 1
 
-        if doc_ids and not self.config.dry_run:
+        required = self._staleness._filter_requested_by_language(
+            path, set(self.config.doc_types) - {'catalog'}
+        )
+        if bound:
+            failed = max(failed, len(required) - len(doc_ids))
+        if doc_ids and not self.config.dry_run and (not bound or failed == 0):
             await self._staleness.record_documentation_async(
-                path, doc_ids, base_path=self.config.source_path
+                path, doc_ids, base_path=self.config.source_path,
+                **({'processed_hash': processed_hash} if bound else {}),
             )
 
         return GenerationResult(
@@ -1574,6 +1637,13 @@ class DocGenOrchestrator:
             msg = 'Components not initialized'
             raise RuntimeError(msg)
 
+        from inference import local_context
+
+        if local_context(self._library):
+            from docgen.local_pipeline import run_generation
+
+            return await run_generation(self, files_to_process, files_skipped)
+
         config_hash = self.config.config_hash()
 
         # Phase 1: Resume check — adopt an in-flight batch if one
@@ -1863,6 +1933,14 @@ class DocGenOrchestrator:
         if not any(r.docs_failed for r in results):
             self._write_generation_marker()
 
+        from inference import local_context
+
+        if local_context(self._library):
+            from docgen.local_pipeline import live_post_process
+
+            await live_post_process(self, crossref_progress)
+            return
+
         # Themes first. Announce phase entry/exit on the bar AND surface
         # per-theme progress during the LLM summarize stage so the user
         # sees the bar tick from 0/N → N/N instead of staring at 0/0.
@@ -1914,6 +1992,8 @@ class DocGenOrchestrator:
                 )
         except Exception as e:
             _logger.warning('refresh_themes failed: %s', e)
+            if local_context(self._library) is not None:
+                raise
             if crossref_progress is not None:
                 crossref_progress('Themes: failed (see log)', 0, 0)
 
@@ -1981,6 +2061,33 @@ class DocGenOrchestrator:
         # rather than appending a duplicate (the prior UUID4 scheme produced
         # title-collision dupes when two files shared a module-name leaf).
         doc_id = self._compute_deterministic_doc_id(gen_doc, source_name)
+
+        if (
+            self._library.inference_context is not None
+            and self._library.inference_context.binding is not None
+        ):
+            gen_doc.metadata['generated'] = True
+
+            def check_inputs() -> None:
+                from docgen.spool import file_fingerprint
+                from library.prepared import ObsoleteInput
+
+                captured = gen_doc.metadata.get('processed_hash')
+                if captured and any(
+                    file_fingerprint(Path(path)) != captured for path in gen_doc.source_files
+                ):
+                    raise ObsoleteInput('Source changed before generated document application')
+
+            return await self._writer.add_document(
+                content_type=gen_doc.doc_type,
+                title=gen_doc.title,
+                content=gen_doc.content,
+                source_files=list(gen_doc.source_files),
+                metadata=gen_doc.metadata,
+                source_name=source_name,
+                doc_id=doc_id,
+                check_inputs=check_inputs,
+            )
 
         try:
             if gen_doc.doc_type == 'explanation':
@@ -2068,6 +2175,9 @@ class DocGenOrchestrator:
                 primary_key = primary_file
         else:
             primary_key = gen_doc.title
+
+        if local_context(self._library) and self.config.generation_scope != 'stable':
+            primary_key = self.config.generation_scope + ':' + primary_key
 
         return doc_id_for(
             source_name or 'unknown',
@@ -2195,11 +2305,27 @@ class DocGenOrchestrator:
         doc_titles = {doc.id: doc.title for doc in docs}
 
         for doc in docs:
+            if local_context(self._library) is not None and (
+                doc.content_type
+                not in {
+                    'explanation',
+                    'architecture',
+                    'qa',
+                    'gotcha',
+                    'diagram',
+                    'theme',
+                }
+                or not doc.metadata.get('generated')
+            ):
+                continue
             refs = detector.get_all_references(doc)
             if refs:
                 new_content = inject_related_section(doc.content, refs, doc_titles)
                 if new_content != doc.content:
-                    self._library.update_document(doc.id, content=new_content)
+                    if local_context(self._library) is not None:
+                        await self._writer.replace_document(doc.id, content=new_content)
+                    else:
+                        self._library.update_document(doc.id, content=new_content)
 
     async def _inject_crossrefs_scoped(
         self,
@@ -2249,6 +2375,22 @@ class DocGenOrchestrator:
         else:
             scoped_docs = all_docs
 
+        local = local_context(self._library) is not None
+        if local:
+            from git_ops import get_current_branch
+            from library import filter_by_branch
+
+            scoped_docs = [
+                doc
+                for doc in all_docs
+                if not allowed_sources
+                or doc.source_name in allowed_sources
+                or doc.content_type == 'theme'
+            ]
+            scoped_docs = filter_by_branch(
+                scoped_docs, get_current_branch(self.config.source_path) or 'main'
+            )
+
         _logger.info(
             'Cross-refs (graph-based): %d docs scoped (from %d total)',
             len(scoped_docs), len(all_docs),
@@ -2272,6 +2414,12 @@ class DocGenOrchestrator:
         _read += perf_counter() - _r
 
         for i, doc in enumerate(scoped_docs):
+            if local and (
+                doc.content_type
+                not in {'explanation', 'architecture', 'qa', 'gotcha', 'diagram', 'theme'}
+                or not doc.metadata.get('generated')
+            ):
+                continue
             if progress_callback:
                 progress_callback(
                     f'Crossref {doc.title[:40]}', i, total,
@@ -2310,7 +2458,10 @@ class DocGenOrchestrator:
                 continue
             if new_content != doc.content:
                 _w = perf_counter()
-                self._library.update_document(doc.id, content=new_content)
+                if local:
+                    await self._writer.replace_document(doc.id, content=new_content)
+                else:
+                    self._library.update_document(doc.id, content=new_content)
                 _write += perf_counter() - _w
                 updated += 1
 

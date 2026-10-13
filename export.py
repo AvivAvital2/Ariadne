@@ -225,6 +225,38 @@ class LibraryExporter:
                 suffix += 4
             used.add(file_path)
         markdown = _document_to_markdown(doc, self.config, source_name=source_name)
+        from library.model_binding import inspect_binding
+
+        binding = inspect_binding(self.library.path)
+        if binding is not None:
+            import yaml
+            from attrs import evolve
+
+            if not self.config.include_frontmatter:
+                raise ValueError('Bound exports require provenance frontmatter')
+            body = _document_to_markdown(doc, evolve(self.config, include_frontmatter=False), source_name=source_name)
+            prefix_length = len(body) - len(doc.content)
+            frontmatter = {
+                'id': doc.id,
+                'type': doc.content_type,
+                'title': doc.title,
+                'created_at': doc.created_at,
+                'updated_at': doc.updated_at,
+                'source_name': doc.source_name,
+                'source_files': doc.source_files,
+                'metadata': doc.metadata,
+                'ariadne_export': {
+                    'version': 1,
+                    'models': binding.manifest,
+                    'body_prefix_length': prefix_length,
+                },
+            }
+            markdown = (
+                '---\n'
+                + yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True)
+                + '---\n'
+                + body
+            )
 
         # Write file
         file_path.write_text(markdown)
@@ -391,6 +423,13 @@ class LibraryExporter:
             lines.append('')
 
         manifest_path = output_dir / 'manifest.yaml'
+        from library.model_binding import inspect_binding
+
+        binding = inspect_binding(self.library.path)
+        if binding is not None:
+            import yaml
+
+            lines.append(yaml.safe_dump({'ariadne_models': binding.manifest}, sort_keys=False))
         manifest_path.write_text('\n'.join(lines))
 
         return manifest_path
@@ -784,6 +823,12 @@ def import_from_markdown(
         Number of documents written; docs already present with
         identical content, source files and metadata are skipped.
     """
+    from library.model_binding import inspect_binding
+
+    if inspect_binding(library.path) is not None:
+        raise ValueError(
+            'Bound imports require import_bound_markdown for provenance preflight and atomic application'
+        )
     import re
 
     count = 0
@@ -961,21 +1006,20 @@ def import_from_archive(library: Library, archive_path: Path) -> int:
     Returns:
         Number of documents written (identical docs are skipped).
     """
+    with tempfile.TemporaryDirectory() as tmp:
+        return import_from_markdown(library, _extract_archive(archive_path, Path(tmp)))
+
+
+def _extract_archive(archive_path: Path, dest: Path) -> Path:
+    """Safely extract an export and return its document root."""
     if not zipfile.is_zipfile(archive_path):
         raise ValueError(f'not a zip archive: {archive_path}')
-
-    with tempfile.TemporaryDirectory() as tmp:
-        dest = Path(tmp)
-        with zipfile.ZipFile(archive_path) as zf:
-            for member in zf.infolist():
-                name = member.filename
-                if (
-                    name.startswith('__MACOSX/')
-                    or PurePosixPath(name).name.startswith('._')
-                ):
-                    continue
-                resolved = (dest / name).resolve()
-                if not resolved.is_relative_to(dest.resolve()):
-                    raise ValueError(f'unsafe member path in archive: {name}')
-                zf.extract(member, dest)
-        return import_from_markdown(library, _find_export_root(dest))
+    with zipfile.ZipFile(archive_path) as zf:
+        for member in zf.infolist():
+            name = member.filename
+            if name.startswith('__MACOSX/') or PurePosixPath(name).name.startswith('._'):
+                continue
+            if not (dest / name).resolve().is_relative_to(dest.resolve()):
+                raise ValueError(f'unsafe member path in archive: {name}')
+            zf.extract(member, dest)
+    return _find_export_root(dest)

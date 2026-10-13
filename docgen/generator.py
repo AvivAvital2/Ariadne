@@ -96,6 +96,7 @@ class GeneratorConfig:
     # x-api-key auth; api_key/base_url should be Anthropic's. Default
     # "openai" preserves historical behavior.
     provider: str = 'openai'
+    inference_context: object | None = None
     withhold_source_prose: bool = False
 
 
@@ -118,6 +119,14 @@ class GeneratedDoc:
     doc_type: DocType
     source_files: tuple[str, ...]
     metadata: dict
+    source_snapshot: str | None = None
+
+    def __attrs_post_init__(self) -> None:
+        from inference import current_context
+
+        context = current_context()
+        if context is not None and context.binding is not None:
+            self.metadata = {**self.metadata, 'generated': True}
 
 
 @define
@@ -143,6 +152,7 @@ class PromptBundle:
     user_prompt: str
     title: str
     metadata: dict
+    source_snapshot: str | None = None
 
 
 @define
@@ -172,6 +182,13 @@ class DocGenerator:
         generator interacts with it through ``LLMProvider.call``.
         """
         from docgen.llm.factory import make_llm_provider
+        from inference import current_context
+
+        context = self.config.inference_context or current_context()
+        if context is not None:
+            context.validate_producer(model=self.config.model, provider=self.config.provider)
+            self._provider = context.chat
+            return self
 
         self._provider = make_llm_provider(
             provider=self.config.provider,
@@ -186,7 +203,11 @@ class DocGenerator:
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         """Release the LLM provider's HTTP client."""
         if self._provider is not None:
-            await self._provider.aclose()
+            from inference import current_context
+
+            context = self.config.inference_context or current_context()
+            if context is None:
+                await self._provider.aclose()
             self._provider = None
 
     async def generate_for_file(
@@ -231,7 +252,10 @@ class DocGenerator:
         docs: list[GeneratedDoc] = []
 
         _logger.info('Generating docs for %s (types: %s)', metadata.path, ', '.join(doc_types))
-        source_code = metadata.path.read_text(encoding='utf-8')
+        import hashlib
+
+        source_bytes = metadata.path.read_bytes()
+        source_code = source_bytes.decode('utf-8')
 
         for doc_type in doc_types:
             try:
@@ -248,6 +272,7 @@ class DocGenerator:
                             content=content,
                             doc_type=doc_type,
                             source_files=(str(metadata.path),),
+                            source_snapshot=hashlib.sha256(source_bytes).hexdigest(),
                             metadata={
                                 'module_name': metadata.module_name,
                                 'source_hash': metadata.source_hash,
@@ -263,6 +288,9 @@ class DocGenerator:
                 # instead of gracefully aborting.
                 raise
             except Exception as e:
+                from inference import raise_inference_error
+
+                raise_inference_error(e)
                 _logger.error('Failed to generate %s for %s: %s', doc_type, metadata.path, e)
 
         return docs
@@ -310,6 +338,9 @@ class DocGenerator:
                 if group_doc:
                     docs.append(group_doc)
             except Exception as e:
+                from inference import raise_inference_error
+
+                raise_inference_error(e)
                 _logger.error('Failed to generate group architecture: %s', e)
 
         return docs
@@ -721,7 +752,18 @@ class DocGenerator:
         """
         requested = doc_types or self.config.doc_types
         doc_types = filter_doc_types_for_language(requested, bundle.language)
-        bundle, source_code = self._prepare_bundle_source(bundle)
+        import hashlib
+
+        from inference import current_context
+
+        try:
+            source_bytes = bundle.path.read_bytes()
+        except OSError:
+            context = self.config.inference_context or current_context()
+            if context is not None and context.binding is not None:
+                raise
+            source_bytes = b''
+        bundle, source_code = self._prepare_bundle_source(bundle, source_bytes=source_bytes)
 
         _logger.info(
             'Generating docs from bundle %s (lang=%s, types: %s)',
@@ -741,6 +783,7 @@ class DocGenerator:
                     content=content,
                     doc_type=doc_type,
                     source_files=(str(bundle.path),),
+                    source_snapshot=hashlib.sha256(source_bytes).hexdigest(),
                     metadata={
                         'module_name': bundle.module_name,
                         'language': bundle.language,**_dangling_autodoc_meta(bundle)
@@ -752,6 +795,9 @@ class DocGenerator:
                 # for the rationale.
                 raise
             except Exception as e:
+                from inference import raise_inference_error
+
+                raise_inference_error(e)
                 _logger.error(
                     'Failed to generate %s for %s: %s',
                     doc_type, bundle.path, e,
@@ -789,7 +835,10 @@ class DocGenerator:
         ``GeneratedDoc`` without re-running the analyzer.
         """
         doc_types = doc_types or self.config.doc_types
-        source_code = metadata.path.read_text(encoding='utf-8')
+        import hashlib
+
+        source_bytes = metadata.path.read_bytes()
+        source_code = source_bytes.decode('utf-8')
         bundles: list[PromptBundle] = []
         for doc_type in doc_types:
             system_prompt, user_prompt = self._build_prompt_for_doc(
@@ -799,6 +848,7 @@ class DocGenerator:
             bundles.append(
                 PromptBundle(
                     file=metadata.path,
+                    source_snapshot=hashlib.sha256(source_bytes).hexdigest(),
                     doc_type=doc_type,
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
@@ -825,7 +875,18 @@ class DocGenerator:
         """
         requested = doc_types or self.config.doc_types
         doc_types = filter_doc_types_for_language(requested, bundle.language)
-        bundle, source_code = self._prepare_bundle_source(bundle)
+        import hashlib
+
+        from inference import current_context
+
+        try:
+            source_bytes = bundle.path.read_bytes()
+        except OSError:
+            context = self.config.inference_context or current_context()
+            if context is not None and context.binding is not None:
+                raise
+            source_bytes = b''
+        bundle, source_code = self._prepare_bundle_source(bundle, source_bytes=source_bytes)
 
         bundles: list[PromptBundle] = []
         for doc_type in doc_types:
@@ -836,6 +897,7 @@ class DocGenerator:
             bundles.append(
                 PromptBundle(
                     file=bundle.path,
+                    source_snapshot=hashlib.sha256(source_bytes).hexdigest(),
                     doc_type=doc_type,
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
@@ -865,6 +927,7 @@ class DocGenerator:
             doc_type=prompt.doc_type,
             source_files=(str(prompt.file),),
             metadata=prompt.metadata,
+            source_snapshot=prompt.source_snapshot,
         )
 
     def _build_prompt_for_bundle_doc(
@@ -898,7 +961,7 @@ class DocGenerator:
             phase='generate', doc_type=doc_type, language=bundle.language,
         ):
             return await self._call_llm(system_prompt, user_prompt)
-    def _prepare_bundle_source(self, bundle):
+    def _prepare_bundle_source(self, bundle, *, source_bytes=None):
         """Raw source for user repos; the filler swap for Spool builds (§18.4).
 
     Withhold mode renders the structural spine (no comments, no
@@ -907,7 +970,7 @@ class DocGenerator:
     """
         if not self.config.withhold_source_prose:
             try:
-                return bundle, bundle.path.read_text(encoding='utf-8')
+                return bundle, (source_bytes.decode('utf-8') if source_bytes is not None else bundle.path.read_text(encoding='utf-8'))
             except (OSError, UnicodeDecodeError):
                 return bundle, ''
         from docgen.filler_swap import structural_source
@@ -1236,6 +1299,9 @@ class DocGenerator:
                 if group_doc is not None:
                     docs.append(group_doc)
             except Exception as e:
+                from inference import raise_inference_error
+
+                raise_inference_error(e)
                 _logger.error('group architecture generation failed: %s', e)
 
         return docs

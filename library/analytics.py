@@ -117,7 +117,10 @@ class AnalyticsMixin:
                 (f'%"{doc_id}"%',),
             ).fetchall()
         served = len(rows)
-        hits = sum(1 for r in rows if r['outcome'] == 'hit' and r['quality_score'] is not None and r['quality_score'] >= 5)
+        hits = sum(
+            outcome == 'hit' and score is not None and score >= 5
+            for outcome, score in rows
+        )
         return {'served': served, 'hits': hits}
 
     def mark_hit(self, event_id: int, feedback: str | None = None) -> bool:

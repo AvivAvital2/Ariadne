@@ -492,7 +492,6 @@ def persist_literal_url_clients(
     producers to exclude a route's own URL literal) and ``persist_string_literals``,
     and BEFORE ``persist_url_resolver`` (which matches the rows it writes).
     """
-    from docgen.scip_literal_url_extractor import ingest_literal_url_clients
     from library import Library
 
     library = Library(db_path)
@@ -500,6 +499,16 @@ def persist_literal_url_clients(
     try:
         for source_name, _source_root in sources:
             with library._conn_provider.acquire() as conn:
+                # A fresh source without literals or prior calls has nothing
+                # for this detector to ingest or clean up.
+                if not conn.execute(
+                    'SELECT 1 FROM string_literals WHERE source_name = ? '
+                    'UNION ALL SELECT 1 FROM http_client_calls WHERE source_name = ? LIMIT 1',
+                    (source_name, source_name),
+                ).fetchone():
+                    continue
+                from docgen.scip_literal_url_extractor import ingest_literal_url_clients
+
                 total += ingest_literal_url_clients(
                     source_name=source_name, conn=conn,
                 )

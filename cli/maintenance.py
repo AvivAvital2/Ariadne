@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.table import Table
 
+from cli.runtime import run_async
 from config import get_config
 
 if TYPE_CHECKING:
@@ -241,11 +242,10 @@ async def cmd_merge(args: argparse.Namespace) -> int:
         if merge_result.docs_deleted:
             console.print(f'  Docs deleted: {merge_result.docs_deleted}')
 
-        return 0
+        return 1 if merge_result.docs_failed else 0
 
     finally:
         library.close()
-
 
 def cmd_cleanup(args: argparse.Namespace) -> int:
     """Clean up expired or orphaned documents.
@@ -570,8 +570,8 @@ def cmd_migrate(args: argparse.Namespace) -> int:
 
 
 HANDLERS = {
-    'check': lambda args: asyncio.run(cmd_check(args)),
-    'merge': lambda args: asyncio.run(cmd_merge(args)),
+    'check': lambda args: run_async(cmd_check(args)),
+    'merge': lambda args: run_async(cmd_merge(args)),
     'cleanup': lambda args: cmd_cleanup(args),
     'migrate': lambda args: cmd_migrate(args),
 }

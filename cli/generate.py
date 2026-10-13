@@ -24,6 +24,10 @@ from cli.generate_cost import (  # noqa: E402
     _library_for_estimate,
     _print_cost_estimate,
 )
+from model_config import (
+    infer_provider_from_model as infer_provider_from_model,  # noqa: PLC0414 - public compatibility export.
+)
+from model_config import resolve_provider
 
 # LLM-driven doc types generated when --types is omitted. The dry-run
 # cost estimate MUST price this exact set — pricing a subset silently
@@ -56,53 +60,6 @@ console = Console()
 # ---------------------------------------------------------------------------
 # Provider resolution
 # ---------------------------------------------------------------------------
-
-
-def infer_provider_from_model(model: str) -> str | None:
-    """Map a model name to its hosting provider.
-
-    Returns "openai" for ``gpt-*``, "anthropic" for ``claude-*``, and
-    ``None`` for unknown patterns (custom proxies, fine-tunes, future
-    models). Callers default to "openai" when None comes back.
-    """
-    if model.startswith('gpt-'):
-        return 'openai'
-    if model.startswith('claude-'):
-        return 'anthropic'
-    return None
-
-
-def resolve_provider(
-    *,
-    cli_provider: str | None,
-    cfg_provider: str | None,
-    model: str,
-) -> str:
-    """Resolve the LLM provider from CLI flag, config, and model name.
-
-    Resolution order:
-      1. ``--provider`` CLI flag wins.
-      2. Then ``provider:`` from ``ariadne.yaml``.
-      3. Then inferred from model family (``gpt-*`` → openai,
-         ``claude-*`` → anthropic).
-      4. Default to "openai" for unknown model patterns.
-
-    If both an explicit provider AND an inferable model family are set
-    and they disagree (e.g. ``provider: anthropic`` with
-    ``model: gpt-5.4``), raises ``ValueError`` so the run fails fast
-    instead of hitting a confusing 404 from the wrong endpoint.
-    """
-    inferred = infer_provider_from_model(model)
-    explicit = cli_provider or cfg_provider
-
-    if explicit and inferred and explicit != inferred:
-        raise ValueError(
-            f'Provider mismatch: model {model!r} is hosted by {inferred!r}, '
-            f'but provider was set to {explicit!r}. Either change the model '
-            f'to a {explicit!r}-hosted one, or update provider to {inferred!r}.'
-        )
-
-    return explicit or inferred or 'openai'
 
 
 def resolve_batch_strategy(args, cfg):
@@ -305,7 +262,7 @@ def register_generate_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     generate_parser.add_argument(
         '--provider', default=None,
-        choices=['openai', 'anthropic'],
+        choices=['openai', 'anthropic', 'local'],
         help='LLM backend (default: openai). Anthropic uses '
              'ANTHROPIC_API_KEY; OpenAI uses OPENAI_API_KEY.',
     )
@@ -322,7 +279,7 @@ def register_generate_parser(subparsers: argparse._SubParsersAction) -> None:
         ),
     )
     generate_parser.add_argument(
-        '--concurrency', '-c', type=int, default=3,
+        '--concurrency', '-c', type=int, default=None,
         help='Max concurrent LLM requests (default: 3)',
     )
     generate_parser.add_argument(
@@ -352,15 +309,15 @@ def register_generate_parser(subparsers: argparse._SubParsersAction) -> None:
     batch_group = generate_parser.add_mutually_exclusive_group()
     batch_group.add_argument(
         '--batch', dest='batch_mode', action='store_const', const='always',
-        help='Force batch dispatch (50%% off, up to 24h SLA, Anthropic only)',
+        help='Force batch dispatch (provider batches or a durable foreground local spool)',
     )
     batch_group.add_argument(
         '--no-batch', dest='batch_mode', action='store_const', const='never',
         help='Force synchronous dispatch (immediate, full price)',
     )
-    generate_parser.set_defaults(batch_mode='auto')
+    generate_parser.set_defaults(batch_mode=None)
     generate_parser.add_argument(
-        '--auto-batch-threshold', type=int, default=200,
+        '--auto-batch-threshold', type=int, default=None,
         help=(
             'In ``auto`` batch_mode, switch to batch when planned '
             'LLM calls >= this threshold (default: 200)'
@@ -397,6 +354,13 @@ async def cmd_generate(args: argparse.Namespace) -> int:
 
     cfg = get_config()
     db_path = Path(args.db) if args.db else Path(cfg.db_path)
+    if cfg.provider == 'local' and args.dry_run:
+        from cli.runtime import local_preview
+        from inference import InferenceContext, current_context
+
+        return local_preview(
+            args, cfg, current_context() or InferenceContext.from_config(cfg, db=args.db)
+        )
     # Scope the per-run log handler to this call (removed on exit so it
     # can't stack/leak), and capture real per-call token usage into the
     # calibration store so the next dry-run self-tunes its estimate.
@@ -490,6 +454,11 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
     from docgen.orchestrator import DocGenOrchestrator, OrchestratorConfig
 
     cfg = get_config()
+    settings = cfg.model_settings()
+    if getattr(args, 'batch_mode', None) is None:
+        args.batch_mode = settings.execution.batch_mode
+    if getattr(args, 'auto_batch_threshold', None) is None:
+        args.auto_batch_threshold = settings.execution.auto_batch_threshold
 
     source_name = args.source or cfg.default_source
     source_path = cfg.resolve_source(args.source)
@@ -588,11 +557,11 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
     config = OrchestratorConfig(
         source_path=source_path,
         db_path=args.db or Path(cfg.db_path),
-        staleness_db_path=Path(cfg.staleness_db_path),
+        staleness_db_path=Path(getattr(args, 'staleness_db', None) or cfg.staleness_db_path),
         model=model,
         api_key=args.api_key,
         doc_types=doc_types,
-        concurrency=args.concurrency,
+        concurrency=args.concurrency or (1 if provider == 'local' else 3),
         force_regenerate=args.force,
         dry_run=args.dry_run,
         source_name=source_name,
@@ -605,6 +574,7 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
         exclude_dir_names=exclude_dir_names,
         batch_mode=getattr(args, 'batch_mode', 'auto'),
         auto_batch_threshold=getattr(args, 'auto_batch_threshold', 200),
+        themes_enabled=cfg.themes_enabled,
         restrict_to_files=restrict_to_files,
     ignore_staleness=cfg.source_ignore_staleness(source_name), doc_types_by_language=cfg.source_doc_types_by_language(source_name))
 
@@ -665,7 +635,7 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
             # skipped — the phase produces meaningful output only
             # when SCIP indexes have been built (ariadne discover +
             # ariadne index for related sources).
-            if not getattr(result, 'aborted', False):
+            if provider != 'local' and not getattr(result, 'aborted', False):
                 related_sources: dict[str, Path] = {}
                 for other_name in cfg.sources:
                     if other_name == source_name:
@@ -857,4 +827,6 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
             f'to retry just the failed ones (staleness skips the rest).'
         )
 
+    if provider == 'local' and (result.docs_failed or result.errors):
+        return 1
     return _generate_exit_code(result)

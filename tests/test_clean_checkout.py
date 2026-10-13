@@ -2,8 +2,9 @@
 
 Committed suites once depended on untracked helper scripts, so a fresh
 `git archive HEAD` failed tests the dirty checkout passed. This smoke
-test collects an archive of HEAD and runs the file-dependent suites
-inside it.
+test collects an archive of HEAD plus tracked working changes and runs
+the file-dependent suites inside it. Untracked helpers stay excluded,
+while fixes can be verified before committing them.
 """
 from __future__ import annotations
 
@@ -28,6 +29,13 @@ def test_git_archive_head_runs_the_file_dependent_suites(tmp_path):
         stdout=subprocess.PIPE)
     subprocess.run(["tar", "-x"], cwd=tmp_path, input=archive.stdout,
                    check=True)
+
+    changes = subprocess.run(
+        ["git", "diff", "--binary", "--full-index", "HEAD"], cwd=ROOT,
+        check=True, stdout=subprocess.PIPE)
+    if changes.stdout:
+        subprocess.run(["git", "apply", "--whitespace=nowarn"], cwd=tmp_path,
+                       input=changes.stdout, check=True)
 
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",

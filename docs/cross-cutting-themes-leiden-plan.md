@@ -1,5 +1,7 @@
 # Cross-Cutting Themes via Leiden Clustering — Implementation Plan
 
+This is the historical hosted-model plan. Its model defaults and cost examples describe that baseline. Current cloud/local pairs are documented in [supported models](supported-models.md); bound local theme generation uses the library's Qwen pair and embedding recipe.
+
 **Status:** locked design, not yet implemented
 **Date locked:** 2026-04-27
 **Goal:** add automatic discovery of cross-cutting themes (cluster-level theme docs) to Ariadne, closing the gap with GraphRAG's community summaries while keeping update cost dramatically lower.

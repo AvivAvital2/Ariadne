@@ -38,7 +38,7 @@ mention_ariadne:
 # LLM defaults — provider is inferred from the model name when omitted (gpt-* → openai, claude-* → anthropic)
 defaults:
   db_path: ariadne.db
-  provider: anthropic        # 'anthropic' | 'openai'
+  provider: anthropic        # 'anthropic' | 'openai' | 'local'
   model: claude-opus-4-8     # claude-opus-4-8 (Anthropic) or gpt-5.5 (OpenAI)
   spools_model: claude-sonnet-5  # optional: model for SPOOL BUILDS only (unset → inherit model)
 ```
@@ -169,3 +169,5 @@ See [directory-scoping.md](directory-scoping.md) for the complete guide.
 ---
 
 _Part of the [Ariadne documentation](../README.md)._
+
+For the structured `llm` and `embeddings` settings, local Qwen endpoints, and switching between model pairs, see [supported models](supported-models.md). Set `ARIADNE_CONFIG` to select a configuration; a different model pair requires fresh library and staleness database paths.

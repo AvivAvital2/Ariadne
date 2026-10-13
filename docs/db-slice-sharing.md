@@ -7,6 +7,8 @@ questions about that source over MCP or Slack, with no re-generation.
 
 ## Produce a slice
 
+SQLite slices support legacy cloud libraries. They do not carry model-pair provenance; use [markdown export/import](import-export.md) for model-bound libraries, including the local Qwen suite.
+
 ```bash
 # Slice the source 'mylib' out of this database into mylib.db
 ariadne --db ariadne.db export-db --source mylib --out mylib.db

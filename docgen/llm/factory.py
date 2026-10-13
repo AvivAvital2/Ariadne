@@ -6,12 +6,19 @@ don't import provider classes directly elsewhere.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from docgen.spool import SpoolJobSpec
+    from inference import InferenceContext
+    from library import Library
+
 from typing import Literal
 
 from docgen.llm.base import LLMProvider
 from docgen.llm.batch import BatchStrategy
 
-ProviderName = Literal['openai', 'anthropic']
+ProviderName = Literal['openai', 'anthropic', 'local']
 
 
 def make_llm_provider(
@@ -22,6 +29,7 @@ def make_llm_provider(
     base_url: str | None = None,
     max_retries: int = 3,
     timeout: float = 120.0,
+    context: InferenceContext | None = None,
 ) -> LLMProvider:
     """Construct an LLM provider by name.
 
@@ -38,6 +46,24 @@ def make_llm_provider(
     Returns:
         A concrete provider implementing ``LLMProvider``.
     """
+    if context is None:
+        from inference import current_context
+
+        context = current_context()
+    if context is not None:
+        context.validate_producer(model=model, provider=provider)
+    if provider == 'local':
+        if context is None or not context.local:
+            raise ValueError('Local inference requires a bound InferenceContext')
+        if base_url is not None and base_url.rstrip('/') != context.settings.chat.base_url:
+            raise ValueError('Explicit local endpoint differs from the operation configuration')
+        if api_key and api_key != context.settings.chat.credential():
+            raise ValueError(
+                'Explicit local credential differs from its configured environment reference'
+            )
+        from docgen.llm.local import LocalOpenAICompatibleProvider
+
+        return LocalOpenAICompatibleProvider(context)
     if provider == 'openai':
         from docgen.llm.openai import OpenAIProvider
         return OpenAIProvider(
@@ -68,6 +94,11 @@ def make_batch_strategy(
     model: str,
     api_key: str,
     base_url: str | None = None,
+    context: InferenceContext | None = None,
+    library: Library | None = None,
+    job_specs: list[SpoolJobSpec] | None = None,
+    operation: str = 'generate',
+    scope: dict | None = None,
 ) -> BatchStrategy:
     """Construct a batch dispatch strategy by provider name.
 
@@ -86,12 +117,31 @@ def make_batch_strategy(
     Returns:
         A concrete strategy implementing ``BatchStrategy``.
     """
+    if provider == 'local':
+        if context is None or library is None or job_specs is None:
+            raise ValueError(
+                'Local batches require a bound context, library and complete job specifications'
+            )
+        context.validate_producer(model=model, provider=provider)
+        from docgen.llm.local_batch import LocalBatchStrategy
+
+        return LocalBatchStrategy(
+            context, library=library, job_specs=job_specs, operation=operation, scope=scope
+        )
     return batch_strategy_for(make_llm_provider(
         provider, model=model, api_key=api_key, base_url=base_url,
     ))
 
 
-def batch_strategy_for(provider: LLMProvider) -> BatchStrategy:
+def batch_strategy_for(
+    provider: LLMProvider,
+    *,
+    context: InferenceContext | None = None,
+    library: Library | None = None,
+    job_specs: list[SpoolJobSpec] | None = None,
+    operation: str = 'generate',
+    scope: dict | None = None,
+) -> BatchStrategy:
     """Wrap an already-constructed provider in its batch strategy.
 
     The strategy reuses the provider's authenticated transport (HTTP client,
@@ -103,7 +153,20 @@ def batch_strategy_for(provider: LLMProvider) -> BatchStrategy:
     Raises ``ValueError`` for a provider type with no batch backend.
     """
     from docgen.llm.anthropic import AnthropicProvider
+    from docgen.llm.local import LocalOpenAICompatibleProvider
     from docgen.llm.openai import OpenAIProvider
+
+    if isinstance(provider, LocalOpenAICompatibleProvider):
+        return make_batch_strategy(
+            'local',
+            model=provider.context.settings.chat.model,
+            api_key='',
+            context=context or provider.context,
+            library=library,
+            job_specs=job_specs,
+            operation=operation,
+            scope=scope,
+        )
 
     if isinstance(provider, OpenAIProvider):
         from docgen.llm.openai_batch import OpenAIBatchStrategy

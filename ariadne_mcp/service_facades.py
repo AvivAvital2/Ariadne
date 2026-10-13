@@ -82,6 +82,9 @@ class FacadesMixin:
         except ImportError:
             return 'LLM analysis unavailable (gap_analysis module not found).'
         except Exception as e:
+            from inference import raise_inference_error
+
+            raise_inference_error(e)
             _logger.warning('Gap analysis failed: %s', e)
             return f'LLM analysis failed: {e}'
 
@@ -184,7 +187,13 @@ class FacadesMixin:
 
     def build_graph(self, source_path: Path, extra_source_paths: list[Path] | None = None) -> dict:
         """Build the dependency graph from source files."""
-        return self.library.build_graph(source_path, extra_source_paths)
+        from contextlib import nullcontext
+
+        context = getattr(self, 'inference_context', None)
+        with context.write_session(reuse=context.session) if context else nullcontext():
+            if context:
+                context.open_library(operation='write').close()
+            return self.library.build_graph(source_path, extra_source_paths)
 
     def get_graph_stats(self) -> dict:
         """Get graph statistics."""

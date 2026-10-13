@@ -38,11 +38,11 @@ def db_with_chain(tmp_path: Path) -> Path:
         )
     conn.execute(
         'INSERT INTO scip_edges VALUES (?, ?, ?, ?, ?, ?)',
-        ('A', 'B', 'reference', 'app.py', 1, 'scip'),
+        ('A', 'B', 'call', 'app.py', 1, 'scip'),
     )
     conn.execute(
         'INSERT INTO scip_edges VALUES (?, ?, ?, ?, ?, ?)',
-        ('B', 'C', 'reference', 'app.py', 2, 'scip'),
+        ('B', 'C', 'call', 'app.py', 2, 'scip'),
     )
     conn.commit()
     conn.close()

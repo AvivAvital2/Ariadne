@@ -166,3 +166,54 @@ def test_parser_and_handlers_register_slice_commands():
     assert b.command == 'import-db'
     assert 'export-db' in core.HANDLERS
     assert 'import-db' in core.HANDLERS
+
+
+def test_slice_commands_work_through_main_without_inference(full_db, tmp_path, monkeypatch):
+    import sys
+    import config
+    from cli.main import main
+    from inference import InferenceContext
+
+    path = tmp_path / 'ariadne.yaml'
+    path.write_text('sources: {}\n')
+    monkeypatch.setattr(config, '_global_config', config.Config(path))
+
+    def no_inference(*args, **kwargs):
+        raise AssertionError('SQLite slice transfer must not invoke inference')
+
+    monkeypatch.setattr(InferenceContext, 'chat', property(no_inference))
+    monkeypatch.setattr(InferenceContext, 'embeddings', property(no_inference))
+    bundle = tmp_path / 'slice.db'
+    target = tmp_path / 'target.db'
+    monkeypatch.setattr(sys, 'argv', [
+        'ariadne', '--db', str(full_db['path']), 'export-db',
+        '--source', 'sdk', '--out', str(bundle),
+    ])
+    assert main() == 0
+    monkeypatch.setattr(sys, 'argv', ['ariadne', '--db', str(target), 'import-db', str(bundle)])
+    assert main() == 0
+    with Library(target) as library:
+        assert len(library.list_documents()) == full_db['count']
+
+
+def test_binary_slices_cannot_strip_or_bypass_model_binding(full_db, tmp_path):
+    from export_db import export_source_db, import_source_db
+    from library.model_binding import ModelBindingMismatch
+    from tests.test_model_binding import context
+
+    ctx = context(tmp_path, 'bound')
+    with ctx.write_session():
+        ctx.open_library(operation='write').close()
+    before = ctx.db_path.read_bytes()
+    out = tmp_path / 'out.db'
+    with pytest.raises(ModelBindingMismatch, match='provenance'):
+        export_source_db(ctx.db_path, 'sdk', out)
+    assert not out.exists()
+    export_source_db(full_db['path'], 'sdk', out)
+    with pytest.raises(ModelBindingMismatch, match='provenance'):
+        import_source_db(ctx.db_path, out)
+    new_target = tmp_path / 'new.db'
+    with pytest.raises(ModelBindingMismatch, match='provenance'):
+        import_source_db(new_target, ctx.db_path)
+    assert not new_target.exists()
+    assert ctx.db_path.read_bytes() == before

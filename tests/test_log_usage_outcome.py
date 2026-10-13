@@ -82,3 +82,12 @@ def test_log_usage_with_results_still_auto_marks_hit(library):
     assert row[0] == 'hit', (
         f"non-zero result should auto-mark 'hit'; got: {row[0]!r}"
     )
+
+
+def test_document_hit_stats_after_search_and_feedback(library):
+    assert library.get_doc_hit_stats('doc') == {'served': 0, 'hits': 0}
+    events = [library.log_usage('search', 'query', 1, ['doc']) for _ in range(4)]
+    library.mark_hit(events[0], 'score:8')
+    library.mark_hit(events[1], 'score:4')
+    library.mark_miss(events[2], 'score:9')
+    assert library.get_doc_hit_stats('doc') == {'served': 4, 'hits': 1}

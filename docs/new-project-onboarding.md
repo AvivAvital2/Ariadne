@@ -9,11 +9,11 @@ End-to-end guide for connecting a new codebase to Ariadne so Claude Code can sea
   ```bash
   git clone https://github.com/your-org/ariadne.git
   ```
-- **OpenAI API key** (used for doc generation and semantic search embeddings):
+- **OpenAI API key** (used for cloud doc generation and semantic search embeddings):
   ```bash
   export OPENAI_API_KEY=sk-...
   ```
-  Tip: Put this in a `.env` file in the Ariadne directory — the CLI loads it automatically via `python-dotenv`, and Ariadne's `.gitignore` already excludes `.env` so the key is never committed. (Generating with Claude needs `ANTHROPIC_API_KEY` too; OpenAI generation needs only this key — see the README's API-keys section.)
+  Tip: Put this in a `.env` file in the Ariadne directory — the CLI loads it automatically via `python-dotenv`, and Ariadne's `.gitignore` already excludes `.env` so the key is never committed. (Generating with Claude needs `ANTHROPIC_API_KEY` too; OpenAI generation needs only this key — see the README's API-keys section.) The local Qwen pair needs its two model endpoints, with no cloud-key requirement. See [supported models](supported-models.md) for the verified pairs, exact YAML and qualification limits.
 - **Claude Code** installed and working
 
 > **Running commands**: This guide uses bare `ariadne` commands, which requires installing Ariadne as a tool: `uv tool install /path/to/Ariadne`. If you haven't done that, prefix all commands with `uv run --directory /path/to/Ariadne` instead (e.g., `uv run --directory /path/to/Ariadne ariadne generate`).
@@ -30,6 +30,8 @@ sources:
 
 docs_base: ./docs
 ```
+
+Add the `llm`, `embeddings` and database settings from the [model configuration guide](supported-models.md). GPT-6 Astra and Claude Opus 5.5 use OpenAI embeddings; the local Qwen pair uses its own embedding endpoint. Give each pair separate main/staleness paths. `ARIADNE_CONFIG` selects a configuration outside the default `ariadne.yaml` search path; use it for both CLI commands and the MCP process.
 
 The `path` should point to your source code root. For more advanced setups (monorepo subdirectories, branch filtering, dependencies), see the [Source Configuration Schema](../README.md#source-configuration-fields) in the README.
 
@@ -49,10 +51,10 @@ ariadne list --source myproject
 You should see a list of generated documents (explanations, architecture docs, etc.).
 
 **What to expect:**
-- Generation uses the LLM model configured in `ariadne.yaml` (`defaults.model`, e.g., `claude-opus-4-8` or `gpt-5.5`)
+- Generation uses `llm.model` in the selected configuration, for example `claude-opus-5-5`, `gpt-6-astra` or the fixed local `Qwen/Qwen3.8-27B`. Legacy cloud `defaults.model` remains supported.
 - Duration depends on codebase size — a small project takes a few minutes, a large one can take 10-30 minutes
-- Concurrency is configurable: `ariadne generate --concurrency 5` (default: 3)
-- If generation fails partway through, re-run with `--force` to retry failed files
+- Hosted concurrency is configurable: `ariadne generate --concurrency 5` (default: 3). The local pair uses concurrency one.
+- Resume interrupted local durable runs with `ariadne batch resume local:RUN_UUID`. For live generation, rerun the command; completed, current work is skipped.
 - Use `--dry-run` to preview what would be generated without making API calls
 - Use `--verbose` to see detailed validation output for any failures
 
@@ -167,9 +169,10 @@ For automatic sync after every commit, set up a git post-commit hook. See [Autom
 - Check if branch filtering is hiding docs: try `ariadne search "your query" --include-all`
 
 **Generation fails or produces no output:**
-- Ensure `OPENAI_API_KEY` is set in your environment or in Ariadne's `.env` file
+- For cloud operation, ensure `OPENAI_API_KEY` is set in your environment or in Ariadne's `.env` file; Claude generation also needs `ANTHROPIC_API_KEY`
 - If using `.env`, verify it's in the Ariadne directory (not the target project)
-- Check the model name in `ariadne.yaml` — `defaults.model` must be a valid OpenAI model
+- For local operation, run `ariadne doctor --models` and verify both model and tokenization endpoints
+- Check that `llm.provider`, `llm.model`, embeddings and artifact pins match the selected pair and the library binding; changing models needs fresh databases
 - Run with `--verbose` to see detailed error output: `ariadne generate --source myproject --verbose`
 
 **Session hook not firing:**
@@ -181,3 +184,7 @@ For automatic sync after every commit, set up a git post-commit hook. See [Autom
 - The MCP server includes an `instructions` directive that tells Claude to query Ariadne first — this works automatically
 - If Claude still ignores Ariadne, ensure your CLAUDE.md includes the Ariadne integration section (created by `ariadne init`)
 - Check that permissions in `.claude/settings.local.json` don't block the tools
+
+## Local model onboarding
+
+For the local pair, follow [local models](local-models.md) and use a fresh database pair. `ariadne onboard --source NAME` performs only deterministic preview; it does not discover/index into the target corpus or generate catalog embeddings. `--approve` binds the pair and executes structural/catalog work, descriptions, generation, reverse augmentation, themes and cross-references as a durable foreground run. Keep the printed `local:` ID and resume it with `ariadne batch resume ID`. Local runs have no provider batch discount or 24-hour SLA. The supplied deployment remains a candidate until hardware qualification is recorded.

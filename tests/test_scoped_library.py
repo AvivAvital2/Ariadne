@@ -176,6 +176,11 @@ class TestScopedLibrary:
                 [doc_product.id, doc_extension.id],
             )
             assert {d.id for d in batch} == {doc_product.id}
+            ranked_ids = sorted([doc_product.id, doc_product2.id], reverse=True)
+            ranked = scoped.get_documents_batch(
+                [ranked_ids[0], doc_extension.id, ranked_ids[1]],
+            )
+            assert [d.id for d in ranked] == ranked_ids
 
             # get_related: neighbors of doc_product are doc_product2
             # (in-closure) and doc_extension2 (out-of-closure). Only

@@ -1,0 +1,79 @@
+x-runtime: &runtime
+  image: vllm/vllm-openai@sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3
+  platform: linux/amd64
+  environment:
+    VLLM_NO_USAGE_STATS: '1'
+    DO_NOT_TRACK: '1'
+    HF_HUB_DISABLE_TELEMETRY: '1'
+    HF_HUB_OFFLINE: '1'
+    TRANSFORMERS_OFFLINE: '1'
+  volumes: ['./artifacts:/models:ro']
+  shm_size: 8gb
+  networks: [inference]
+services:
+  ariadne:
+    profiles: [client]
+    image: ${ARIADNE_IMAGE:-ariadne:local-model-support}
+    build:
+      context: ../..
+    environment:
+      ARIADNE_CONFIG: /config/ariadne.yaml
+    volumes:
+      - ../app/local.yaml:/config/ariadne.yaml:ro
+      - ${ARIADNE_SOURCE_DIR:-../..}:/workspace:ro
+      - ariadne-state:/data
+    networks: [inference]
+    command: ["--help"]
+    stdin_open: true
+  chat:
+    <<: *runtime
+    ports: ['127.0.0.1:8000:8000']
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, device_ids: ['0'], capabilities: [gpu]}]
+    command:
+      - /models/chat
+      - --tokenizer
+      - /models/chat
+      - --served-model-name
+      - Qwen/Qwen3.8-27B
+      - --dtype
+      - bfloat16
+      - --language-model-only
+      - --reasoning-parser
+      - qwen3
+      - --max-model-len
+      - '32768'
+      - --max-num-seqs
+      - '1'
+      - --generation-config
+      - vllm
+  embeddings:
+    <<: *runtime
+    ports: ['127.0.0.1:8001:8000']
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, device_ids: ['1'], capabilities: [gpu]}]
+    command:
+      - /models/embeddings
+      - --tokenizer
+      - /models/embeddings
+      - --served-model-name
+      - Qwen/Qwen3-Embedding-8B
+      - --dtype
+      - bfloat16
+      - --runner
+      - pooling
+      - --pooler-config
+      - '{"seq_pooling_type":"LAST","use_activation":false}'
+      - --max-model-len
+      - '8192'
+      - --max-num-seqs
+      - '1'
+networks:
+  inference:
+    internal: true
+volumes:
+  ariadne-state:

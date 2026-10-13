@@ -1,0 +1,50 @@
+# Candidate local configuration. Complete hardware qualification before production.
+# Copy to ariadne.yaml. Use a separate fresh library AND staleness database.
+# Pin values below must match the deployed artifacts, not just /v1/models aliases.
+default_source: myproject
+sources:
+  myproject:
+    path: /path/to/my/repo
+    exclude: ['**/.env', '**/secrets.*']
+docs_base: ./local-docs
+themes_enabled: true
+defaults:
+  db_path: ./state/qwen-local.db
+  staleness_db_path: ./state/qwen-local_staleness.db
+llm:
+  provider: local
+  model: Qwen/Qwen3.8-27B
+  model_revision: REPLACE_WITH_IMMUTABLE_ARTIFACT_REVISION
+  tokenizer_revision: REPLACE_WITH_IMMUTABLE_TOKENIZER_REVISION
+  weight_format: bf16
+  base_url: http://127.0.0.1:8000/v1
+  api_key_env: null
+  context_window: 32768
+  max_output_tokens: 8192
+  max_concurrency: 1
+  timeout_seconds: 180
+  request_options:
+    temperature: 0.7
+    top_p: 0.8
+    top_k: 20
+    presence_penalty: 1.5
+    chat_template_kwargs: {enable_thinking: false}
+embeddings:
+  provider: local
+  model: Qwen/Qwen3-Embedding-8B
+  model_revision: REPLACE_WITH_IMMUTABLE_ARTIFACT_REVISION
+  tokenizer_revision: REPLACE_WITH_IMMUTABLE_TOKENIZER_REVISION
+  weight_format: bf16
+  base_url: http://127.0.0.1:8001/v1
+  api_key_env: null
+  dimensions: 3072
+  recipe: qwen3-embedding-8b-3072-v1
+  max_input_tokens: 8192
+  batch_size: 16
+  batch_max_tokens: 16384
+  max_concurrency: 1
+  timeout_seconds: 120
+execution:
+  batch_mode: auto
+  auto_batch_threshold: 200
+  max_attempts: 3

@@ -1,0 +1,386 @@
+{
+  "ledger": {
+    "generation": {
+      "service_tier": "default",
+      "id": "chatcmpl-RVqXk7KeyOxhjnsEiEIRmpFf",
+      "object": "chat.completion",
+      "created": 1791741255,
+      "model": "Qwen/Qwen3.8-27B",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "# Module: `module`\n\n## 1. Overview\n\nThis module provides a single function, `total_due`, which calculates the final amount due for a collection of line items after applying an optional discount.\n\nThe primary purpose of this function is to handle monetary calculations safely. By using Python's `decimal` module rather than floating-point arithmetic (`float`), it ensures precision in financial calculations, avoiding common issues like rounding errors that arise with binary floating-point representation.\n\n## 2. Key Concepts\n\n### Use of `Decimal` for Precision\nThe core design decision in this module is the exclusive use of `Decimal` objects for all arithmetic operations. This is critical for monetary values where standard `float` types can introduce inaccuracies (e.g., `0.1 + 0.2` not equaling `0.3` in floating-point math).\n\n### Line Item Representation\nThe input `lines` is expected to be an iterable of tuples, where each tuple contains two elements:\n1.  **Price**: The unit price of the item.\n2.  **Quantity**: The number of units.\n\nThe function converts the price to a string before creating a `Decimal` object (`Decimal(str(price))`). This specific conversion pattern is recommended by Python's documentation to avoid issues where a `float` input to `Decimal` retains its binary approximation error.\n\n### Floor at Zero\nThe function ensures that the result is never negative. If the discount exceeds the subtotal, the `max()` function returns `Decimal(\"0\")` instead of a negative value. This reflects a common business rule where customers do not receive a credit for over-discording discounts.\n\n## 3. How It Works\n\nThe `total_due` function operates in three distinct steps:\n\n1.  **Calculate Subtotal**:\n    *   It iterates over the `lines` iterable.\n    *   For each `(price, quantity)` pair, it converts the `price` to a `Decimal` via string conversion.\n    *   It multiplies this `Decimal` price by the `quantity`.\n    *   It sums all these products together, starting with an initial value of `Decimal(\"0\")`.\n    *   *Note:* The `quantity` is not explicitly converted to `Decimal`. This implies that `quantity` is expected to be an integer, as multiplying a `Decimal` by an `int` is supported and precise in Python.\n\n2.  **Apply Discount**:\n    *   The provided `discount` (defaulting to `Decimal(\"0\")`) is subtracted from the calculated `subtotal`.\n\n3.  **Ensure Non-Negative Result**:\n    *   The result of `subtotal - discount` is compared against `Decimal(\"0\")` using `max()`.\n    *   If the result is negative, it returns `Decimal(\"0\")`. Otherwise, it returns the calculated difference.\n\n## 4. Usage Examples\n\n```python\nfrom decimal import Decimal\n\n# Example 1: Standard calculation without discount\nlines = [\n    (\"10.50\", 2),  # Book at $10.50, quantity 2\n    (\"5.00\", 1),   # Pen at $5.00, quantity 1\n]\ntotal = total_due(lines)\nprint(total)  # Output: 26.00\n\n# Example 2: Calculation with discount\nlines = [\n    (\"10.00\", 10),\n]\ndiscount = Decimal(\"5.00\")\ntotal = total_due(lines, discount)\nprint(total)  # Output: 95.00\n\n# Example 3: Discount exceeds subtotal (floors at 0)\nlines = [\n    (\"10.00\", 1),\n]\ndiscount = Decimal(\"20.00\")\ntotal = total_due(lines, discount)\nprint(total)  # Output: 0\n\n# Example 4: Using float prices (handled via str conversion)\nlines = [\n    (10.1, 1),  # Float input\n]\ntotal = total_due(lines)\nprint(total)  # Output: 10.1 (Decimal('10.1'), not 10.0999999...)\n```\n\n## 5. Integration\n\n*   **Input Data**: The `lines` argument suggests this function is designed to consume data from an order system, shopping cart, or invoice generator where items are listed with prices and quantities. The flexibility of accepting prices as strings or floats (converted via `str`) makes it robust against upstream data inconsistencies.\n*   **Discount Handling**: The `discount` parameter accepts a `Decimal`. Callers must ensure they convert any external discount values (e.g., from a JSON API or database) to `Decimal` before passing them to this function to maintain type consistency.\n*   **Related Modules**: This module directly depends on the standard library `decimal` module. It does not depend on other custom modules, making it a pure utility function that can be imported and used independently within any part of the application that requires monetary summation.",
+            "reasoning_content": null,
+            "name": null,
+            "tool_calls": null
+          },
+          "finish_reason": "stop",
+          "logprobs": null
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 350,
+        "total_tokens": 1433,
+        "completion_tokens": 1083,
+        "estimated_cost": 0.002083125,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": null
+        }
+      }
+    },
+    "answer": {
+      "service_tier": "default",
+      "id": "chatcmpl-RYxqGCgNKxEm3cRREUF86XsN",
+      "object": "chat.completion",
+      "created": 1791741543,
+      "model": "Qwen/Qwen3.8-27B",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "The invoice total (final amount due) is calculated in three steps:\n\n1.  **Subtotal Calculation**: Iterate through each line item (price, quantity). Convert the price to a `Decimal` (via string conversion to avoid float errors), multiply it by the integer quantity, and sum all products starting from `Decimal(\"0\")`.\n2.  **Discount Application**: Subtract the optional `discount` (defaulting to `Decimal(\"0\")`) from the subtotal.\n3.  **Non-Negative Enforcement**: Use `max()` to ensure the result is never negative. If `subtotal - discount` is less than zero, the result is `Decimal(\"0\")`.\n\nAll arithmetic uses Python's `decimal` module for precision.\n\n**Source:** Module Module",
+            "reasoning_content": null,
+            "name": null,
+            "tool_calls": null
+          },
+          "finish_reason": "stop",
+          "logprobs": null
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 829,
+        "total_tokens": 988,
+        "completion_tokens": 159,
+        "estimated_cost": 0.00042247500000000006,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": null
+        }
+      }
+    }
+  },
+  "schedule": {
+    "generation": {
+      "service_tier": "default",
+      "id": "chatcmpl-RxVe9BQjWdJYP3PrY69vUL2o",
+      "object": "chat.completion",
+      "created": 1791741283,
+      "model": "Qwen/Qwen3.8-27B",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "# `insert_window` FAQ\n\n## Question\nHow do I use the `insert_window` function to add a time interval to a list of existing windows?\n\n## Answer\nYou pass in a list of existing intervals and a new candidate interval (as a tuple or list of `[start, end]`). The function returns `True` if the interval was successfully added and `False` if it overlapped with an existing interval.\n\n```python\nwindows = [(1, 5), (10, 15)]\n\n# This will succeed and modify `windows`\nresult = insert_window(windows, (6, 9))\nprint(result)  # True\nprint(windows) # [(1, 5), (6, 9), (10, 15)]\n\n# This will fail because (8, 12) overlaps with (10, 15)\nresult = insert_window(windows, (8, 12))\nprint(result)  # False\nprint(windows) # [(1, 5), (6, 9), (10, 15)]  # Unchanged\n```\n\n## Question\nWhat happens if I try to insert an interval where `end` is less than or equal to `start`?\n\n## Answer\nThe function raises a `ValueError` with the message `\"empty interval\"`. Intervals must have a strictly positive length where `end > start`.\n\n```python\nwindows = [(1, 5)]\n\n# Zero-length interval\ntry:\n    insert_window(windows, (3, 3))\nexcept ValueError as e:\n    print(e)  # \"empty interval\"\n\n# Inverted interval\ntry:\n    insert_window(windows, (7, 2))\nexcept ValueError as e:\n    print(e)  # \"empty interval\"\n```\n\n## Question\nHow does the function determine if intervals overlap? Does it treat touching intervals (e.g., `[1, 5]` and `[5, 10]`) as overlapping?\n\n## Answer\nNo, touching intervals are **not** considered overlapping. The overlap check uses strict inequalities: `start < old_end and old_start < end`. This means an interval is only considered overlapping if it shares an open interior with an existing interval.\n\n| Candidate | Existing | Overlap? | Reason |\n|-----------|----------|----------|--------|\n| `(1, 5)`  | `(5, 10)`| No       | `1 < 10` but `5 < 5` is `False` |\n| `(1, 6)`  | `(5, 10)`| Yes      | `1 < 10` and `5 < 6` are both `True` |\n| `(1, 5)`  | `(2, 4)` | Yes      | `1 < 4` and `2 < 5` are both `True` (nested) |\n\n```python\nwindows = [(1, 5)]\n\n# Touching interval: succeeds\ninsert_window(windows, (5, 10))\nprint(windows)  # [(1, 5), (5, 10)]\n```\n\n## Question\nDoes `insert_window` mutate the input list? What happens to the sort order?\n\n## Answer\nYes, the function mutates the `windows` list in place. On success, it appends the candidate and then sorts the entire list by interval start time (since intervals are compared as tuples, and Python sorts lists/tuples lexicographically).\n\n```python\nwindows = [(10, 20), (1, 5)]\n\ninsert_window(windows, (6, 9))\nprint(windows)  # [(1, 5), (6, 9), (10, 20)]\n```\n\nNote that if you need the original list to remain unchanged, you should pass a copy:\n\n```python\nimport copy\n\noriginal = [(10, 20), (1, 5)]\nwindows = copy.deepcopy(original)\n\ninsert_window(windows, (6, 9))\nprint(original)  # [(10, 20), (1, 5)]  # Unchanged\nprint(windows)   # [(1, 5), (6, 9), (10, 20)]\n```\n\n## Question\nIs there a performance concern with checking for overlaps?\n\n## Answer\nYes. The overlap check iterates through all existing intervals, giving it **O(n)** time complexity per insert (plus the **O(n log n)** sort). For large numbers of windows, this can become a bottleneck.\n\nIf you frequently insert and query windows, consider using an interval tree data structure (e.g., from the `intervaltree` package) for more efficient O(log n) lookups:\n\n```python\nfrom intervaltree import IntervalTree\n\ntree = IntervalTree()\ntree.addi(1, 5, \"window1\")\ntree.addi(10, 15, \"window2\")\n\n# Fast overlap check\nif not tree.overlaps(6, 9):\n    tree.addi(6, 9, \"window3\")\n```\n\nThe `insert_window` function is best suited for small-to-medium sized collections where simplicity outweighs performance.\n\n## Question\nWhat is the expected format for the `candidate` and `windows` items?\n\n## Answer\nBoth `candidate` and each item in `windows` must be an iterable of exactly two comparable numeric values: `[start, end]`. Common formats include:\n\n```python\n# Tuples\nwindows = [(1, 5), (10, 15)]\ninsert_window(windows, (6, 9))\n\n# Lists\nwindows = [[1, 5], [10, 15]]\ninsert_window(windows, [6, 9])\n\n# Mixed (works, but inconsistent style is discouraged)\nwindows = [(1, 5), [10, 15]]\ninsert_window(windows, (6, 9))\n```\n\nThe values must be comparable (e.g., `int`, `float`) for the overlap check and sorting to work correctly. Using `datetime` objects also works since they support comparison:\n\n```python\nfrom datetime import datetime\n\nstart1 = datetime(2024, 1, 1, 9, 0)\nend1 = datetime(2024, 1, 1, 10, 0)\nstart2 = datetime(2024, 1, 1, 11, 0)\nend2 = datetime(2024, 1, 1, 12, 0)\n\nwindows = [(start1, end1)]\ninsert_window(windows, (start2, end2))\n```\n\n## Question\nWhy does `insert_window` return `False` instead of raising an exception on conflict?\n\n## Answer\nReturning `False` treats a conflict as a normal, expected outcome rather than an error. This design is common for \"try to add\" operations where the caller simply wants to know if the add succeeded. It allows for clean conditional logic:\n\n```python\nif insert_window(windows, (6, 9)):\n    print(\"Window added\")\nelse:\n    print(\"Window already conflicts, skipping\")\n```\n\nIf you prefer an exception-based approach, you can wrap it:\n\n```python\ndef assert_insert(windows, candidate):\n    if not insert_window(windows, candidate):\n        raise ConflictError(f\"Interval {candidate} conflicts with existing windows\")\n```\n\n## Question\nCan I insert intervals in any order, or do they need to be pre-sorted?\n\n## Answer\nThe `windows` list does **not** need to be pre-sorted. The function handles unsorted input correctly because the overlap check examines every existing interval. After a successful insert, the list is sorted internally.\n\n```python\nwindows = [(20, 30), (5, 10)]  # Unsorted\n\ninsert_window(windows, (1, 4))\nprint(windows)  # [(1, 4), (5, 10), (20, 30)]  # Now sorted\n```\n\nHowever, if you repeatedly insert intervals, the repeated sorting becomes increasingly expensive. For batch inserts, it may be more efficient to collect all intervals first, then sort once:\n\n```python\nall_windows = []\nfor interval in new_intervals:\n    if insert_window(all_windows, interval):\n        pass  # Only adds non-conflicting intervals\n\nall_windows.sort()  # Final sort (though insert_window already keeps it sorted)\n```",
+            "reasoning_content": null,
+            "name": null,
+            "tool_calls": null
+          },
+          "finish_reason": "stop",
+          "logprobs": null
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 316,
+        "total_tokens": 2186,
+        "completion_tokens": 1870,
+        "estimated_cost": 0.00355365,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": null
+        }
+      }
+    },
+    "answer": {
+      "service_tier": "default",
+      "id": "chatcmpl-RMdTwrsxaF1m81IToPRnKEIP",
+      "object": "chat.completion",
+      "created": 1791741604,
+      "model": "Qwen/Qwen3.8-27B",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "Overlapping booking intervals are **rejected**. The `insert_window` function returns `False` and leaves the list of existing intervals unchanged if the new candidate interval overlaps with any existing interval.\n\nThe overlap detection uses strict inequalities (`start < old_end and old_start < end`), meaning that touching intervals (where `end` of one equals `start` of another) are **not** considered overlapping and are allowed.\n\nSource: **Module FAQ** (`insert_window` FAQ)",
+            "reasoning_content": null,
+            "name": null,
+            "tool_calls": null
+          },
+          "finish_reason": "stop",
+          "logprobs": null
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 1038,
+        "total_tokens": 1136,
+        "completion_tokens": 98,
+        "estimated_cost": 0.00033945000000000004,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": null
+        }
+      }
+    }
+  },
+  "labels": {
+    "generation": {
+      "service_tier": "default",
+      "id": "chatcmpl-R8RXIRwFfmRW3aQb8JS0iezs",
+      "object": "chat.completion",
+      "created": 1791741316,
+      "model": "Qwen/Qwen3.8-27B",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "### Silent Drop of Empty/Whitespace-Only Values\n**Trigger:** The function filters out any value that becomes an empty string after normalization and stripping. This is an implicit behavior change from a simple \"unique\" function, which typically preserves empty strings if they are present in the input. Developers expecting `[]` to become `[\"\"]` will get `[]` instead.\n**Affected Files:** `module`\n**Fix:** Explicitly document that empty strings are removed, or modify the logic to include empty strings if `value` is not `None`.\n**Category:** type-system\n**Example:**\n```python\n# Expectation: [\"\", \"a\"]\n# Actual: [\"a\"]\nunique_labels([\"\", \"  \", \"a\"]) \n```\n\n### Case-Insensitivity Mismatch with Original Values\n**Trigger:** Uniqueness is determined by `casefold()`, but the *original* NFC-normalized label is appended to the result. This means the first occurrence wins, but its case is preserved. If a developer expects the output to be standardized (e.g., always lowercase), they will be surprised by mixed-case outputs. Conversely, if they expect case-sensitive uniqueness, they will get fewer results than expected.\n**Affected Files:** `module`\n**Fix:** Clearly document that uniqueness is case-insensitive but output preserves original casing. If standardized output is needed, return `key` instead of `label`.\n**Category:** domain\n**Example:**\n```python\n# \"A\" and \"a\" are treated as the same.\n# Output preserves the case of the FIRST occurrence.\nunique_labels([\"Apple\", \"apple\"]) # Returns [\"Apple\"]\nunique_labels([\"apple\", \"Apple\"]) # Returns [\"apple\"]\n```\n\n### Unicode Normalization Form (NFC) Side Effects\n**Trigger:** `unicodedata.normalize(\"NFC\", ...)` can change the byte length and visual representation of strings. For example, pre-composed characters and decomposed characters are different in memory but look the same. If downstream systems expect NFD or NFKC, data may not match. Additionally, `NFC` does not handle all legacy combining characters perfectly, potentially leaving invisible characters that affect `.strip()` behavior in unexpected ways.\n**Affected Files:** `module`\n**Fix:** Ensure the application consistently uses NFC. If the input data source is known to use NFD, consider normalizing to the same form the database/search engine uses.\n**Category:** framework\n**Example:**\n```python\n# \"café\" (composed) vs \"cafe\\u0301\" (decomposed)\n# Both normalize to the same NFC string, so only one is kept.\nunique_labels([\"caf\\u00e9\", \"cafe\\u0301\"]) # Returns [\"café\"]\n```\n\n### Performance Trap with Large Lists\n**Trigger:** The function creates a new list and set for every call. While O(n), if `values` is a generator or a very large iterable, the intermediate list creation is fine, but the loop overhead in Python is significant for millions of items. More critically, if this is called frequently in a hot path, the lack of memoization or caching could be a bottleneck.\n**Affected Files:** `module`\n**Fix:** For high-performance needs, consider using `pd.unique` if polars/pandas is available, or implement in Cython/Rust if part of a larger optimized pipeline. For small lists, the current implementation is acceptable.\n**Category:** performance\n**Example:**\n```python\n# In a tight loop processing 1M rows, this function call overhead can be significant.\nfor row in large_dataframe:\n    unique_labels(row.labels)\n```\n\n### No Type Checking for Non-String Inputs\n**Trigger:** The function assumes all elements in `values` are strings. If a `None` or integer is passed, `unicodedata.normalize` will raise a `TypeError`. This is a strict runtime error that may crash pipelines if dirty data is present.\n**Affected Files:** `module`\n**Fix:** Add a type guard or coerce inputs to strings, or filter out non-string types explicitly.\n**Category:** type-system\n**Example:**\n```python\n# Crashes with TypeError: expected string or bytes-like object\nunique_labels([\"a\", None, 123])\n```",
+            "reasoning_content": null,
+            "name": null,
+            "tool_calls": null
+          },
+          "finish_reason": "stop",
+          "logprobs": null
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 307,
+        "total_tokens": 1219,
+        "completion_tokens": 912,
+        "estimated_cost": 0.00175605,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": null
+        }
+      }
+    },
+    "answer": {
+      "service_tier": "default",
+      "id": "chatcmpl-RwrxDAIol8ooXAAXDdGXwgTF",
+      "object": "chat.completion",
+      "created": 1791741650,
+      "model": "Qwen/Qwen3.8-27B",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "According to the **Module Gotchas** documentation:\n\n1.  **Normalization:** Labels are normalized using **Unicode Normalization Form C (NFC)** via `unicodedata.normalize(\"NFC\", ...)`. This ensures that visually identical characters with different byte representations (e.g., composed vs. decomposed) are treated as identical.\n2.  **Deduplication:** Uniqueness is determined by applying **`casefold()`** to the normalized strings, making the deduplication process **case-insensitive**. The **first occurrence** of a label wins, and its **original casing** (after NFC normalization) is preserved in the output. Empty or whitespace-only values are filtered out.\n\n**Source:** *Module Gotchas* (Sections: \"Case-Insensitivity Mismatch with Original Values\" and \"Unicode Normalization form (NFC) Side Effects\")",
+            "reasoning_content": null,
+            "name": null,
+            "tool_calls": null
+          },
+          "finish_reason": "stop",
+          "logprobs": null
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 785,
+        "total_tokens": 965,
+        "completion_tokens": 180,
+        "estimated_cost": 0.00045525000000000003,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": null
+        }
+      }
+    }
+  },
+  "archive": {
+    "generation": {
+      "service_tier": "default",
+      "id": "chatcmpl-RRQ5c8GM5gLp89BOyvJpdhLb",
+      "object": "chat.completion",
+      "created": 1791741342,
+      "model": "Qwen/Qwen3.8-27B",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "# Architecture Documentation: `archive_path` Module\n\n## 1. Component Overview\n\nThe `archive_path` module provides a single utility function, `archive_path`, designed to securely construct file paths within an archive extraction context. Its primary responsibility is to prevent **Path Traversal attacks** (also known as Zip Slip vulnerabilities) by validating that a given archive member name does not escape the intended extraction root directory.\n\nThis component acts as a security boundary between untrusted archive metadata (member names) and the filesystem. It ensures that any path derived from archive contents remains strictly contained within the specified `root` directory.\n\n## 2. Design Decisions\n\n### Security-First Path Construction\nThe core design decision is to treat archive member names as **untrusted input**. The function explicitly rejects any member name that:\n- Is an absolute path (e.g., `/etc/passwd`).\n- Contains path traversal sequences (`..` in any component).\n\nThis approach prioritizes safety over flexibility, which is appropriate for archive extraction scenarios where malicious or corrupted archives may attempt to write files outside the intended directory.\n\n### Use of `PurePosixPath`\nThe implementation uses `PurePosixPath` rather than `Path` for several reasons:\n- **Platform Independence**: `PurePosixPath` interprets path separators according to POSIX rules (`/`), regardless of the operating system. This is critical because archive formats (ZIP, TAR, etc.) store paths using POSIX conventions internally.\n- **No Filesystem Interaction**: `PurePosixPath` performs purely syntactic operations without checking for the existence of files or directories on the actual filesystem. This makes the function fast, side-effect-free, and deterministic—ideal for a validation step that may be called thousands of times during extraction.\n- **Consistent Behavior**: Using a \"pure\" path class ensures that the validation logic behaves identically on Windows, Linux, and macOS, even though the underlying OS path separator may differ.\n\n### Fail-Fast Exception Strategy\nInstead of silently sanitizing unsafe paths (which could lead to unexpected file locations), the function raises a `ValueError` immediately. This makes misuse or malicious input explicit and forces the caller to handle the error, preventing silent data corruption or security bypasses.\n\n## 3. Component Diagram\n\n```mermaid\ngraph TD\n    A[Caller / Extraction Engine] -->|root, member| B(archive_path function)\n    B --> C{Path Validation}\n    C -->|Absolute path?| D[Reject: ValueError]\n    C -->|Contains '..'?| D\n    C -->|Safe path| E[Path Joining]\n    E --> F[Return: PurePosixPath]\n    D --> G[Error Handling Layer]\n    \n    style D fill:#f99,stroke:#333\n    style F fill:#9f9,stroke:#333\n    style B fill:#eee,stroke:#333\n```\n\n## 4. Interfaces\n\n### Function Signature\n\n```python\ndef archive_path(root: PurePosixPath, member: str) -> PurePosixPath\n```\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `root` | `PurePosixPath` | The base directory within which all archive members will be extracted. |\n| `member` | `str` | The relative path of the member as stored in the archive (untrusted input). |\n\n### Return Value\n\n- **Success**: Returns a `PurePosixPath` representing the safe, fully-resolved path within `root`.\n- **Failure**: Raises `ValueError(\"unsafe member\")` if the `member` path is absolute or contains traversal sequences.\n\n### Integration Points\n\n- **Archive Extraction Engines**: This function should be called for every member before any file I/O operation occurs during archive extraction.\n- **Filesystem Layer**: The returned `PurePosixPath` is consumed by the filesystem abstraction layer to perform actual file writes.\n\n## 5. Data Flow\n\n1. **Input**: The caller provides a `root` path (the extraction destination) and a `member` name (from archive metadata).\n2. **Normalization**: The `member` string is wrapped in a `PurePosixPath` object to enable syntactic path analysis.\n3. **Validation**:\n   - Check if the path is absolute (`name.is_absolute()`).\n   - Check if any component of the path is `..` (`\"..\" in name.parts`).\n   - If either check fails, raise `ValueError`.\n4. **Path Joining**: If validation passes, the `member` path is joined with the `root` path using the `/` operator, producing a new `PurePosixPath`.\n5. **Output**: The resulting path is returned to the caller, which uses it to determine the final file location for extraction.\n\n```mermaid\nsequenceDiagram\n    participant Caller\n    participant archive_path\n    participant Filesystem\n\n    Caller->>archive_path: root=\"/extract\", member=\"safe/file.txt\"\n    archive_path->>archive_path: Validate member\n    archive_path-->>Caller: PurePosixPath(\"/extract/safe/file.txt\")\n    Caller->>Filesystem: Write to /extract/safe/file.txt\n\n    Caller->>archive_path: root=\"/extract\", member=\"../../etc/passwd\"\n    archive_path->>archive_path: Validate member\n    archive_path--xCaller: ValueError(\"unsafe member\")\n    Note over Caller: Handle error / skip member\n```\n\n## 6. Extension Points\n\n### Custom Validation Rules\nThe current implementation only checks for absolute paths and `..` traversal. To extend security, callers can add additional validation before or after calling `archive_path`:\n- **Symlink Check**: If the archive may contain symlinks, add logic to reject members that are symlinks (though this requires filesystem awareness, which `PurePosixPath` does not provide).\n- **Whitelist/Blacklist**: Pre-filter member names against a list of allowed or forbidden prefixes.\n- **Length Limits**: Reject paths that exceed filesystem length limits.\n\n### Platform-Specific Adaptation\nWhile `PurePosixPath` is used for consistency, if the target system requires Windows-style paths or has different security policies, the function can be wrapped or modified to:\n- Convert the final `PurePosixPath` to a `Path` object for OS-specific operations.\n- Apply additional normalization (e.g., resolving symbolic links in `root` before joining).\n\n### Error Handling Customization\nCallers can catch the `ValueError` and implement custom behavior:\n- Log the unsafe member name for auditing.\n- Skip the member and continue extraction.\n- Abort the entire extraction process.\n- Sanitize the path (though this is discouraged due to security risks).\n\n### Testing Hooks\nSince the function is pure (no side effects), it is highly testable. Unit tests can verify:\n- Safe paths are correctly joined.\n- Absolute paths raise `ValueError`.\n- Traversal paths (`../..`) raise `ValueError`.\n- Edge cases (e.g., `.` components, trailing slashes) behave as expected.",
+            "reasoning_content": null,
+            "name": null,
+            "tool_calls": null
+          },
+          "finish_reason": "stop",
+          "logprobs": null
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 348,
+        "total_tokens": 1857,
+        "completion_tokens": 1509,
+        "estimated_cost": 0.002881575000000001,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": null
+        }
+      }
+    },
+    "answer": {
+      "service_tier": "default",
+      "id": "chatcmpl-RU6bqQzRbfgWjTi8e5y0Xeyx",
+      "object": "chat.completion",
+      "created": 1791741692,
+      "model": "Qwen/Qwen3.8-27B",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "Archive member paths are validated by treating the member name as untrusted input and using the `PurePosixPath` class to check for two specific conditions:\n1. The path is not an **absolute path** (e.g., `/etc/passwd`).\n2. The path does **not contain path traversal sequences** (`..` in any component).\n\nIf either condition is met, a `ValueError` is raised immediately to prevent Path Traversal (Zip Slip) attacks. If the path is safe, it is joined with the `root` directory.\n\n**Document:** Module Architecture",
+            "reasoning_content": null,
+            "name": null,
+            "tool_calls": null
+          },
+          "finish_reason": "stop",
+          "logprobs": null
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 743,
+        "total_tokens": 864,
+        "completion_tokens": 121,
+        "estimated_cost": 0.000338325,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": null
+        }
+      }
+    }
+  },
+  "routing": {
+    "generation": {
+      "service_tier": "default",
+      "id": "chatcmpl-RJwr05EMe0IClQRVlCL3u81S",
+      "object": "chat.completion",
+      "created": 1791741345,
+      "model": "Qwen/Qwen3.8-27B",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "```mermaid\nflowchart TD\n    A[Event] -->|input| B[route_event]\n    C[Handlers] -->|input| B\n    B -->|dispatches to| D[Handler1]\n    B -->|dispatches to| E[Handler2]\n    D -->|processes| A\n    E -->|processes| A\n    D -->|result| F[Output]\n    E -->|result| F\n    subgraph module\n        B[route_event]\n    end\n```",
+            "reasoning_content": null,
+            "name": null,
+            "tool_calls": null
+          },
+          "finish_reason": "stop",
+          "logprobs": null
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 269,
+        "total_tokens": 385,
+        "completion_tokens": 116,
+        "estimated_cost": 0.00025785,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": null
+        }
+      }
+    },
+    "answer": {
+      "service_tier": "default",
+      "id": "chatcmpl-RcIMTZZteluEHOtZNqbpyKMn",
+      "object": "chat.completion",
+      "created": 1791741752,
+      "model": "Qwen/Qwen3.8-27B",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "Based on the **Module Diagram**, `route_event` receives an `Event` and `Handlers` as inputs and dispatches the event to `Handler1` or `Handler2` for processing. However, the documentation **does not specify** the exact logic or criteria used by `route_event` to choose between available handlers.\n\n**Document Used:** Module Diagram",
+            "reasoning_content": null,
+            "name": null,
+            "tool_calls": null
+          },
+          "finish_reason": "stop",
+          "logprobs": null
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 198,
+        "total_tokens": 272,
+        "completion_tokens": 74,
+        "estimated_cost": 0.00016845,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": null
+        }
+      }
+    }
+  },
+  "text": {
+    "generation": {
+      "service_tier": "default",
+      "id": "chatcmpl-RsT5L2jc6ZZdrMy6jwEQUVOq",
+      "object": "chat.completion",
+      "created": 1791741371,
+      "model": "Qwen/Qwen3.8-27B",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "# `split_records` Module Documentation\n\n## Overview\n\nThe `split_records` module provides a single utility function, `split_records`, designed to parse a string into a list of clean, non-empty records. Its primary purpose is to convert delimited text (where records are separated by a configurable delimiter) into a structured Python list, while simultaneously removing extraneous whitespace and filtering out empty entries.\n\nThis is a common pattern in data processing pipelines where raw input data might contain inconsistent spacing around delimiters or trailing separators that result in empty strings.\n\n## Key Concepts\n\n### Delimiter-Based Parsing\nThe function relies on Python's built-in `str.split()` method, which partitions a string at each occurrence of a specified separator character or substring. This makes the function highly flexible for different data formats (CSV-like, pipe-delimited, tab-delimited, etc.).\n\n### Data Cleaning via Comprehension\nRather than performing split and cleaning in separate steps, the function uses a list comprehension to combine three operations in a single pass:\n1. **Splitting**: Dividing the input string by the separator.\n2. **Stripping**: Removing leading and trailing whitespace from each part.\n3. **Filtering**: Excluding any parts that are empty (or whitespace-only) after stripping.\n\n### Default Configuration\nThe separator defaults to `\"|\"` (pipe), suggesting this function was likely designed with a specific use case in mind—possibly parsing pipe-delimited values from logs, configuration files, or simple data exports.\n\n## How It Works\n\nThe `split_records` function operates in three logical stages:\n\n### 1. Input Validation\n```python\nif not separator:\n    raise ValueError(\"separator must not be empty\")\n```\nThe function first checks if the `separator` argument is empty. This guards against calling `text.split(\"\")`, which would raise a `ValueError` in Python with a less descriptive message. By raising a custom `ValueError` here, the function provides clearer feedback to the caller.\n\n### 2. String Splitting\n```python\ntext.split(separator)\n```\nThe input `text` is split into a list of substrings at each occurrence of the `separator`. For example, `\"a|b|c\"` with separator `\"|\"` produces `[\"a\", \"b\", \"c\"]`.\n\n### 3. Cleaning and Filtering\n```python\n[part.strip() for part in ... if part.strip()]\n```\nEach substring from the split is:\n- **Stripped** of leading and trailing whitespace using `.strip()`.\n- **Filtered** to exclude any substring that becomes empty after stripping.\n\nThis two-use of `.strip()` is intentional:\n- The first `part.strip()` in the expression produces the cleaned value to be included in the result.\n- The second `part.strip()` in the `if` condition checks whether the cleaned value is non-empty. If the original part was `\" \"` (only spaces), `.strip()` returns `\"\"`, which is falsy, so it is excluded from the result.\n\n## Usage Examples\n\n### Basic Usage with Default Separator\n```python\n>>> split_records(\"foo|bar|baz\")\n['foo', 'bar', 'baz']\n```\n\n### Handling Whitespace Around Delimiters\n```python\n>>> split_records(\"foo | bar | baz\")\n['foo', 'bar', 'baz']\n```\nThe spaces around the pipe characters are removed by `.strip()`.\n\n### Filtering Empty Records\n```python\n>>> split_records(\"foo||bar|\")\n['foo', 'bar']\n```\nThe double pipe `||` produces an empty string between them, and the trailing pipe produces a final empty string. Both are filtered out.\n\n### Custom Separator\n```python\n>>> split_records(\"one,two,three\", separator=\",\")\n['one', 'two', 'three']\n\n>>> split_records(\"one;two;three\", separator=\";\")\n['one', 'two', 'three']\n```\n\n### Edge Cases\n```python\n>>> split_records(\"\")\n[]\n\n>>> split_records(\"   \")\n[]\n\n>>> split_records(\"|\")\n[]\n```\n\n### Error Case\n```python\n>>> split_records(\"a|b\", separator=\"\")\nValueError: separator must not be empty\n```\n\n## Integration\n\nNo directly related modules were identified in the codebase. The `split_records` function is a self-contained utility that can be imported and used independently:\n\n```python\nfrom module import split_records\n\nrecords = split_records(raw_input, separator=\"|\")\nfor record in records:\n    process(record)\n```\n\nBecause it has no dependencies on other parts of the system, it can be easily integrated into data ingestion scripts, log parsers, or any component that needs to normalize delimited text input into a clean list of values.",
+            "reasoning_content": null,
+            "name": null,
+            "tool_calls": null
+          },
+          "finish_reason": "stop",
+          "logprobs": null
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 343,
+        "total_tokens": 1346,
+        "completion_tokens": 1003,
+        "estimated_cost": 0.0019320750000000001,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": null
+        }
+      }
+    },
+    "answer": {
+      "service_tier": "default",
+      "id": "chatcmpl-RyxlOxgpo1SxqxBtguLmPZ8F",
+      "object": "chat.completion",
+      "created": 1791741817,
+      "model": "Qwen/Qwen3.8-27B",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "Based on the **`split_records` Module Documentation**, delimited text records are split and cleaned through the following process:\n\n1.  **Validation**: The function first validates that the `separator` is not empty, raising a `ValueError` if it is.\n2.  **Splitting**: The input string is divided using Python’s built-in `str.split()` method with the specified separator (defaulting to `|`).\n3.  **Cleaning and Filtering**: A list comprehension performs cleaning and filtering in a single pass:\n    *   **Stripping**: Leading and trailing whitespace is removed from each substring using `.strip()`.\n    *   **Filtering**: Substrings that become empty after stripping are excluded from the final result.\n\nThis combines the operations of splitting, stripping whitespace, and filtering out empty entries into one step.",
+            "reasoning_content": null,
+            "name": null,
+            "tool_calls": null
+          },
+          "finish_reason": "stop",
+          "logprobs": null
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 736,
+        "total_tokens": 909,
+        "completion_tokens": 173,
+        "estimated_cost": 0.00043477500000000004,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": null
+        }
+      }
+    }
+  }
+}
