@@ -35,7 +35,7 @@ def model_response(request, *, malformed=False):
         for i, input_text in enumerate(payload['input']):
             text = input_text.lower()
             axis = 3
-            if any(word in text for word in ('password', 'reset_token', 'recovery', 'expired')):
+            if any(word in text for word in ('password', 'reset_token', 'recovery', 'expired', 'start_reset', 'validate_token', 'consume_token')):
                 axis = 1
             elif any(word in text for word in ('cache', 'evict', 'lru', 'capacity')):
                 axis = 2
@@ -52,7 +52,18 @@ def model_response(request, *, malformed=False):
             200, json={'data': vectors[::-1], 'usage': {'prompt_tokens': 20, 'total_tokens': 20}}
         )
     text = json.dumps(payload)
-    if 'What exception does cache_put' in text:
+    if 'You write the question a developer would ask.' in text:
+        content = 'How does payments.accept_payment authorize a payment and record its receipt?'
+    elif 'payments.accept_payment' in text:
+        if 'C<n>: K<id>' in text:
+            content = 'C1: K1'
+        elif 'C<n>: S<id>' in text:
+            content = 'C1: S1 S2 S3'
+        elif 'IDs only' in text or 'IDs, not prose' in text:
+            content = 'M1 R1 B1'
+        else:
+            content = 'payments.accept_payment calls authorize_payment, which calls record_receipt.'
+    elif 'What exception does cache_put' in text:
         content = 'cache_put raises KeyError once negative capacity has emptied the cache.'
     else:
         name = (
@@ -67,7 +78,7 @@ def model_response(request, *, malformed=False):
     if model == 'claude-opus-5-5':
         assert request.url.host == 'api.anthropic.com'
         assert request.headers['x-api-key'] == 'test-anthropic'
-        assert payload['max_tokens'] in (1024, 8192)
+        assert payload['max_tokens'] in (80, 128, 256, 384, 512, 768, 1024, 4096, 8192)
         return httpx.Response(
             200,
             json={
@@ -259,3 +270,19 @@ async def test_unexpected_endpoint_is_rejected_before_sending(tmp_path):
             await client.post('https://wrong-endpoint.invalid/chat/completions', json={})
     assert not calls
     assert run.budget.requests == 0
+
+
+@pytest.mark.parametrize('profile', PROFILES.values(), ids=lambda p: p.name)
+@pytest.mark.asyncio
+async def test_clew_workflow_for_every_profile(tmp_path, profile):
+    report = await execute(
+        profile, tmp_path / profile.name, Budget(1), scenario='clews', pacing=0,
+        transport_factory=lambda: httpx.MockTransport(model_response),
+    )
+    assert report['status'] == 'passed', report
+    assert report['scenario'] == 'clews'
+    assert all(check['passed'] for check in report['checks'])
+    assert len(report['checks']) == 8
+    assert {request['model'] for request in report['requests']} == {
+        profile.model, profile.embedding_model,
+    }

@@ -11,6 +11,8 @@ While the project is at `0.x`, breaking changes may occur in any release.
 
 ### Added
 
+- Completed model-aware clew generation and embedding with writer locking, resumable batch writes, vector invalidation and focused Qwen/Claude/OpenAI workflow verification.
+
 - Added local inference for `Qwen/Qwen3.8-27B` and `Qwen/Qwen3-Embedding-8B`, with independent endpoints, exact token preflight, validated 4096 → normalized 3072 embeddings and no cloud fallback.
 - Added shared inference configuration, immutable model-pair binding, operation-scoped writer locking, atomic document/chunk/section replacement, export/import provenance and revision-aware retrieval caches. Model changes require a fresh library and staleness database.
 - Added resumable local jobs, bounded persisted retries, fixed workflow phases, offline job inspection and previews without inference or corpus writes.

@@ -597,6 +597,80 @@ async def workflows(run: Run, transport_factory=httpx.AsyncHTTPTransport) -> Non
         await context.aclose()
 
 
+async def clew_workflows(run: Run, transport_factory=httpx.AsyncHTTPTransport) -> None:
+    """Build and embed actual routes, then assert their use in MCP answer evidence."""
+    import config
+    from library.clew_embeddings import embed_clews
+    from library.clews import nearest_clew_matches
+    from llm import capture_completion_trace
+    from tests.clew_workflow import (
+        QUESTION,
+        ROUTE,
+        add_guide,
+        build_routes,
+        script,
+        seed_graph,
+        seed_theme,
+    )
+
+    cfg = configuration(run.profile, run.output)
+    context = InferenceContext.from_config(cfg)
+    service = AriadneService()
+    service._config, service._inference_context = cfg, context
+    previous_config = config._global_config
+    config._global_config = cfg
+    try:
+        with context.write_session():
+            library = context.open_library(operation='write')
+            await attach_clients(context, run, transport_factory)
+            seed_graph(library, run.output / 'sources', 'synthetic')
+            build_routes(library, 'synthetic')
+            count = await embed_clews(library, source_name='synthetic')
+            run.check('clew_embeddings_stored', count == 2, count=count)
+            before = len(run.report['requests'])
+            repeated = await embed_clews(library, source_name='synthetic')
+            run.check('clew_embedding_resume', repeated == 0 and len(run.report['requests']) == before)
+            seed_theme(library, 'synthetic')
+            await script('question_clews')['question_routes'](library, 'synthetic', True, None)
+            with library._conn_provider.acquire() as conn:
+                question, stored = conn.execute(
+                    'SELECT question, embedding FROM clews WHERE entry_symbol=?', (ROUTE[0],),
+                ).fetchone()
+            refreshed = await embed_clews(library, source_name='synthetic')
+            run.check('clew_question_and_reembedding', bool(question) and stored is None
+                      and refreshed == 1, question=question, refreshed=refreshed)
+            await add_guide(library, 'synthetic')
+        vector = await context.embeddings.embed_query(QUESTION)
+        with library._conn_provider.acquire() as conn:
+            matches = nearest_clew_matches(conn, vector, source_name='synthetic',
+                                           top_k=2, min_similarity=-1.0)
+        run.check('clew_semantic_retrieval', bool(matches) and matches[0].clew.route == ROUTE,
+                  routes=[match.clew.route for match in matches],
+                  scores=[match.similarity for match in matches])
+        with capture_completion_trace() as trace:
+            answer = await service.ask(QUESTION, source='synthetic')
+        save_json(run.output / 'clew-answer.json', answer.model_dump(mode='json'))
+        save_json(run.output / 'clew-completions.json', trace)
+        selected = answer.graph_diagnostics.get('clew_selection', {})
+        run.check('clew_selected_for_walk', selected.get('selected', 0) >= 1
+                  and not selected.get('error'), diagnostics=selected)
+        run.check('clew_route_in_answer_evidence',
+                  any(set(ROUTE).issubset(route) for route in answer.route_candidates.values()),
+                  route_candidates=answer.route_candidates)
+        prompts = '\n'.join(json.dumps(row['messages']) for row in trace)
+        run.check('clew_source_reaches_model', all(symbol in prompts for symbol in ROUTE)
+                  and "return {'receipt': amount}" in prompts,
+                  phases=[row['phase'] for row in trace])
+        run.check('clew_answer_completed', bool(answer.answer.strip()) and bool(trace)
+                  and all(row['status'] == 'ok' for row in trace)
+                  and 'synthesis unavailable' not in answer.answer,
+                  models=sorted({row['model'] for row in trace}))
+    finally:
+        await service.close()
+        await context.aclose()
+        config._global_config = previous_config
+
+
 async def execute(
     profile: Profile,
     output: Path,
@@ -604,6 +678,7 @@ async def execute(
     *,
     transport_factory=httpx.AsyncHTTPTransport,
     pacing: float = 15,
+    scenario: str = 'workflows',
 ) -> dict:
     run = Run(profile, output, budget, pacing=pacing)
     run.report['transport_mode'] = (
@@ -611,7 +686,9 @@ async def execute(
     )
     run.save()
     try:
-        await workflows(run, transport_factory)
+        run.report['scenario'] = scenario
+        workflow = {'workflows': workflows, 'clews': clew_workflows}[scenario]
+        await workflow(run, transport_factory)
         run.report['status'] = (
             'passed' if all(c['passed'] for c in run.report['checks']) else 'failed'
         )
@@ -634,6 +711,7 @@ async def execute(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--profile', choices=(*PROFILES, 'all'), default='qwen')
+    parser.add_argument('--scenario', choices=('workflows', 'clews'), default='workflows')
     parser.add_argument(
         '--budget-usd', type=float, default=1.0, help='Total cap across all selected profiles'
     )
@@ -660,7 +738,7 @@ def main(argv: list[str] | None = None) -> int:
     async def run_all():
         reports = []
         for profile in profiles:
-            report = await execute(profile, output / profile.name, budget)
+            report = await execute(profile, output / profile.name, budget, scenario=args.scenario)
             reports.append(report)
             save_json(
                 output / 'summary.json',

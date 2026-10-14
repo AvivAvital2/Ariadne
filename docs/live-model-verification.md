@@ -42,6 +42,19 @@ All profiles use the real provider factories, generator, validators, writer, dat
 
 The source-edit scenario exercises generation and writing directly, not CLI sync/staleness orchestration. This runner does not qualify local `/tokenize`, vLLM transport, local durable spool, pinned weights, GPU capacity, offline egress, provider batches or full CLI onboarding. Existing deterministic local tests cover their software paths; hosted results do not qualify a pinned local deployment.
 
+## Clew workflow
+
+Run the focused clew scenario with the same Qwen, Claude or OpenAI profiles:
+
+```sh
+uv run python -m tests.live_model_smoke --profile qwen --scenario clews \
+  --budget-usd 0.25 --output /path/to/new-clew-run
+```
+
+It builds payment and password-reset routes from a small source-backed synthetic compiler graph, generates a theme question and embeds routes through the configured model pair, checks question-driven invalidation, resumability and semantic ranking, and asks MCP a payment question. Checks require a selected clew, its intact route in answer evidence, source bodies in model prompts and successful completion calls. Exact prompts, replies and diagnostics are saved as `clew-completions.json` and `clew-answer.json`. This verifies the clew mechanism independently of the factual quality of generated prose; it does not qualify a real indexer or GPU deployment. Ordinary pytest runs the same scenario against HTTP fixtures for all three profiles.
+
+The 2026-10-14 hosted Qwen run passed all eight clew checks, including generated-question invalidation and re-embedding, using `Qwen/Qwen3.8-27B` and `Qwen/Qwen3-Embedding-8B`. Its 14 requests had an accounted upper cost of about $0.003.
+
 ## Evidence
 
 Each profile directory contains configuration with credential names only, exact source files, generated Markdown, request JSON bodies, response bodies, section results, MCP answer, the database pair and `report.json`. Request headers are not saved; credentials are redacted from response/error text. `average-before.py` preserves the source before editing; `documents/average-updated.md` contains its replacement documentation. Failure tracebacks are saved in `error.txt`. Top-level `summary.json` collects all profiles and shared spending accounting.

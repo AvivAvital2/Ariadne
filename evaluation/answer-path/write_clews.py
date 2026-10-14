@@ -14,7 +14,7 @@ different routes. Dedup happens in the store (:func:`library.clews.add_clew` key
 route), so overlap between strategies costs nothing.
 
 Writing is additive — a new table, no existing row touched — but it writes to a real store, so
-``--yes`` is required. Embedding is a separate step and needs a provider key; a clew with no
+``--yes`` is required. Embedding is a separate step using the configured model pair; a clew with no
 vector is stored and skipped by ``nearest_clews`` rather than ranked as distant.
 
 Usage
@@ -26,11 +26,16 @@ Usage
 from __future__ import annotations
 
 import argparse
-import sqlite3
+import asyncio
+from contextlib import nullcontext
 import sys
 import time
 from collections import defaultdict
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlite3 import Connection
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -56,7 +61,8 @@ def theme_members(conn, name: dict, source: str) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', default='databricks')
-    parser.add_argument('--db', default=None, help='store to write; default ./ariadne.db')
+    parser.add_argument('--db', default=None, help='store to write; defaults to the configured library')
+    parser.add_argument('--staleness-db', default=None, help='Explicit staleness database')
     parser.add_argument('--seeds-per-theme', type=int, default=200)
     parser.add_argument('--per-anchor', type=int, default=1)
     parser.add_argument('--min-steps', type=int, default=3)
@@ -69,11 +75,24 @@ def main() -> int:
         print('refusing to write without --yes (or use --dry-run)')
         return 2
 
-    from library.clews import add_clew, init_clews_schema
+    from config import get_config
+    from inference import InferenceContext
+
+    context = InferenceContext.from_config(
+        get_config(), db=args.db, staleness_db=args.staleness_db)
+    try:
+        with context.write_session() if not args.dry_run else nullcontext():
+            library = context.open_library(operation='plan' if args.dry_run else 'write')
+            with library._conn_provider.acquire() as conn:
+                return write_routes(conn, args, context.db_path)
+    finally:
+        asyncio.run(context.aclose())
+
+
+def write_routes(conn: Connection, args: argparse.Namespace, path: Path) -> int:
+    from library.clews import add_clew
     from library.structural_assembly import chain_from_seeds
 
-    path = args.db or str(ROOT / 'ariadne.db')
-    conn = sqlite3.connect(path)
     started = time.time()
     name, by_name, out, fan_in, dropped = load(conn, args.source)
     clusters = theme_members(conn, name, args.source)
@@ -123,10 +142,8 @@ def main() -> int:
 
     if args.dry_run:
         print(f'\ndry run: {len(routes):,} routes would be stored')
-        conn.close()
         return 0
 
-    init_clews_schema(conn)
     started = time.time()
     written = 0
     for route, strategy in routes.items():
@@ -141,15 +158,12 @@ def main() -> int:
             strategy=strategy)
         written += 1
         if written % 5000 == 0:
-            conn.commit()
             print(f'    stored {written:,}', flush=True)
-    conn.commit()
     stored = conn.execute('SELECT COUNT(*) FROM clews WHERE source_name = ?',
                           (args.source,)).fetchone()[0]
-    conn.close()
     print(f'\nstored {written:,} routes in {time.time() - started:.0f}s; '
           f'{stored:,} clews now in {path}')
-    print('next: embed them (needs a provider key), then run the arm')
+    print('next: embed them with the same model configuration, then run the arm')
     return 0
 
 

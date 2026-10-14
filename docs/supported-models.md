@@ -65,6 +65,8 @@ ARIADNE_CONFIG=/absolute/path/to/ariadne.local.yaml uv run ariadne doctor --mode
 
 Use the same environment setting when starting `ariadne mcp`, and restart the MCP server after switching. Paths under `defaults` resolve relative to the configuration file. [Docker usage](docker.md) describes the bundled configurations and Compose commands.
 
+Clew route generation and embedding use the same configured model pair and storage controls; see the [clew workflow](local-models.md#clews).
+
 Each new library binds to its generation model, embedding model and recipe. A different pair needs a fresh main database and staleness database generated from the original sources. Keep previous configurations to reopen their existing libraries. Import, `--force` and rebuild do not migrate between pairs. Existing populated unbound cloud libraries retain their legacy lifecycle; they cannot be adopted into local mode.
 
 Cloud batching selects the configured OpenAI or Anthropic batch API. Local batching runs a durable foreground worker, resumed through `ariadne batch resume local:RUN_UUID`; it has no cloud batch discount. Local previews make no inference calls or corpus writes. Local provider token charges are zero; hardware and runtime costs remain unestimated.

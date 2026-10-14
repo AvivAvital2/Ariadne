@@ -406,7 +406,10 @@ def add_clew(
         'ON CONFLICT(id) DO UPDATE SET steps=excluded.steps, files=excluded.files, '
         'strategy=excluded.strategy, '
         'question=COALESCE(excluded.question, clews.question), '
-        'embedding=COALESCE(excluded.embedding, clews.embedding)',
+        'embedding=CASE WHEN excluded.embedding IS NOT NULL THEN excluded.embedding '
+        'WHEN excluded.steps != clews.steps '
+        'OR COALESCE(excluded.question, clews.question) IS NOT clews.question THEN NULL '
+        'ELSE clews.embedding END',
         (clew_id, source_name, entry_symbol, json.dumps(steps), json.dumps(route),
          json.dumps(files), strategy, question,
          None if embedding is None else np.asarray(embedding, dtype=np.float32).tobytes()))
@@ -664,12 +667,17 @@ def clear_clew_embedding_cache() -> None:
 
 def _clew_embedding_stamp(conn: "Connection", source_name: str,
                            dimensions: int) -> tuple:
+    from library.model_binding import table_exists
+
     row = conn.execute(
         "SELECT COUNT(*), COALESCE(MAX(rowid), 0), COALESCE(SUM(LENGTH(embedding)), 0) "
         "FROM clews WHERE source_name=? AND embedding IS NOT NULL "
         "AND LENGTH(embedding)=?",
         (source_name, dimensions * np.dtype(np.float32).itemsize)).fetchone()
-    return tuple(int(value or 0) for value in row)
+    revision = (conn.execute(
+        'SELECT corpus_revision FROM library_state WHERE singleton_id=1').fetchone()[0]
+        if table_exists(conn, 'library_state') else 0)
+    return (*tuple(int(value or 0) for value in row), revision)
 
 
 def _clew_database_identity(conn: "Connection") -> str:

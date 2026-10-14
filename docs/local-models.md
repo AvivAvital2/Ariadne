@@ -33,6 +33,22 @@ The embedding recipe is `qwen3-embedding-8b-3072-v1`. Only search queries receiv
 
 Live operations prepare document, chunk and section vectors before atomically replacing their text and vectors. Metadata-only changes preserve vectors. Same-model rebuild refreshes all three levels and removes obsolete children. Corpus revisions invalidate retrieval caches across processes. Audience responses use the same model pair and scope/branch/revision-aware caches. Generated cross-reference decoration excludes authored text and catalogs.
 
+## Clews
+
+After structural indexing, build and embed clew routes with the same configuration as CLI and MCP:
+
+```sh
+export ARIADNE_CONFIG=/absolute/path/to/ariadne.local.yaml
+uv run python evaluation/answer-path/write_clews.py --source myproject --yes
+# Optional: add retrieval questions for theme-associated routes.
+uv run python evaluation/answer-path/question_clews.py --source myproject --yes
+uv run python evaluation/answer-path/embed_clews.py --source myproject --yes
+```
+
+All three tools honor configured library paths and accept `--db` and `--staleness-db` overrides. `--dry-run` inspects without inference or corpus writes. Writes use the library's model binding, writer lock and revision tracking. Embedding commits complete batches and skips completed rows on rerun. Changing a clew's question or steps invalidates its vector. Clew text uses the document embedding recipe; retrieval questions receive the query instruction. Existing OpenAI clew vectors cannot be reused in a Qwen library: build the routes in the fresh, Qwen-bound library and embed them there.
+
+The [hosted clew scenario](live-model-verification.md#clew-workflow) checks retrieval, route selection, source evidence and synthesis with the configured model pair. Local HTTP tests cover both deterministic and model-driven selection without a GPU.
+
 ## Durable local runs
 
 `--batch` runs a single foreground worker with SQLite persistence; it has no cloud batch discount or 24-hour SLA and never calls `/batches` or uploads batch files. Auto mode uses `execution.auto_batch_threshold`. Local onboarding and theme builds have durable phases; catalog synchronization uses embedding-only jobs. Catalog descriptions support `--batch`.

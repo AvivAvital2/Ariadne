@@ -54,7 +54,7 @@ For the Docker application image and ready-to-use cloud/local configuration, see
   ANTHROPIC_API_KEY=sk-ant-...    # only when generating with Claude (e.g. claude-opus-5-5)
   ```
 
-The [local Qwen suite](docs/local-models.md) uses separate chat and embedding servers and needs no cloud keys. Keep each model pair in its own library and staleness database.
+The [local Qwen suite](docs/local-models.md) uses separate chat and embedding servers and needs no cloud keys. Keep each model pair in its own library and staleness database. [Clew route building and embedding](docs/local-models.md#clews) use the same configured pair.
 
 ### Supported models
 
