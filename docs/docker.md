@@ -2,7 +2,17 @@
 
 The application image installs Ariadne and its locked runtime dependencies, including the CLI, browser UI, and stdio/HTTP MCP servers. With no command arguments it starts the browser on port 8765 and MCP on port 8000; explicit arguments run the CLI. The root `docker compose up --build` starts both services. It runs as UID 1000, stores state under `/data`, and reads source under `/workspace`. It includes cloud and local configurations with container paths; the local configuration already contains the serving manifest's artifact pins.
 
-The [supported-models guide](supported-models.md) covers the OpenAI, Claude and local Qwen pairs, their credentials and verification status. The application image serves any of these configurations; changing the model pair requires separate database paths.
+The [supported-models guide](supported-models.md) covers the OpenAI, Claude, hosted Qwen and local Qwen pairs, their credentials and verification status. The browser saves each onboarding's model choice with separate databases in the persistent state volume.
+
+To offer the hosted pairs in one container, populate the relevant keys in `.env` and run:
+
+```sh
+ARIADNE_SOURCE_DIR=/absolute/path/to/projects docker compose up --build -d
+```
+
+Open `http://127.0.0.1:8765`, browse to a project under `/workspace`, and compare model pairs and costs in Preview. The pair is saved only when you select **Start build**. OpenAI uses `OPENAI_API_KEY`; Claude also needs `ANTHROPIC_API_KEY`; hosted Qwen uses only `DEEPINFRA_API_KEY`. Credentials are needed for the build, not for cost previews. No model containers are needed for hosted inference. Local Qwen appears when configured in the root configuration or `onboarding_models`; its servers must be reachable from the application container when building.
+
+Saved projects live under `/data/web-projects/PROJECT_ID/`, including `ariadne.yaml`, `library.db`, `staleness.db` and generated documentation. The console reopens each project with its saved models after restart. One MCP child serves each opened project inside the application container; the default HTTP MCP endpoint retains the root configuration. CLI and external stdio MCP clients can use a project's saved `ARIADNE_CONFIG`.
 
 On 2026-10-11 the earlier CLI image was built and tested on **linux/amd64**. A subsequent local distribution test pushed it to an isolated registry, pulled it by digest into an empty Docker daemon, and verified the installed package, both Compose configurations and state persistence across container recreation. The CLI/MCP model fixtures run with external networking disabled. External publication is separate from this verification; build the image from this checkout:
 
@@ -31,9 +41,8 @@ docker compose -f deployments/local-v1/compose.yaml -f deployments/app/compose.w
 Open `http://127.0.0.1:8765`; MCP is at `http://127.0.0.1:18000/mcp`
 (`ARIADNE_MCP_PORT` can change that port). The separate web network makes these
 ports reachable while the local model servers stay on their inference network.
-Use a separate Compose project and state volume for each model pair. For
-existing external model servers, use a configuration with their reachable URLs
-as the mounted template. The wizard uses that configuration's model, shows zero
+For existing external model servers, use a configuration with their reachable URLs
+as the mounted template. The wizard offers that configuration alongside the cloud pairs, shows zero
 provider token charges for local inference, and leaves hardware/runtime cost
 unestimated. Local onboarding uses the same resumable pipeline as the CLI.
 

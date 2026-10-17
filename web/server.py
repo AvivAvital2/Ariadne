@@ -61,10 +61,58 @@ async def _read_json(request: web.Request) -> dict:
 def _make_tool_handler(tool: str):
     async def handler(request: web.Request) -> web.Response:
         args = await _read_json(request)
-        status, body = await dispatch_tool(request.app['bridge'], tool, args)
+        project_id = args.pop('project_id', None)
+        choice = args.pop('onboarding_model', None)
+        try:
+            if choice is not None:
+                if tool != 'ariadne_estimate' or project_id is not None or args.get('model'):
+                    raise ValueError('Compare model pairs in Preview before starting a build')
+                store = request.app.get('projects')
+                if store is None:
+                    raise ValueError('Project onboarding is not configured on this server')
+                async with store.preview(choice, args.get('source')) as preview:
+                    status, body = await dispatch_tool(preview, tool, args)
+                return web.json_response(body, status=status)
+            bridge = await _project_bridge(request.app, project_id, args)
+        except (ValueError, KeyError) as exc:
+            return web.json_response({'error': str(exc)}, status=400)
+        status, body = await dispatch_tool(bridge, tool, args)
+        if project_id and status == 200:
+            body = {**body, 'project_id': project_id}
         return web.json_response(body, status=status)
 
     return handler
+
+
+async def _project_bridge(app, project_id, args):
+    if project_id is None:
+        return app['bridge']
+    store = app.get('projects')
+    if store is None:
+        raise ValueError('Project onboarding is not configured on this server')
+    project = store.describe(project_id)
+    if args.get('model') and args['model'] != project['model']:
+        raise ValueError('This project uses the model pair saved during onboarding')
+    for field in ('source', 'name'):
+        if args.get(field) and args[field] != project['source']:
+            raise ValueError('Source does not belong to this project')
+    if args.get('path'):
+        from config import Config
+
+        cfg = Config(store.path(project_id))
+        if Path(args['path']).expanduser().resolve() != cfg.resolve_source(project['source']).resolve():
+            raise ValueError('Source path differs from the project saved during onboarding')
+    return await store.bridge(project_id)
+
+
+async def _onboarding_models(request):
+    store = request.app.get('projects')
+    return web.json_response({'models': store.choices() if store else [], 'default': 'configured'})
+
+
+async def _projects(request):
+    store = request.app.get('projects')
+    return web.json_response({'projects': store.list_projects() if store else []})
 
 
 async def _index(request: web.Request) -> web.Response:
@@ -214,13 +262,28 @@ async def _onboard_start(request: web.Request) -> web.Response:
     body = await _read_json(request)
     if not body.get('source'):
         return web.json_response({'error': 'source is required'}, status=400)
+    try:
+        project_id = body.get('project_id')
+        if body.get('onboarding_model'):
+            if project_id is not None or body.get('model'):
+                raise ValueError('Start with the model pair selected in Preview')
+            store = request.app.get('projects')
+            if store is None:
+                raise ValueError('Project onboarding is not configured on this server')
+            project = await store.start(body['onboarding_model'], body['source'],
+                                        themes_enabled=body.get('themes'))
+            project_id = project['id']
+        bridge = await _project_bridge(request.app, project_id, body)
+    except ValueError as exc:
+        return web.json_response({'error': str(exc)}, status=400)
     job_id = uuid.uuid4().hex[:12]
     queue: asyncio.Queue = asyncio.Queue()
     job = {'id': job_id, 'queue': queue}
     request.app['jobs'][job_id] = job
     job['task'] = asyncio.create_task(
-        _run_onboard(request.app['bridge'], _onboard_tool_args(body), queue))
-    return web.json_response({'job_id': job_id, 'status': 'running'})
+        _run_onboard(bridge, _onboard_tool_args(body), queue))
+    return web.json_response({'job_id': job_id, 'status': 'running',
+                              **({'project_id': project_id} if project_id else {})})
 
 
 async def _onboard_events(request: web.Request) -> web.StreamResponse:
@@ -262,11 +325,15 @@ async def _feedback(request: web.Request) -> web.Response:
     """Record 👍/👎 on an answer via its event_id (ariadne_log_hit / log_miss)."""
     body = await _read_json(request)
     tool, args = _feedback_call(body)
-    status, resp = await dispatch_tool(request.app['bridge'], tool, args)
+    try:
+        bridge = await _project_bridge(request.app, body.get('project_id'), {})
+    except ValueError as exc:
+        return web.json_response({'error': str(exc)}, status=400)
+    status, resp = await dispatch_tool(bridge, tool, args)
     return web.json_response(resp, status=status)
 
 
-def make_app(bridge=None, *, server_params=None, mcp_url=None) -> web.Application:
+def make_app(bridge=None, *, server_params=None, mcp_url=None, projects=None) -> web.Application:
     """Build the onboarding web app.
 
     Pass ``bridge`` to inject an MCP bridge (tests). Otherwise the app connects
@@ -276,6 +343,10 @@ def make_app(bridge=None, *, server_params=None, mcp_url=None) -> web.Applicatio
     """
     app = web.Application()
     app['jobs'] = {}
+    app['projects'] = projects
+    app.router.add_get('/api/onboarding-models', _onboarding_models)
+    app.router.add_get('/api/projects', _projects)
+    app.on_cleanup.append(_cleanup_projects)
     app.router.add_post('/api/onboard', _onboard_start)
     app.router.add_get('/api/onboard/events', _onboard_events)
     app.router.add_post('/api/feedback', _feedback)
@@ -295,6 +366,15 @@ def make_app(bridge=None, *, server_params=None, mcp_url=None) -> web.Applicatio
         app.on_startup.append(_startup_connect)
         app.on_cleanup.append(_cleanup_disconnect)
     return app
+
+
+async def _cleanup_projects(app):
+    tasks = [job['task'] for job in app['jobs'].values() if 'task' in job]
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    if app.get('projects') is not None:
+        await app['projects'].close()
 
 
 async def _startup_connect(app: web.Application) -> None:
@@ -355,8 +435,12 @@ def serve(host: str = '127.0.0.1', port: int = 8765, *,
     Connects to a remote ``ariadne mcp --http`` server when ``mcp_url`` is
     given; otherwise spawns the MCP server as a stdio child.
     """
+    from config import Config
+    from web.projects import ProjectStore
+
+    projects = ProjectStore(Config(Path(config_path) if config_path else None))
     if mcp_url:
-        app = make_app(mcp_url=mcp_url)
+        app = make_app(mcp_url=mcp_url, projects=projects)
     else:
-        app = make_app(server_params=stdio_server_params(config_path))
+        app = make_app(server_params=stdio_server_params(config_path), projects=projects)
     web.run_app(app, host=host, port=port)

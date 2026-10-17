@@ -452,13 +452,14 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
 .dd .ddbtn .rate{margin-left:auto;font-family:var(--mono);font-size:12.5px;color:var(--gold)}
 .dd .ddbtn .chev{color:var(--faint);transition:.2s}
 .dd.open .ddbtn .chev{transform:rotate(180deg)}
-.dd #modelSeg{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:30;display:none;max-height:360px;overflow:auto;margin-bottom:0;background:var(--panel);box-shadow:var(--shadow)}
+.dd #modelSeg{position:absolute;top:calc(100% + 6px);left:0;width:max(100%,600px);z-index:30;display:none;max-height:360px;overflow-y:auto;margin-bottom:0;background:var(--panel);box-shadow:var(--shadow)}
 .dd.open #modelSeg{display:block}
-.dd #modelSeg .ml{display:grid;grid-template-columns:1fr auto;column-gap:10px;row-gap:3px;padding:11px 13px}
+.dd #modelSeg .ml{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:10px;row-gap:3px;padding:11px 13px;overflow-wrap:anywhere}
 .dd #modelSeg .ml .mn{grid-area:1/1;font-weight:600;font-size:14px}
-.dd #modelSeg .ml .mp{grid-area:1/2;justify-self:end;font-family:var(--mono);font-size:11.5px;color:var(--muted);white-space:nowrap}
+.dd #modelSeg .ml .mp{grid-area:1/2;justify-self:end;font-family:var(--mono);font-size:11.5px;color:var(--muted);white-space:normal}
 .dd #modelSeg .ml .mv{grid-area:2/1;font-size:11.5px;color:var(--muted)}
 .dd #modelSeg .ml .me{grid-area:2/2;justify-self:end;font-family:var(--mono);font-size:13.5px;color:var(--gold);font-weight:600}
+.dd #modelSeg .ml[aria-disabled="true"]{opacity:.55;cursor:default}
 .ctl.speed .opts{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .ctl.speed .opt{padding:10px 13px}
 .ctl.speed .opt .ohead{justify-content:space-between}
@@ -489,7 +490,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
 .exp .r.langoff .dir{text-decoration:line-through}
 .exp .r.langoff .price{color:var(--faint);font-weight:400}
 .pane .exp .r .mi{width:16px;height:16px;margin-right:7px;vertical-align:-3px}
-@media(max-width:1180px){.p4split{grid-template-columns:1fr}.controls{flex-direction:column}.controls #themesToggle{width:auto}}
+@media(max-width:1180px){.p4split{grid-template-columns:1fr}.controls{flex-direction:column}.controls #themesToggle{width:auto}.dd #modelSeg{width:100%}}
 /* ── Preview/Generate: sticky cost bar + Miller-column file browser ── */
 /* The cost ribbon (#levers/.controls is position:sticky;top:0) is moved into
    #previewBar on step 3. A normal wrapper is only as tall as the ribbon, so the
@@ -692,6 +693,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
           <p class="lede">This phase is free — no API calls. Browse the tree, exclude what you don’t want documented, and watch the total update. Excluded folders stay listed, so you can change your mind.</p>
 
           <div id="previewBar"></div>
+          <p class="hint" id="onboardingModels" hidden>Compare model pairs and their estimated costs here. Your choice is saved only when you start the build; search and answers then use that pair.</p>
 
           <div class="adv" onclick="toggleCollapse('exPanel',this)" style="margin-top:4px"><span class="chev">▸</span> Exclusions — globs &amp; force-include skipped dirs</div>
           <div class="collapsed" id="exPanel" style="margin-top:10px">
@@ -723,6 +725,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
                   <div class="ddbtn" onclick="ddToggle(event)"><span class="nm" id="ddnm">…</span><span class="rate" id="ddrate"></span><span class="chev">▾</span></div>
                   <div class="modellist" id="modelSeg"></div>
                 </div>
+                <div class="hint" id="modelPair"></div>
               </div>
               <div class="ctl speed">
                 <div class="clbl">Speed</div>
@@ -837,6 +840,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   let cur=1; const TOTAL=STEPS.length;
 
   const state = {
+    projectId:null, onboardingModels:[], profileId:null, estimating:false,
     source:null, model:null, batch:false, concurrency:4, estimate:null, discover:null,
     excludeGlobs:[], excludeDirs:[], excludeFiles:[], exemptDirs:[], branches:[], depends:[],
     docTypes:null,            // null = all applicable; else the enabled subset
@@ -863,6 +867,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     bannerEl.style.border = '1px solid '+(err?'var(--red)':(ok?'var(--green)':'var(--line)'));
   }
   async function api(path, body){
+    if(state.projectId) body={...body, project_id:state.projectId};
     const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
     let d={}; try{ d=await r.json(); }catch(e){}
     if(!r.ok) throw new Error((d&&d.error)||('HTTP '+r.status));
@@ -1092,8 +1097,22 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   function applyLocalTotals(){ if(state.estimate) renderEstimate(state.estimate, false); }   // instant, no backend, no tree rebuild
   function bumpOpt(delta){ state.optDelta=(state.optDelta||0)+delta; }
   function renderModels(e){
-    const models=e.available_models||[];
-    const prov=(id)=>e.provider==='local'?'Local':(id.startsWith('claude')?'Anthropic':(id.startsWith('gpt')?'OpenAI':'Other'));
+    if(state.onboardingModels.length){
+      const groups={};
+      state.onboardingModels.forEach(m=>(groups[m.provider]=groups[m.provider]||[]).push(m));
+      const seg=$('modelSeg');
+      seg.innerHTML=Object.keys(groups).map(p=>'<div class="provhdr">'+esc(p==='local'?'Local':p==='deepinfra'?'DeepInfra':p==='anthropic'?'Anthropic':'OpenAI')+'</div>'+
+        groups[p].map(m=>'<div class="ml'+(m.id===state.profileId?' on':'')+'" data-model="'+esc(m.id)+'"'+(m.preview_available===false?' aria-disabled="true"':'')+' title="'+esc(m.label)+'">'+
+          '<span class="mn">'+esc(m.model)+'</span><span class="mv">'+esc(m.embedding_model)+'</span><span class="mp">'+esc(m.reason||'')+'</span><span class="me">'+(m.id===state.profileId&&e?'~'+money(modelTotal(e.model,state.batch)):'Preview cost')+'</span></div>').join('')).join('');
+      seg.querySelectorAll('.ml[data-model]').forEach(row=>row.onclick=()=>selectModel(row.dataset.model));
+      const choice=state.onboardingModels.find(m=>m.id===state.profileId);
+      setText('ddnm', choice?choice.model:'Choose a model pair');
+      setText('ddrate', e?'$'+e.input_per_million+' / $'+e.output_per_million:'');
+      setText('modelPair', choice?'Embeddings: '+choice.embedding_model+' · '+choice.provider:'');
+      return;
+    }
+    const models=(e.available_models||[]).filter(m=>!state.projectId||m.model===state.model);
+    const prov=(id)=>e.provider==='local'?'Local':(e.provider==='deepinfra'?'DeepInfra':(id.startsWith('claude')?'Anthropic':(id.startsWith('gpt')?'OpenAI':'Other')));
     const groups={}; models.forEach(m=>{ (groups[prov(m.model)]=groups[prov(m.model)]||[]).push(m); });
     let html='';
     Object.keys(groups).forEach(p=>{ html+='<div class="provhdr">'+p+'</div>';
@@ -1310,25 +1329,34 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   function renderEstimate(e, rebuild){
     if(!e) return;
     const local=e.provider==='local';
+    const liveOnly=local||e.batch_supported===false;
     $('cloudCostNote').hidden=local; $('localCostNote').hidden=!local;
     setText('localCostNote', e.estimate_note||'');
+    $('concV').parentElement.querySelectorAll('button').forEach(b=>b.disabled=local);
+    $('engBatch').style.display=liveOnly?'none':'';
+    if(liveOnly){ state.batch=false; $('engBatch').classList.remove('on'); $('engApi').classList.add('on'); }
     if(local){
-      state.batch=false; state.concurrency=e.max_concurrency||1;
+      if(!state.localControls) state.cloudConcurrency=state.concurrency;
+      state.concurrency=e.max_concurrency||1;
       setText('concV', state.concurrency);
-      $('concV').parentElement.querySelectorAll('button').forEach(b=>b.disabled=true);
-      $('engBatch').style.display='none';
-      $('engApi').classList.add('on');
       $('engApi').querySelector('.oname').textContent='Local';
       $('engApi').querySelector('.obadge').textContent='Resumable';
       $('engApi').querySelector('.odesc').textContent='Runs on your configured servers. Interrupted work can be resumed.';
+    } else {
+      if(state.localControls){ state.concurrency=state.cloudConcurrency||4; setText('concV',state.concurrency); }
+      $('engApi').querySelector('.oname').textContent='Live';
+      $('engApi').querySelector('.obadge').textContent='Immediate';
+      $('engApi').querySelector('.odesc').textContent=e.estimate_note||'Generate using the selected cloud provider.';
     }
+    state.localControls=local;
+    renderMatrix(e);
     const total = modelTotal(state.model, state.batch);
     setText('costV', band(total)); setText('cbTotal', band(total)); setText('embCost', money(e.embedding_cost_usd));
     setText('descCost', money(modelDescribe(state.model, state.batch)));
     const ea=$('engApi'), eb=$('engBatch');
     if(ea){ const p=ea.querySelector('.oprice'); if(p) p.textContent=band(modelTotal(state.model,false)); }
     if(eb){ const p=eb.querySelector('.oprice'); if(p) p.textContent=band(modelTotal(state.model,true)); }
-    renderModels(e); renderMatrix(e); renderExplorer(e, rebuild); renderScopeSummary();
+    renderModels(e); renderExplorer(e, rebuild); renderScopeSummary();
   }
   function renderReview(){
     const e=state.estimate;
@@ -1343,9 +1371,18 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   }
 
   // ════ actions ════
-  // Model switch is a pure local recompute — token volumes barely differ
-  // across models, so we re-scale the existing estimate instead of re-walking.
-  function selectModel(id){ state.model=id; const dd=$('modeldd'); if(dd) dd.classList.remove('open'); applyLocalTotals(); }
+  async function selectModel(id){
+    if(state.projectId||state.jobId) return;
+    const dd=$('modeldd'); if(dd) dd.classList.remove('open');
+    if(state.onboardingModels.length){
+      const choice=state.onboardingModels.find(m=>m.id===id);
+      if(!choice||choice.preview_available===false) return;
+      state.profileId=id; state.model=choice.model; state.estimate=null;
+      state.docTypeCost={}; state.fmtCost={};
+      renderModels(null);
+      await doEstimate();
+    } else { state.model=id; applyLocalTotals(); }
+  }
   function showDiscovering(){
     setText('langLabel', 'Walking the repository…');
     const bar=$('langBar'); if(bar) bar.innerHTML='';
@@ -1379,27 +1416,40 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
       wrap.insertBefore(bar, wrap.firstChild);
     }
   }
+  let estimateVersion=0;
   async function doEstimate(){
     if(!state.source){ banner('Add a source first (Step 1).','err'); return; }
+    const version=++estimateVersion;
+    state.estimating=true; $('nextBtn').disabled=true;
     showEstimating();
     banner('Estimating cost (no API calls)…');
-    const req={source:state.source};
-    if(state.model) req.model=state.model;
-    if(state.docTypes) req.doc_types=state.docTypes;
-    try{ const e=await api('/api/estimate', req); state.estimate=e; state.model=e.model; state.optDelta=0; renderEstimate(e); banner(''); }
+    ['costV','cbTotal','embCost','descCost'].forEach(id=>setText(id,'…'));
+    try{
+      await modelsReady;
+      await saveScope();
+      if(version!==estimateVersion) return;
+      const req={source:state.source};
+      if(state.profileId&&!state.projectId) req.onboarding_model=state.profileId;
+      else if(state.model) req.model=state.model;
+      const e=await api('/api/estimate', req);
+      if(version!==estimateVersion) return;
+      state.estimate=e; state.model=e.model; state.languageDocTypes=e.language_doc_types; state.optDelta=0; renderEstimate(e); banner('');
+    }
     catch(err){
+      if(version!==estimateVersion) return;
+      state.estimate=null;
+      setText('costV','Unavailable'); setText('cbTotal','Unavailable');
       banner('Estimate failed: '+err.message,'err');
       const wrap=$('browser'); const rf=wrap&&wrap.querySelector('.brefresh'); if(rf) rf.remove();
       if(wrap && !state.tree) wrap.innerHTML='<div class="bempty">Estimate failed — '+esc(err.message)+'</div>';
     }
-    finally{ const cv=$('costV'); if(cv) cv.classList.remove('cvload'); }
+    finally{ if(version===estimateVersion){ state.estimating=false; $('nextBtn').disabled=!state.estimate; const cv=$('costV'); if(cv) cv.classList.remove('cvload'); } }
   }
   // The per-source per-language doc-type override from the doc-type screen's
   // per-format excludes: {language: [doc types still enabled]} for every
   // language the user capped (omitted when nothing's excluded for it).
   function docTypesByLanguage(){
-    const e=state.estimate; if(!e) return {};
-    const ldt=e.language_doc_types||{}, out={};
+    const ldt=state.languageDocTypes||{}, out={};
     Object.keys(ldt).forEach(lang=>{
       const full=ldt[lang]||[];
       const enabled=full.filter(dt=>(state.fmtExcl[dt]||[]).indexOf(lang)<0);
@@ -1407,7 +1457,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     });
     return out;
   }
-  let scopeTimer;
+  let scopeTimer, scopePending=null, scopeSave=Promise.resolve();
   // Persist the scope to the server (debounced). ``reestimate`` re-walks the
   // tree via tiktoken — needed ONLY for glob/exempt changes, whose $ impact
   // can't be summed client-side. A file/dir toggle already knows the item's
@@ -1415,19 +1465,24 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   // local total — no tiktoken, no browser rebuild (so it also stays in place).
   function persistScope(reestimate){
     clearTimeout(scopeTimer);
+    scopePending={name:state.source, exclude:state.excludeGlobs.concat(state.excludeFiles), exclude_dirs:state.excludeDirs.slice(), exempt_dirs:state.exemptDirs.slice()};
+    if(state.dtTouched) scopePending.doc_types_by_language=docTypesByLanguage();
+    // In-flight estimates must not replace the cost of a newer scope.
+    estimateVersion++;
     scopeTimer=setTimeout(async()=>{
-      if(!state.source) return;
-      // Per-file exclusions ride along as path globs (find_catalog_files
-      // matches them via Path.match), kept out of the user-authored glob chips.
-      const exclude=state.excludeGlobs.concat(state.excludeFiles);
-      const payload={name:state.source, exclude, exclude_dirs:state.excludeDirs, exempt_dirs:state.exemptDirs};
-      // Persist the doc-type screen's per-format excludes only once the user has
-      // touched it — otherwise a scope save would clobber an existing override.
-      if(state.dtTouched) payload.doc_types_by_language=docTypesByLanguage();
-      try{ await api('/api/source_add', payload); }
+      try{ await saveScope(); }
       catch(err){ banner('Scope update failed: '+err.message,'err'); return; }
-      if(reestimate) await doEstimate();
+      if(reestimate||state.estimating) await doEstimate();
     }, 450);
+  }
+  async function saveScope(){
+    clearTimeout(scopeTimer);
+    if(scopePending&&state.source){
+      const payload=scopePending;
+      scopePending=null;
+      scopeSave=scopeSave.catch(()=>{}).then(()=>api('/api/source_add',payload));
+    }
+    return scopeSave;
   }
   function commitScope(){ persistScope(true); }   // glob/exempt/reset → re-walk
   function moveLevers(targetId){ const lv=$('levers'), t=$(targetId); if(lv && t && lv.parentNode!==t) t.appendChild(lv); }
@@ -1436,7 +1491,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     else if(n===2) await doDiscover();
     else if(n===3){ moveLevers('previewBar'); renderChips('exGlobs'); renderChips('exemptChips'); await doEstimate(); }
     else if(n===4){ moveLevers('generateBar'); if(state.estimate) applyLocalTotals(); else await doEstimate(); }
-    else if(n===5) renderReview();
+    else if(n===5){ await doEstimate(); renderReview(); }
   }
 
   window.next=async function(){
@@ -1448,6 +1503,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
         const r=await api('/api/source_add',{ name, path, set_default:(onState('defToggle',false)?true:null),
           depends_on:state.depends, ignore_staleness:onState('staleToggle',false),
           branches:state.branches, ref:(($('refInput')||{}).value||'').trim()||null });
+        if(r.project_id){ state.projectId=r.project_id; state.model=null; state.estimate=null; }
         state.source=r.source; renderGit(r.git);
         if(r.created===false){ banner('Source “'+r.source+'” already exists — updating it.',''); setTimeout(()=>banner(''),3000); } else banner('');
       }catch(err){ banner('Add source failed: '+err.message,'err'); return; }
@@ -1461,6 +1517,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   function toggleGen(which){ ['gen-config','gen-running','gen-ready'].forEach(id=>{ const el=$(id); if(el) el.style.display=(id===which?'block':'none'); }); }
   function showBuilding(){ toggleGen('gen-running'); const nb=$('nextBtn'); if(nb)nb.style.display='none'; const bb=$('backBtn'); if(bb)bb.style.visibility='hidden'; }
   function showReady(result){
+    if(state.projectId) document.querySelector('a[href^="/static/console.html"]').href='/static/console.html?project='+encodeURIComponent(state.projectId);
     toggleGen('gen-ready'); const nb=$('nextBtn'); if(nb)nb.style.display='none';
     if(result){
       const cov=Math.round(result.coverage_percent||0);
@@ -1473,12 +1530,19 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   function setProgress(pct){ const b=$('buildBar'); if(b) b.style.width=Math.max(0,Math.min(100,pct))+'%'; }
   window.startBuild=async function(){
     if(!state.source){ banner('Add a source first.','err'); return; }
+    if(state.estimating||!state.estimate){ banner('Review the cost estimate before starting.','err'); return; }
     showBuilding(); setRun('Starting generation…'); setProgress(0);
     try{
+      await saveScope();
       const types=(state.docTypes&&state.docTypes.length)?state.docTypes:null;
-      const r=await api('/api/onboard',{source:state.source, model:state.model, batch:state.batch, types, concurrency:state.concurrency});
+      const choice=state.onboardingModels.find(m=>m.id===state.profileId);
+      if(choice&&!choice.available) throw new Error(choice.reason);
+      const r=await api('/api/onboard',{source:state.source,
+        ...(state.profileId&&!state.projectId?{onboarding_model:state.profileId}:{model:state.model}),
+        batch:state.batch, types, concurrency:state.concurrency, themes:themesOn()});
       state.jobId=r.job_id;
-      try{ localStorage.setItem('ariadneOnboardJob', JSON.stringify({job_id:r.job_id, source:state.source})); }catch(e){}
+      state.projectId=r.project_id||state.projectId;
+      try{ localStorage.setItem('ariadneOnboardJob', JSON.stringify({job_id:r.job_id, source:state.source, project_id:state.projectId})); }catch(e){}
       streamBuild();
     }catch(err){ banner('Could not start generation: '+err.message,'err'); showBuildConfig(); }
   };
@@ -1565,6 +1629,14 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     applyLocalTotals();   // live/batch is a known ratio — recompute locally, no re-walk
   })); }
 
+  const modelsReady=fetch('/api/onboarding-models').then(r=>r.json()).then(data=>{
+    state.onboardingModels=data.models||[];
+    if(!state.onboardingModels.length) return;
+    $('onboardingModels').hidden=false;
+    const preferred=state.onboardingModels.find(m=>m.id===data.default&&m.preview_available!==false)||state.onboardingModels.find(m=>m.preview_available!==false);
+    state.profileId=preferred?preferred.id:null;
+    renderModels(null);
+  }).catch(()=>{});
   render();
   // Resume a build started in a previous browser session (the "come back
   // later" path); otherwise start the wizard at the current step.
@@ -1572,6 +1644,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     let saved=null; try{ saved=JSON.parse(localStorage.getItem('ariadneOnboardJob')||'null'); }catch(e){}
     if(saved && saved.job_id){
       state.jobId=saved.job_id; if(saved.source) state.source=saved.source;
+      state.projectId=saved.project_id||null;
       cur=TOTAL; render(); showBuilding(); setRun('Reconnecting to your build…'); streamBuild();
     } else {
       onEnter(cur);   // initial step (Connect) → load the dependency picker, etc.

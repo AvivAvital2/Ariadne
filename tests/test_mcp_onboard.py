@@ -116,6 +116,63 @@ class _FakeCtx:
         pass
 
 
+@pytest.mark.parametrize('provider,model', [
+    ('deepinfra', 'Qwen/Qwen3.8-27B'),
+    ('anthropic', 'claude-opus-5-5'),
+    ('openai', 'gpt-6-astra'),
+])
+async def test_hosted_onboarding_keeps_configured_transport_in_nested_phases(
+    provider, model, monkeypatch, tmp_path, _isolated_config,
+):
+    import httpx
+    import yaml
+    from cli.onboard_pipeline import OnboardResult
+    from inference import current_context
+    from llm import chat_complete
+
+    source = tmp_path / 'source'
+    source.mkdir()
+    data = {
+        'llm': {'provider': provider, 'model': model,
+                'base_url': 'https://configured-chat.test/v1', 'api_key_env': 'CHAT_TEST_KEY'},
+        'embeddings': {'provider': 'deepinfra' if provider == 'deepinfra' else 'openai',
+                       'model': 'Qwen/Qwen3-Embedding-8B' if provider == 'deepinfra' else 'text-embedding-3-large',
+                       'base_url': 'https://configured-embeddings.test/v1', 'api_key_env': 'EMBED_TEST_KEY'},
+        'sources': {'source': str(source)}, 'default_source': 'source',
+    }
+    _isolated_config.write_text(yaml.safe_dump(data))
+    monkeypatch.setenv('CHAT_TEST_KEY', 'chat-test-secret')
+    monkeypatch.setenv('EMBED_TEST_KEY', 'embed-test-secret')
+    requests = []
+
+    def respond(request):
+        assert request.url.host == 'configured-chat.test'
+        key = 'x-api-key' if provider == 'anthropic' else 'authorization'
+        assert 'chat-test-secret' in request.headers[key]
+        requests.append(request)
+        return httpx.Response(200, json={
+            'choices': [{'message': {'content': 'Generated documentation.'}, 'finish_reason': 'stop'}],
+            'content': [{'type': 'text', 'text': 'Generated documentation.'}],
+            'stop_reason': 'end_turn',
+        })
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda *a, **kw: original(
+        *a, **kw, transport=httpx.MockTransport(respond)))
+
+    async def pipeline(*_args, **_kwargs):
+        context = current_context()
+        assert context is not None and context.session is not None
+        assert context.settings.chat.provider == provider
+        assert context.settings.embeddings.base_url == 'https://configured-embeddings.test/v1'
+        assert await chat_complete(user_prompt='Generate') == 'Generated documentation.'
+        return OnboardResult(docs_written=1, themes_found=0)
+
+    monkeypatch.setattr('cli.onboard_pipeline.run_onboard_pipeline', pipeline)
+    result = await ariadne_onboard('source', doc_types=['explanation'])
+    assert result.model == model and len(requests) == 1
+
+
 async def test_onboard_tool_evolves_through_contract(monkeypatch, tmp_path):
     from cli.onboard_pipeline import OnboardResult
 

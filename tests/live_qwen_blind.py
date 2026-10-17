@@ -114,7 +114,7 @@ async def workflows(run, transport_factory):
             writer = LibraryWriter(library)
             async with DocGenerator(
                 GeneratorConfig(
-                    provider='openai', model=run.profile.model, inference_context=context
+                    provider=run.profile.provider, model=run.profile.model, inference_context=context
                 )
             ) as generator:
                 for name, doc_type, source, _ in CASES:
@@ -264,7 +264,8 @@ async def workflows(run, transport_factory):
         )
     finally:
         await reopened.aclose()
-    data['llm']['model'] = 'gpt-6-astra'
+    data['llm'] = {'provider': 'openai', 'model': 'gpt-6-astra'}
+    data['embeddings'] = {'provider': 'openai'}
     save_json(output / 'incompatible-config.json', data)
     incompatible = None
     rejected = False

@@ -96,6 +96,10 @@ class EmbeddingConfig:
             raise ValueError('Local embedding base_url is required')
         if self.base_url is not None:
             return self.base_url
+        if self.provider == 'deepinfra':
+            from model_config import DEEPINFRA_URL
+
+            return DEEPINFRA_URL
         return os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1')
 
     def get_api_key(self) -> str:
@@ -104,9 +108,12 @@ class EmbeddingConfig:
             return self.local_settings.credential() or ''
         if self.api_key is not None:
             return self.api_key
-        key = os.environ.get('OPENAI_API_KEY')
+        from model_config import credential_env
+
+        name = credential_env(self.provider)
+        key = os.environ.get(name)
         if key is None:
-            raise ValueError('No API key provided and OPENAI_API_KEY environment variable not set')
+            raise ValueError(f'No API key provided and {name} environment variable not set')
         return key
 
 
@@ -228,6 +235,24 @@ class EmbeddingService:
             raise ValueError(
                 'Local embed/embed_batch requires an explicit query or document purpose'
             )
+        if self.config.provider == 'deepinfra':
+            from model_config import query_input
+
+            purpose = purpose or 'document'
+            if purpose not in ('query', 'document'):
+                raise ValueError('Qwen embeddings require an explicit query or document purpose')
+            if any(not isinstance(text, str) or not text.strip() for text in texts):
+                raise ValueError('Qwen embedding inputs must not be empty')
+            if purpose == 'query':
+                texts = [query_input(text) for text in texts]
+            batch_size = self.context.settings.embeddings.batch_size if self.context else 16
+            results = []
+            for start in range(0, len(texts), batch_size):
+                results.extend(await self._embed_cloud(texts[start:start + batch_size]))
+            return results
+        return await self._embed_cloud(texts)
+
+    async def _embed_cloud(self, texts: list[str]) -> list[NDArray[np.float32]]:
         if not texts:
             return []
         # Empty/whitespace texts get zero vectors IN PLACE — the API would
@@ -250,7 +275,9 @@ class EmbeddingService:
             'model': self.config.model,
             'input': texts,
         }
-        if self.config.dimensions is not None:
+        if self.config.provider == 'deepinfra':
+            payload['encoding_format'] = 'float'
+        elif self.config.dimensions is not None:
             payload['dimensions'] = self.config.dimensions
 
         import httpx
@@ -297,6 +324,8 @@ class EmbeddingService:
             raise last_error  # type: ignore[misc]
 
         data = response.json()
+        if self.config.provider == 'deepinfra':
+            return reduce_local_embeddings(data, len(texts))
         embeddings: list[NDArray[np.float32]] = []
 
         # Sort by index to ensure order matches input
@@ -316,6 +345,8 @@ class EmbeddingService:
         return embeddings
 
     async def embed_query(self, text: str) -> NDArray[np.float32]:
+        if self.config.provider == 'deepinfra':
+            return await self.embed(text, purpose='query')
         if self.config.provider != 'local':
             return await self.embed(text)
         from model_config import query_input

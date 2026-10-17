@@ -221,7 +221,8 @@ def _build_generate_hooks(cfg, model, db_path=None) -> tuple[dict, bool]:
 
     caching_enabled = model.startswith('claude')
     try:
-        store = CalibrationStore(str(db_path or cfg.db_path))
+        path = Path(db_path or cfg.db_path)
+        store = CalibrationStore(str(path)) if path.is_file() else None
     except Exception:
         store = None  # fresh project / no db → hooks fall back to heuristics
     input_for, output_for = _calibrated_generate_hooks(
@@ -376,12 +377,13 @@ def _estimate_catalog_describe(
         return count, None, None
     ipm, opm = rates
     try:
-        store = CalibrationStore(str(db_path or cfg.db_path))
+        path = Path(db_path or cfg.db_path)
+        store = CalibrationStore(str(path)) if path.is_file() else None
     except Exception:
         store = None
     desc_in, desc_out = _describe_tokens_per_call(store, model)
     cost = count * desc_in * ipm / 1_000_000 + count * desc_out * opm / 1_000_000
-    return count, cost, cost * 0.5
+    return count, cost, cost if cfg.provider == 'deepinfra' else cost * 0.5
 
 
 def build_estimate(cfg, source_name, *, model, doc_types=None, db_path=None) -> GenerateEstimate:

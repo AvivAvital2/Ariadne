@@ -1,6 +1,6 @@
 # Supported model configurations
 
-Ariadne supports native OpenAI and Anthropic generation with OpenAI embeddings, and a fixed local Qwen generation/embedding pair. CLI generation, MCP synthesis and retrieval use the same configured pair. The MCP client, such as Claude Code, can use its own model independently of Ariadne's backend.
+Ariadne supports native OpenAI and Anthropic generation with OpenAI embeddings, and a fixed Qwen generation/embedding pair served locally or by DeepInfra. CLI generation, MCP synthesis and retrieval use the same configured pair. The MCP client, such as Claude Code, can use its own model independently of Ariadne's backend.
 
 ## Model pairs and verification
 
@@ -12,7 +12,35 @@ Ariadne supports native OpenAI and Anthropic generation with OpenAI embeddings, 
 
 The named cloud models are the pairs exercised in the live reports, not an exhaustive vendor model catalog. Existing cloud configuration remains compatible; the built-in CLI generation default is still `gpt-5.5`. Set `llm.model` explicitly to select the verified models above.
 
-The separate hosted Qwen test profile uses DeepInfra and `DEEPINFRA_API_KEY`. Its six-case implementation run passed 41 checks; an earlier model factual error remains documented. The runner supplies a hosted embedding adapter and does not establish a supported local deployment or a general DeepInfra configuration preset.
+Hosted Qwen uses the production `deepinfra` provider and `DEEPINFRA_API_KEY` for both models. It sends separate query/document embedding inputs, validates native 4096-dimensional responses and stores normalized 3072-dimensional prefixes. Its embedding identity differs from local Qwen; their libraries cannot be mixed. Hosted inference is paid and supports live execution, without a batch discount. The earlier six-case implementation run passed 41 checks; an earlier model factual error remains documented.
+
+## Choose models during onboarding
+
+The browser's Preview step offers OpenAI, Claude, hosted Qwen and configured local Qwen pairs in one application. Switch pairs to compare generation and embedding costs for the current source and scope before spending anything. Previews make no inference calls and save no project library; cloud costs can be previewed without credentials. Missing credentials or local endpoint configuration are shown beside the choices. Only **Start build** saves the selected pair under `web-projects/PROJECT_ID/ariadne.yaml`, alongside that project's library and staleness database. Search, answers and clews use the saved pair automatically. The console's project selector reopens existing libraries; it does not change their models.
+
+The configured pair is offered as `configured`. Additional deployment configurations can be supplied under `onboarding_models` in the application's root configuration, with each entry containing `llm`, `embeddings` and optional `execution` blocks. For example, put the blocks from the local preset under `onboarding_models.qwen-local` to offer local Qwen beside the cloud choices. Credentials remain environment-variable references and are required when starting a cloud build. After a build starts, changing pairs requires a new onboarding; existing libraries retain their models.
+
+For CLI or an external MCP client, set `ARIADNE_CONFIG` to the saved project's configuration. The container's default HTTP MCP endpoint continues to use its root configuration.
+
+## Configure hosted Qwen
+
+The bundled [hosted Qwen preset](../deployments/app/hosted-qwen.yaml) uses this pair:
+
+```yaml
+llm:
+  provider: deepinfra
+  model: Qwen/Qwen3.8-27B
+  api_key_env: DEEPINFRA_API_KEY
+embeddings:
+  provider: deepinfra
+  model: Qwen/Qwen3-Embedding-8B
+  dimensions: 3072
+  api_key_env: DEEPINFRA_API_KEY
+execution:
+  batch_mode: never
+```
+
+Both endpoints default to `https://api.deepinfra.com/v1/openai`. Hosted Qwen needs no OpenAI key, local GPU or `/tokenize` endpoint. Previews use DeepInfra's undiscounted [chat](https://deepinfra.com/Qwen/Qwen3.8-27B) and [embedding](https://deepinfra.com/Qwen/Qwen3-Embedding-8B) rates; local inference still reports zero provider charges.
 
 ## Configure the cloud suite
 
@@ -67,11 +95,11 @@ Use the same environment setting when starting `ariadne mcp`, and restart the MC
 
 Clew route generation and embedding use the same configured model pair and storage controls; see the [clew workflow](local-models.md#clews).
 
-Each new library binds to its generation model, embedding model and recipe. A different pair needs a fresh main database and staleness database generated from the original sources. Keep previous configurations to reopen their existing libraries. Import, `--force` and rebuild do not migrate between pairs. Existing populated unbound cloud libraries retain their legacy lifecycle; they cannot be adopted into local mode.
+Each new library binds to its generation model, embedding model and recipe. A different pair needs a fresh main database and staleness database generated from the original sources. Keep previous configurations to reopen their existing libraries. Import, `--force` and rebuild do not migrate between pairs. Existing populated unbound OpenAI/Claude libraries retain their legacy lifecycle; they cannot be adopted into local or hosted Qwen mode.
 
 Cloud batching selects the configured OpenAI or Anthropic batch API. Local batching runs a durable foreground worker, resumed through `ariadne batch resume local:RUN_UUID`; it has no cloud batch discount. Local previews make no inference calls or corpus writes. Local provider token charges are zero; hardware and runtime costs remain unestimated.
 
-The browser wizard selects the configured model for its initial preview. In local mode it offers that Qwen pair, uses concurrency 1 and the durable onboarding pipeline, and shows zero provider charges with hardware/runtime cost unestimated. The [web Compose override](docker.md#browser-with-a-configured-model-pair) enables the browser for either deployment preset.
+The browser wizard previews the pair selected during onboarding. Local Qwen uses concurrency 1 and the durable onboarding pipeline, and shows zero provider charges with hardware/runtime cost unestimated. The [web Compose override](docker.md#browser-with-a-configured-model-pair) enables the browser for either deployment preset.
 
 ## What the evidence establishes
 

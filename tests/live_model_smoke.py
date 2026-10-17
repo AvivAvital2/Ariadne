@@ -29,10 +29,9 @@ from config import Config
 from docgen.generator import DocGenerator, GeneratorConfig
 from docgen.llm.local import parse_chat_response
 from docgen.validator import ContentValidator
-from embedding import reduce_local_embeddings
 from inference import InferenceContext
 from library.prepared import validate_vector
-from model_config import CHAT_MODEL, EMBEDDING_MODEL, query_input
+from model_config import CHAT_MODEL, EMBEDDING_MODEL
 from tests.model_smoke_cases import CASES
 from writer import LibraryWriter
 
@@ -74,7 +73,7 @@ class Profile:
 PROFILES = {
     'qwen': Profile(
         'qwen',
-        'openai',
+        'deepinfra',
         CHAT_MODEL,
         'https://api.deepinfra.com/v1/openai',
         'DEEPINFRA_API_KEY',
@@ -198,8 +197,6 @@ class RecordedTransport(httpx.AsyncBaseTransport):
         model = profile.embedding_model if embedding else profile.model
         if payload.get('model') != model:
             raise ValueError('Unexpected live model')
-        if not embedding and profile.name == 'qwen':
-            payload['reasoning_effort'] = 'none'
         raw = json.dumps(payload).encode()
         cap = 0 if embedding else payload.get('max_completion_tokens', payload.get('max_tokens'))
         if (
@@ -296,35 +293,6 @@ class RecordedTransport(httpx.AsyncBaseTransport):
         raise AssertionError('Unreachable retry state')
 
 
-class QwenEmbeddings:
-    """Hosted adapter for the existing Qwen input/reduction recipe; no fake /tokenize."""
-
-    def __init__(self, client: httpx.AsyncClient) -> None:
-        self.client = client
-
-    async def embed_documents(self, texts: list[str]):
-        if not texts:
-            return []
-        if any(not text.strip() for text in texts):
-            raise ValueError('Empty embedding input')
-        response = await self.client.post(
-            '/embeddings',
-            json={
-                'model': EMBEDDING_MODEL,
-                'input': texts,
-                'encoding_format': 'float',
-            },
-        )
-        response.raise_for_status()
-        return reduce_local_embeddings(response.json(), len(texts))
-
-    async def embed_query(self, text: str):
-        return (await self.embed_documents([query_input(text)]))[0]
-
-    async def close(self) -> None:
-        await self.client.aclose()
-
-
 def configuration(profile: Profile, output: Path) -> Config:
     data = {
         'default_source': 'synthetic',
@@ -341,7 +309,7 @@ def configuration(profile: Profile, output: Path) -> Config:
             'api_key_env': profile.key_env,
         },
         'embeddings': {
-            'provider': 'openai',
+            'provider': 'deepinfra' if profile.name == 'qwen' else 'openai',
             'model': profile.embedding_model,
             'base_url': profile.embedding_url,
             'api_key_env': profile.embedding_key,
@@ -349,8 +317,6 @@ def configuration(profile: Profile, output: Path) -> Config:
         },
         'execution': {'batch_mode': 'never', 'max_attempts': 3},
     }
-    if profile.name == 'qwen':
-        data['embeddings']['recipe'] = 'deepinfra-qwen3-embedding-8b-prefix3072-smoke-v1'
     path = output / 'config.json'
     save_json(path, data)
     return Config(path)
@@ -370,30 +336,18 @@ async def attach_clients(context: InferenceContext, run: Run, transport_factory)
         follow_redirects=False,
         transport=RecordedTransport(run, 'chat', transport_factory()),
     )
-    if run.profile.name == 'qwen':
-        context._embeddings = QwenEmbeddings(
-            httpx.AsyncClient(
-                base_url=run.profile.embedding_url,
-                headers={'Authorization': 'Bearer ' + os.environ[run.profile.embedding_key]},
-                timeout=120,
-                trust_env=False,
-                follow_redirects=False,
-                transport=RecordedTransport(run, 'embeddings', transport_factory()),
-            )
-        )
-    else:
-        embeddings = context.embeddings
-        previous = await embeddings._get_client()
-        headers = dict(previous.headers)
-        await previous.aclose()
-        embeddings._client = httpx.AsyncClient(
-            base_url=run.profile.embedding_url,
-            headers=headers,
-            timeout=120,
-            trust_env=False,
-            follow_redirects=False,
-            transport=RecordedTransport(run, 'embeddings', transport_factory()),
-        )
+    embeddings = context.embeddings
+    previous = await embeddings._get_client()
+    headers = dict(previous.headers)
+    await previous.aclose()
+    embeddings._client = httpx.AsyncClient(
+        base_url=run.profile.embedding_url,
+        headers=headers,
+        timeout=120,
+        trust_env=False,
+        follow_redirects=False,
+        transport=RecordedTransport(run, 'embeddings', transport_factory()),
+    )
 
 
 def snapshot(library, doc_id: str) -> tuple:

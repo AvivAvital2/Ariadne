@@ -129,6 +129,7 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
   </div>
   <div class="grow"></div>
   <div class="pill" id="srcPill"><span class="dot"></span> <span id="srcName">…</span></div>
+  <select id="projectPicker" aria-label="Project library" hidden style="max-width:420px;background:var(--panel);color:var(--text);padding:6px;border:1px solid var(--line);border-radius:8px"></select>
   <div class="seg" id="roleSeg" title="Audience-adapted responses">
     <button class="on" data-role="developer">Developer</button>
     <button data-role="product_manager">Product</button>
@@ -164,6 +165,7 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
     c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   let role = 'developer';
   let lastQuestion = '';
+  const projectId=new URLSearchParams(location.search).get('project');
   const DEFAULT_CHIPS = [
     'How does search ranking work?',
     'Where is retry logic handled?',
@@ -171,6 +173,7 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
   ];
 
   async function postJSON(path, body){
+    if(projectId) body={...body, project_id:projectId};
     const r = await fetch(path, {
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify(body),
@@ -301,14 +304,21 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
   });
 
   // Scope both requests to the source displayed in the pill.
-  const sourceReady = fetch('/api/sources', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})
-    .then(r => r.json())
+  const sourceReady = postJSON('/api/sources', {})
     .then(d => {
       const source = d.default_source || (d.sources && d.sources[0] && d.sources[0].name);
       $('srcName').textContent = source || 'no source yet';
       return source;
     })
     .catch(() => { $('srcName').textContent = 'MCP'; return null; });
+
+  fetch('/api/projects').then(r=>r.json()).then(data=>{
+    const projects=data.projects||[]; if(!projects.length) return;
+    const picker=$('projectPicker'); picker.hidden=false;
+    picker.innerHTML='<option value="">Default library</option>'+projects.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.source+' · '+p.model+' ('+p.provider+')')+'</option>').join('');
+    picker.value=projectId||'';
+    picker.onchange=()=>{ location.href='/static/console.html'+(picker.value?'?project='+encodeURIComponent(picker.value):''); };
+  }).catch(()=>{});
 
   renderChips();
 })();

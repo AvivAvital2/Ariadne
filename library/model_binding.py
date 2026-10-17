@@ -112,7 +112,7 @@ def inspect_pair(
     if binding is None and main.exists() and main.stat().st_size:
         with readonly(main) as conn:
             if populated(conn):
-                if settings.local:
+                if settings.chat.provider in ('local', 'deepinfra'):
                     raise ModelBindingMismatch(
                         f'Populated unbound library {main}; use a fresh pair, including sidecar {sidecar}'
                     )
@@ -133,7 +133,7 @@ def inspect_pair(
             if (
                 row is None
                 and not legacy_hosted
-                and (settings.local or binding is not None or for_write)
+                and (settings.chat.provider in ('local', 'deepinfra') or binding is not None or for_write)
                 and populated(conn)
             ):
                 raise ModelBindingMismatch(
@@ -156,7 +156,7 @@ def initialize_pair(
         with sqlite3.connect(main) as conn:
             conn.execute('BEGIN IMMEDIATE')
             if populated(conn):
-                if settings.local:
+                if settings.chat.provider in ('local', 'deepinfra'):
                     raise ModelBindingMismatch(f'Populated unbound library {main}')
                 return None  # Explicitly unverified legacy hosted state.
             conn.execute("""CREATE TABLE IF NOT EXISTS library_model_binding (

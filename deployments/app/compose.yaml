@@ -7,6 +7,7 @@ services:
       ARIADNE_CONFIG: /config/ariadne.yaml
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DEEPINFRA_API_KEY: ${DEEPINFRA_API_KEY:-}
     volumes:
       - ./cloud.yaml:/config/ariadne.yaml:ro
       - ${ARIADNE_SOURCE_DIR:-../..}:/workspace:ro

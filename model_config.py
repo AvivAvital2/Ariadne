@@ -17,6 +17,8 @@ EMBEDDING_MODEL = 'Qwen/Qwen3-Embedding-8B'
 EMBEDDING_DIM = 3072
 NATIVE_DIM = 4096
 RECIPE = 'qwen3-embedding-8b-3072-v1'
+HOSTED_RECIPE = 'deepinfra-qwen3-embedding-8b-prefix3072-v1'
+DEEPINFRA_URL = 'https://api.deepinfra.com/v1/openai'
 IDENTITY_VERSION = 1
 QUERY_INSTRUCTION = 'Given a question about a codebase, retrieve relevant code documentation that answers the question.'
 TOKEN_SAFETY_MARGIN = 64
@@ -60,7 +62,7 @@ def resolve_provider(*, cli_provider: str | None, cfg_provider: str | None, mode
             f'but provider was set to {explicit!r}.'
         )
     provider = explicit or inferred or 'openai'
-    if provider not in {'openai', 'anthropic', 'local'}:
+    if provider not in {'openai', 'anthropic', 'local', 'deepinfra'}:
         raise ModelConfigurationError(f'Unknown provider: {provider!r}')
     return provider
 
@@ -218,13 +220,20 @@ def resolve_credential(provider: str, name: str | None) -> str | None:
     if name is None:
         if provider == 'local':
             return None
-        name = 'ANTHROPIC_API_KEY' if provider == 'anthropic' else 'OPENAI_API_KEY'
+        name = credential_env(provider)
     value = os.environ.get(name)
     if not value:
         raise ModelConfigurationError(
             f'Configured credential environment variable {name!r} is missing or empty'
         )
     return value
+
+
+def credential_env(provider: str) -> str:
+    return {
+        'anthropic': 'ANTHROPIC_API_KEY',
+        'deepinfra': 'DEEPINFRA_API_KEY',
+    }.get(provider, 'OPENAI_API_KEY')
 
 
 @dataclass(frozen=True)
@@ -258,9 +267,10 @@ class ModelSettings:
 
     def validate(self, *, execution: bool = False) -> ModelSettings:
         c, e = self.chat, self.embeddings
-        if c.provider not in {'openai', 'anthropic', 'local'} or e.provider not in {
+        if c.provider not in {'openai', 'anthropic', 'local', 'deepinfra'} or e.provider not in {
             'openai',
             'local',
+            'deepinfra',
         }:
             raise ModelConfigurationError('Unsupported inference provider')
         if (c.provider == 'local') != (e.provider == 'local'):
@@ -289,6 +299,13 @@ class ModelSettings:
             _positive(name, value)
         if self.execution.batch_mode not in {'auto', 'always', 'never'}:
             raise ModelConfigurationError('execution.batch_mode must be auto, always or never')
+        if 'deepinfra' in (c.provider, e.provider):
+            if (c.provider, e.provider, c.model, e.model, e.dimensions, e.recipe) != (
+                'deepinfra', 'deepinfra', CHAT_MODEL, EMBEDDING_MODEL, EMBEDDING_DIM, HOSTED_RECIPE
+            ):
+                raise ModelConfigurationError('DeepInfra requires the hosted Qwen chat and embedding pair')
+            if self.execution.batch_mode == 'always':
+                raise ModelConfigurationError('DeepInfra supports live execution only; use batch_mode: never')
         if self.local:
             if c.model != CHAT_MODEL or e.model != EMBEDDING_MODEL:
                 raise ModelConfigurationError(
@@ -357,7 +374,8 @@ class ModelSettings:
             'embedding_endpoint': self.embeddings.base_url,
             'llm_credential': self.chat.api_key_env,
             'embedding_credential': self.embeddings.api_key_env,
-            'backend': 'local spool / live' if self.local else 'cloud batch / live',
+            'backend': ('local spool / live' if self.local else
+                        'cloud live' if self.chat.provider == 'deepinfra' else 'cloud batch / live'),
             'context_window': self.chat.context_window,
             'max_output_tokens': self.chat.max_output_tokens,
             'concurrency': self.chat.max_concurrency,
@@ -408,7 +426,12 @@ def resolve_models(
     chat['request_options_json'] = canonical_json(options)
     if embed.get('provider') == 'local':
         embed.setdefault('recipe', RECIPE)
+    if embed.get('provider') == 'deepinfra':
+        embed.setdefault('recipe', HOSTED_RECIPE)
     for settings in (chat, embed):
+        if settings.get('provider') == 'deepinfra':
+            settings.setdefault('base_url', DEEPINFRA_URL)
+            settings.setdefault('api_key_env', 'DEEPINFRA_API_KEY')
         if settings.get('base_url'):
             settings['base_url'] = normalize_url(settings['base_url'])
     try:

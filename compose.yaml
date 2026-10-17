@@ -34,7 +34,7 @@ services:
     volumes:
       # READ-WRITE: Ariadne + the SCIP indexers write into each project's tree
       # (.ariadne/, and build tools' .venv/target/) — this is by design, not a bug.
-      - ./:/workspace
+      - ${ARIADNE_SOURCE_DIR:-.}:/workspace
       # All Ariadne-owned data (DB, ariadne.yaml, exported docs, run logs, spool
       # store) persists here via ARIADNE_CONFIG=/data/ariadne.yaml.
       - ariadne-data:/data
@@ -44,6 +44,7 @@ services:
     environment:
       - ANTHROPIC_API_KEY        # doc generation (Claude) — shell override wins over .env
       - OPENAI_API_KEY           # embeddings / search
+      - DEEPINFRA_API_KEY        # hosted Qwen chat + embeddings
     restart: unless-stopped
 
 volumes:

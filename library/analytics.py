@@ -896,10 +896,13 @@ class AnalyticsMixin:
         from docgen.pricing import per_doc_generation_cost
         try:
             from config import get_config
-            _model = get_config().model
+            _cfg = get_config()
+            _model = _cfg.model
+            _provider = _cfg.provider
         except Exception:
             _model = ''
-        avg_generation_cost_per_doc_usd = per_doc_generation_cost(_model)
+            _provider = None
+        avg_generation_cost_per_doc_usd = per_doc_generation_cost(_model, provider=_provider)
 
         time_saved_minutes = total_hits * avg_minutes_saved_per_hit
         time_wasted_minutes = usage.get('total_misses', 0) * avg_minutes_per_miss

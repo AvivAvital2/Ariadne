@@ -165,6 +165,7 @@ class AdminMixin:
         from cli.generate_cost import build_estimate, build_local_estimate, exclusion_savings
         from docgen.pricing import LLM_PRICING, _supported_doc_types_for
         from docgen.prompts import LANGUAGE_DOC_TYPES
+        from model_config import CHAT_MODEL
 
         src = self._resolve_source(source)
         if src is None:
@@ -214,13 +215,18 @@ class AdminMixin:
         return EstimateResponse(
             source=src,
             model=model,
-            provider='local' if local else ('anthropic' if model.startswith('claude') else 'openai'),
+            provider=cfg.provider if model == cfg.model else ('anthropic' if model.startswith('claude') else 'openai'),
+            batch_supported=cfg.provider in ('openai', 'anthropic'),
             max_concurrency=1 if local else None,
             estimate_note=(
                 'Provider token charges: $0. Hardware/runtime cost: unestimated. '
                 'Source tokens are approximate; catalog, dependency and theme work '
                 'is incomplete until structural artifacts are available.'
-            ) if local else None,
+            ) if local else (
+                'Hosted Qwen uses DeepInfra list rates. Temporary discounts are not assumed. '
+                'Source tokens are approximate; live execution only.'
+                if cfg.provider == 'deepinfra' else None
+            ),
             input_per_million=rates[0],
             output_per_million=rates[1],
             file_count=est.file_count,
@@ -260,7 +266,11 @@ class AdminMixin:
             available_models=[
                 ModelPrice(
                     model=m, input_per_million=ipm, output_per_million=opm)
-                for m, (ipm, opm) in ({model: (0.0, 0.0)} if local else LLM_PRICING).items()
+                for m, (ipm, opm) in (
+                    {model: (0.0, 0.0)} if local else
+                    {model: LLM_PRICING[model]} if cfg.provider == 'deepinfra' else
+                    {m: rates for m, rates in LLM_PRICING.items() if m != CHAT_MODEL}
+                ).items()
             ],
             language_doc_types=language_doc_types,
             exclusion_savings=[
@@ -687,6 +697,9 @@ class AdminMixin:
         model = model or cfg.model
         types = tuple(doc_types) if doc_types else tuple(DEFAULT_GENERATE_DOC_TYPES)
 
+        if cfg.provider == 'deepinfra' and mode != 'live':
+            raise ValueError('Hosted Qwen supports live onboarding only')
+
         if cfg.provider == 'local':
             from cli.onboard_pipeline import OnboardError, OnboardResult, run_local_onboard
 
@@ -707,11 +720,21 @@ class AdminMixin:
                     themes_found=len(self.library.list_themes(coherent_only=False)),
                 )
         else:
-            result = await run_onboard_pipeline(
-                src, model, types, mode=mode, concurrency=concurrency,
-                progress=progress, db_path=cfg.db_path,
-                include_free_phases=True,
-            )
+            from inference import InferenceContext
+
+            # The pipeline invokes CLI helpers directly, bypassing run_command.
+            # Give every phase the same endpoints, credentials and writer owner.
+            context = InferenceContext.from_config(cfg, model=model, concurrency=concurrency)
+            try:
+                with context.activate(), context.write_session():
+                    context.open_library(operation='write').close()
+                    result = await run_onboard_pipeline(
+                        src, model, types, mode=mode, concurrency=concurrency,
+                        progress=progress, db_path=cfg.db_path,
+                        include_free_phases=True,
+                    )
+            finally:
+                await context.aclose()
         cov = self.coverage(src)
         return OnboardResponse(
             source=src, model=model, mode=mode,

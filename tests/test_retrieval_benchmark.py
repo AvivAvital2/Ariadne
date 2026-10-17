@@ -65,7 +65,11 @@ async def test_frozen_benchmark_uses_embeddings_and_real_storage(tmp_path, monke
         pacing=0,
     )
     assert result['status'] == 'passed', result.get('error') or result['checks']
-    assert len(requests) == 24  # 22 documents and two batches of 25 questions.
+    # Production Qwen splits inputs into batches of at most 16; OpenAI keeps
+    # the benchmark's 22 document requests and two batches of 25 questions.
+    assert len(requests) == (27 if name == 'qwen' else 24)
+    if name == 'qwen':
+        assert all(len(request['input']) <= 16 for request in requests)
     assert result['metrics']['documents']['eligible_questions'] == 50
     assert result['metrics']['chunks']['eligible_questions'] == 46
     assert result['metrics']['sections']['eligible_questions'] == 50
@@ -77,7 +81,7 @@ async def test_frozen_benchmark_uses_embeddings_and_real_storage(tmp_path, monke
     expected = [
         query_input(q['question']) if name == 'qwen' else q['question'] for q in corpus['questions']
     ]
-    assert [text for r in requests[-2:] for text in r['input']] == expected
+    assert [text for r in requests for text in r['input']][-len(expected):] == expected
 
 
 @pytest.mark.parametrize('name', ['qwen', 'openai'])

@@ -65,6 +65,19 @@ class OpenAIProvider:
             await self._client.aclose()
             self._client = None
 
+    def _request_payload(self, system_prompt: str, user_prompt: str, max_tokens: int) -> dict:
+        return {
+            'model': self.model,
+            'messages': [
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': user_prompt},
+            ],
+            token_limit_field(self.model): max_tokens,
+        }
+
+    def _response_text(self, data: dict) -> str:
+        return data['choices'][0]['message']['content']
+
     async def call(
         self,
         system_prompt: str,
@@ -75,14 +88,7 @@ class OpenAIProvider:
     ) -> str | None:
         client = self._get_client()
 
-        payload: dict = {
-            'model': self.model,
-            'messages': [
-                {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': user_prompt},
-            ],
-        }
-        payload[token_limit_field(self.model)] = max_tokens
+        payload = self._request_payload(system_prompt, user_prompt, max_tokens)
 
         _logger.info(
             'OpenAI request: model=%s prompt_len=%d',
@@ -111,7 +117,7 @@ class OpenAIProvider:
                     'OpenAI response: status=%d elapsed=%.1fs',
                     response.status_code, elapsed,
                 )
-                return data['choices'][0]['message']['content']
+                return self._response_text(data)
             except httpx.HTTPStatusError as e:
                 last_error = e
                 _logger.warning(

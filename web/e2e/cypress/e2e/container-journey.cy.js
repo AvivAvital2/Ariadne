@@ -46,15 +46,10 @@ VARIANTS.forEach((variant) => {
     after(() => cy.task('containerDown'));
 
     it('onboards a mounted multi-language source and answers a real question about it', () => {
-      // Force THIS variant's generation model into estimate + onboard, so the
-      // provider resolves to the matching backend (gpt-* → openai, claude-* →
-      // anthropic) regardless of the wizard's default picker. Nothing else is
-      // stubbed — the container runs the real onboard + ask.
-      const setModel = (req) => { if (variant.key !== 'qwen') req.body = { ...req.body, model: variant.model }; };
       cy.intercept('POST', '/api/source_add').as('sourceAdd');
       cy.intercept('POST', '/api/discover').as('discover');
-      cy.intercept('POST', '/api/estimate', setModel).as('estimate');
-      cy.intercept('POST', '/api/onboard', setModel).as('onboard');
+      cy.intercept('POST', '/api/estimate').as('estimate');
+      cy.intercept('POST', '/api/onboard').as('onboard');
       cy.intercept('GET', '/api/onboard/events*').as('events');
 
       // 1 — Onboarding wizard against the real containerized backend.
@@ -62,9 +57,15 @@ VARIANTS.forEach((variant) => {
       cy.get('#srcName').type(server.sourceName);
       cy.get('#srcPath').type(server.sourcePath);                 // /workspace/retryutils (the mount)
       cy.get('#nextBtn').click();                                 // Connect → step 2
-      cy.wait('@sourceAdd').its('response.statusCode').should('eq', 200);
+      cy.wait('@sourceAdd').then(({response}) => {
+        expect(response.statusCode).to.eq(200);
+        expect(response.body).not.to.have.property('project_id');
+      });
       cy.wait('@discover', { timeout: 120000 }).its('response.statusCode').should('eq', 200);  // step 2 onEnter
       cy.get('#nextBtn').click();                                 // → step 3 (Preview)
+      cy.wait('@estimate', { timeout: 120000 });
+      cy.get('#modeldd .ddbtn').click();
+      cy.get(`#modelSeg [data-model="${variant.key === 'qwen' ? 'configured' : variant.model}"]`).click();
       cy.wait('@estimate', { timeout: 120000 }).then(({ request, response }) => {
         expect(response.statusCode).to.eq(200);
         if (variant.key === 'qwen') {
@@ -89,6 +90,7 @@ VARIANTS.forEach((variant) => {
         });
       }
       cy.get('#nextBtn').click();                                 // → step 5 (Summary)
+      cy.wait('@estimate', { timeout: 120000 });
 
       // 2 — REAL build INSIDE the container: index (python + go) → `scip merge` →
       //     catalog → generate → embed → themes. Slow — wait for the ready screen.
@@ -96,8 +98,10 @@ VARIANTS.forEach((variant) => {
       cy.get('#nextBtn').should('contain', 'Start build').click();
       cy.wait('@onboard').then(({ request, response }) => {
         expect(response.statusCode).to.eq(200);
+        cy.task('containerProject', response.body.project_id);
         if (variant.key === 'qwen') {
-          expect(request.body.model).to.eq(variant.model);
+          expect(request.body.onboarding_model).to.eq('configured');
+          expect(request.body).not.to.have.property('model');
           expect(request.body.concurrency).to.eq(1);
         }
       });
@@ -108,7 +112,7 @@ VARIANTS.forEach((variant) => {
       cy.get('#gen-ready', { timeout: 600000 }).should('be.visible');   // real onboard: up to 10m
 
       // 3 — Hand off to the Ask console (same container).
-      cy.get('#gen-ready a[href="/static/console.html"]').should('be.visible').click();
+      cy.get('#gen-ready a[href^="/static/console.html?project="]').should('be.visible').click();
       cy.location('pathname').should('eq', '/static/console.html');
 
       // 4 — REAL question → REAL answer using the source selected by the UI.

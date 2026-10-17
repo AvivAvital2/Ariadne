@@ -125,6 +125,7 @@ ENV HOME=/home/app
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY deployments/app/cloud.yaml /opt/ariadne/examples/cloud.yaml
 COPY deployments/app/local.yaml /opt/ariadne/examples/local.yaml
+COPY deployments/app/hosted-qwen.yaml /opt/ariadne/examples/hosted-qwen.yaml
 RUN set -eu; \
     chmod +x /usr/local/bin/docker-entrypoint.sh; \
     groupadd -g "$GID" app || true; \

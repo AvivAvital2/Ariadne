@@ -103,6 +103,43 @@ def _make_source(root: Path) -> None:
     (root / 'Dockerfile').write_text('FROM python:3.12\nENV X=1\nEXPOSE 8080\n')
 
 
+@pytest.mark.parametrize('model,provider', [
+    ('gpt-6-astra', 'openai'),
+    ('claude-opus-5-5', 'anthropic'),
+])
+async def test_verified_cloud_models_have_paid_previews_and_picker_entries(tmp_path, model, provider):
+    src = tmp_path / 'proj'
+    _make_source(src)
+    await ariadne_source_add('proj', path=str(src))
+
+    est = await ariadne_estimate('proj', model=model)
+
+    assert est.model == model and est.provider == provider
+    assert model in {m.model for m in est.available_models}
+    assert est.input_per_million > 0 and est.output_per_million > 0
+    assert est.total_cost_usd > 0 and est.embedding_cost_usd > 0
+    assert est.catalog_describe_cost_usd > 0
+    assert est.grand_total_cost_usd > est.total_cost_usd
+
+
+async def test_hosted_qwen_preview_is_paid_and_has_no_batch_discount(tmp_path, _isolated_config):
+    import yaml
+    from tests.test_hosted_qwen import profile
+
+    source = tmp_path / 'qwen-source'
+    _make_source(source)
+    data = profile()
+    data.update(default_source='qwen', sources={'qwen': str(source)})
+    _isolated_config.write_text(yaml.safe_dump(data))
+    est = await ariadne_estimate('qwen')
+    assert est.provider == 'deepinfra'
+    assert not est.batch_supported
+    assert est.total_cost_usd > 0 and est.embedding_cost_usd > 0
+    assert est.total_cost_batched_usd == est.total_cost_usd
+    assert est.grand_total_cost_batched_usd == est.grand_total_cost_usd
+    assert 'DeepInfra' in est.estimate_note
+
+
 async def test_estimate_tool_evolves_through_contract(monkeypatch, tmp_path):
     src = tmp_path / 'proj'
     src.mkdir()

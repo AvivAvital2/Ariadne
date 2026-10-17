@@ -1,11 +1,12 @@
 #!/bin/sh
 # Ariadne container entrypoint — the "both doors, one brain" topology.
 #
-#   agents  ──▶ :8000/mcp  ariadne mcp --http   (the single MCP brain)
+#   agents  ──▶ :8000/mcp  ariadne mcp --http   (default library)
 #   browser ──▶ :8765      ariadne serve  ──(MCP client via --mcp-url)──┘
 #
-# The web UI is a pure MCP client of the brain, so there is exactly one process
-# writing the DB (the brain) — see the single-writer rule in the blueprint.
+# The web UI uses this default connection and opens an MCP child for each
+# onboarded project, with its saved model pair and separate library. All run
+# inside this container; each library retains its writer lock.
 set -eu
 
 if [ "$#" -gt 0 ]; then

@@ -383,7 +383,7 @@ async def generate_drafts(output, budget, runs, reviewer, transport_factory, pac
             context.open_library(operation='write')
             async with DocGenerator(
                 GeneratorConfig(
-                    provider='openai',
+                    provider=generation.profile.provider,
                     model=PROFILES['qwen'].model,
                     inference_context=context,
                 )

@@ -215,6 +215,7 @@ let currentVariant = null;
 let currentProject = null;      // compose project of the live stack (for teardown)
 let containerWorkspace = null;
 let containerBooted = null;
+let containerProjectId = null;
 let containerLogProc = null;    // `docker logs -f` follower — streams the in-container onboard
 let containerHeartbeat = null;  // elapsed-time ticker so a quiet onboard never looks frozen
 let containerTornDown = false;  // set by containerDown so reapAll doesn't re-`docker logs` a gone container (clobbering the saved log)
@@ -285,6 +286,7 @@ async function bootContainer(opts = {}) {
   const webPort = opts.webPort || 18765;
   currentProject = project;
   currentVariant = opts.variantKey;
+  containerProjectId = null;
   const COMPOSE = composeArgs(project);
 
   // Small MULTI-LANGUAGE source (Python + Go) so the in-container onboard runs
@@ -476,14 +478,23 @@ module.exports = defineConfig({
         async containerDown() {
           return containerDown();
         },
+        containerProject(id) {
+          if (!/^[a-f0-9]{24}$/.test(id)) throw new Error('Invalid project id');
+          containerProjectId = id;
+          return null;
+        },
         async containerClews() {
           const result = await sh('docker', [...composeArgs(currentProject), 'exec', '-T',
+            '-e', `ARIADNE_CONFIG=/data/web-projects/${containerProjectId}/ariadne.yaml`,
             'ariadne', 'python', '-m', 'tests.container_models', 'seed-clews']);
           if (result.rc !== 0) throw new Error(result.out);
           return null;
         },
         async containerCheckModels(preview = false) {
+          const config = containerProjectId
+            ? ['-e', `ARIADNE_CONFIG=/data/web-projects/${containerProjectId}/ariadne.yaml`] : [];
           const result = await sh('docker', [...composeArgs(currentProject), 'exec', '-T',
+            ...config,
             'ariadne', 'python', '-m', 'tests.container_models', preview ? 'check-preview' : 'check']);
           if (result.rc !== 0) throw new Error(result.out);
           console.log(result.out);

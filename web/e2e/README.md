@@ -38,7 +38,25 @@ integration checks; they do not qualify Qwen weights, vLLM or GPU performance.
 container journey against paid cloud APIs. `./run-container-suite.sh` runs all
 three variants; `--parallel` gives each its own ports, Compose project and state.
 
+`hosted-onboarding.cy.js` is an additional paid smoke for an already-running
+application with all three cloud credentials. Mount a one-file synthetic Go
+retry project at `/workspace/retry-demo`, then run:
+
+```bash
+CYPRESS_HOSTED_ONBOARDING_URL=http://127.0.0.1:8765 npx cypress run --spec cypress/e2e/hosted-onboarding.cy.js
+```
+
+It chooses hosted Qwen in Preview, refuses a preview with
+more than one file, generates an explanation, and checks search and Ask after
+reloading the saved project. It does not stub model requests or tool responses.
+
+For a free comparison in the same Docker application, set
+`CYPRESS_PREVIEW_ONBOARDING_URL=http://127.0.0.1:8765` instead of
+`CYPRESS_HOSTED_ONBOARDING_URL`. This runs the actual GPT, Claude and hosted Qwen
+cost previews and checks that no project was saved. It never starts a build.
+
 ## Specs
+- `cypress/e2e/onboarding-models.cy.js` — compares all four pairs in Preview, checks paid/zero cost switching, saves the final choice only on Start build, and checks console reload without a model override on Ask.
 - `cypress/e2e/console.cy.js` — Ask console (stubs `/api/*`): load, ask →
   answer + confidence + ranked-sources rail + chips, feedback, role toggle,
   error handling.

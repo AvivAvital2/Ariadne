@@ -82,7 +82,11 @@ def resolve_batch_strategy(args, cfg):
         cfg_provider=getattr(cfg, 'configured_provider', None),
         model=model,
     )
-    key_env = 'OPENAI_API_KEY' if provider == 'openai' else 'ANTHROPIC_API_KEY'
+    from model_config import credential_env
+
+    if provider == 'deepinfra':
+        raise ValueError('DeepInfra supports live execution only')
+    key_env = credential_env(provider)
     api_key = os.environ.get(key_env, '')
     if not api_key:
         return None, provider, key_env
@@ -262,7 +266,7 @@ def register_generate_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     generate_parser.add_argument(
         '--provider', default=None,
-        choices=['openai', 'anthropic', 'local'],
+        choices=['openai', 'anthropic', 'local', 'deepinfra'],
         help='LLM backend (default: openai). Anthropic uses '
              'ANTHROPIC_API_KEY; OpenAI uses OPENAI_API_KEY.',
     )
@@ -688,6 +692,7 @@ async def _cmd_generate_inner(args: argparse.Namespace) -> int:
             model=model,
             caching_enabled=(provider == 'anthropic'),
             batch_enabled=False,
+            provider=provider,
         ) if files_with_size else None
 
         console.print()

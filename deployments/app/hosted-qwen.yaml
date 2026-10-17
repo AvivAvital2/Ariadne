@@ -1,0 +1,20 @@
+# Hosted Qwen uses paid DeepInfra inference; it does not need a local GPU.
+default_source: project
+sources:
+  project:
+    path: /workspace
+    exclude: ['**/.env', '**/secrets.*']
+defaults:
+  db_path: /data/hosted-qwen.db
+  staleness_db_path: /data/hosted-qwen-staleness.db
+llm:
+  provider: deepinfra
+  model: Qwen/Qwen3.8-27B
+  api_key_env: DEEPINFRA_API_KEY
+embeddings:
+  provider: deepinfra
+  model: Qwen/Qwen3-Embedding-8B
+  dimensions: 3072
+  api_key_env: DEEPINFRA_API_KEY
+execution:
+  batch_mode: never

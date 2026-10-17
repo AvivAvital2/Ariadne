@@ -38,7 +38,7 @@ Any failed assertion, provider error or exhausted budget produces a nonzero exit
 6. Change the average function's empty-input behavior and regenerate through the same generator/writer. Check that the source snapshot, content and document vector change.
 7. Inject a SQLite error during section insertion. Check that rollback preserves document content, timestamp and every child content/vector byte.
 
-All profiles use the real provider factories, generator, validators, writer, database and MCP service. An HTTP wrapper records requests and enforces endpoint/model/spending limits. For hosted Qwen, it adds `reasoning_effort=none`; a small embedding adapter reuses the production query instruction and native-4096-to-normalized-3072 reduction. OpenAI and Anthropic retain their production request formats and OpenAI embedding client.
+All profiles use the real provider factories, generator, validators, writer, database and MCP service. An HTTP wrapper records requests and enforces endpoint/model/spending limits. Hosted Qwen now uses the production DeepInfra chat and embedding clients, including `reasoning_effort=none`, the query instruction and native-4096-to-normalized-3072 reduction. The runner no longer modifies Qwen payloads or substitutes an embedding adapter. OpenAI and Anthropic retain their production request formats and OpenAI embedding client.
 
 The source-edit scenario exercises generation and writing directly, not CLI sync/staleness orchestration. This runner does not qualify local `/tokenize`, vLLM transport, local durable spool, pinned weights, GPU capacity, offline egress, provider batches or full CLI onboarding. Existing deterministic local tests cover their software paths; hosted results do not qualify a pinned local deployment.
 

@@ -77,7 +77,7 @@ async def chat_complete(
 
     context = context or current_context()
     cfg = get_config()
-    if context is None and getattr(cfg, 'provider', None) == 'local':
+    if context is None and getattr(cfg, 'provider', None) in ('local', 'deepinfra'):
         from inference import InferenceContext
 
         owned = InferenceContext.from_config(cfg)
@@ -187,8 +187,10 @@ def provider_key_env(model: str | None = None) -> str:
         cfg_provider=getattr(cfg, 'configured_provider', None),
         model=model or cfg.model,
     )
-    return ('ANTHROPIC_API_KEY' if provider_name == 'anthropic'
-            else 'OPENAI_API_KEY')
+    from model_config import credential_env
+
+    settings = cfg.model_settings().chat if hasattr(cfg, 'model_settings') else None
+    return (settings.api_key_env if settings else None) or credential_env(provider_name)
 
 
 def has_provider_key(model: str | None = None) -> bool:

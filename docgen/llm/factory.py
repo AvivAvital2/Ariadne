@@ -18,7 +18,7 @@ from typing import Literal
 from docgen.llm.base import LLMProvider
 from docgen.llm.batch import BatchStrategy
 
-ProviderName = Literal['openai', 'anthropic', 'local']
+ProviderName = Literal['openai', 'anthropic', 'local', 'deepinfra']
 
 
 def make_llm_provider(
@@ -64,12 +64,16 @@ def make_llm_provider(
         from docgen.llm.local import LocalOpenAICompatibleProvider
 
         return LocalOpenAICompatibleProvider(context)
-    if provider == 'openai':
+    if provider in ('openai', 'deepinfra'):
+        from docgen.llm.deepinfra import DeepInfraProvider
         from docgen.llm.openai import OpenAIProvider
-        return OpenAIProvider(
+        from model_config import DEEPINFRA_URL
+
+        cls = DeepInfraProvider if provider == 'deepinfra' else OpenAIProvider
+        return cls(
             model=model,
             api_key=api_key,
-            base_url=base_url or 'https://api.openai.com/v1',
+            base_url=base_url or (DEEPINFRA_URL if provider == 'deepinfra' else 'https://api.openai.com/v1'),
             max_retries=max_retries,
             timeout=timeout,
         )
@@ -84,7 +88,7 @@ def make_llm_provider(
         )
     raise ValueError(
         f"Unknown LLM provider: {provider!r}. "
-        f"Supported: 'openai', 'anthropic'."
+        f"Supported: 'openai', 'anthropic', 'local', 'deepinfra'."
     )
 
 
@@ -153,6 +157,7 @@ def batch_strategy_for(
     Raises ``ValueError`` for a provider type with no batch backend.
     """
     from docgen.llm.anthropic import AnthropicProvider
+    from docgen.llm.deepinfra import DeepInfraProvider
     from docgen.llm.local import LocalOpenAICompatibleProvider
     from docgen.llm.openai import OpenAIProvider
 
@@ -168,6 +173,8 @@ def batch_strategy_for(
             scope=scope,
         )
 
+    if isinstance(provider, DeepInfraProvider):
+        raise ValueError('DeepInfra supports live execution only')
     if isinstance(provider, OpenAIProvider):
         from docgen.llm.openai_batch import OpenAIBatchStrategy
         return OpenAIBatchStrategy(provider)

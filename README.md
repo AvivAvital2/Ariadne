@@ -51,11 +51,14 @@ The public comparison uses twelve difficult, target-pinned questions about Spark
 | --- | --- | --- | --- |
 | OpenAI cloud | GPT-6 Astra (`gpt-6-astra`) | OpenAI `text-embedding-3-large`, 3072 dimensions | 24/24 live workflow checks passed |
 | Anthropic cloud | Claude Opus 5.5 (`claude-opus-5-5`) | OpenAI `text-embedding-3-large`, 3072 dimensions | 24/24 live checks passed after the latest retrieval fix |
+| Hosted Qwen | DeepInfra `Qwen/Qwen3.8-27B` | DeepInfra `Qwen/Qwen3-Embedding-8B`, 4096 → normalized 3072 dimensions | Production provider and shared workflow regression tests |
 | Local Qwen | `Qwen/Qwen3.8-27B` | `Qwen/Qwen3-Embedding-8B`, 4096 → normalized 3072 dimensions | Application integration and recovery tested; actual GPU/vLLM qualification pending |
 
 See [supported model configurations](docs/supported-models.md) for exact YAML, credentials and switching commands. Select configurations with `ARIADNE_CONFIG` and give each model pair a separate main/staleness database pair. Existing cloud defaults are unchanged; choose the named models explicitly.
 
 Hosted Qwen verification passed 41 implementation checks across six fresh cases; its earlier factual failure remains recorded. [Live evidence](docs/live-model-verification.md) covers all three model suites. The [50-question retrieval benchmark](docs/retrieval-verification.md) measures Qwen/OpenAI embeddings and passage delivery, not chat-model answer accuracy.
+
+The browser offers OpenAI, Claude, hosted Qwen and configured local Qwen in onboarding's Preview step. Compare costs and adjust scope before choosing **Start build**; only then is the pair saved for the project's library, search and answers. All hosted pairs run through one application container. See [onboarding model selection](docs/supported-models.md#choose-models-during-onboarding) for credentials and local endpoint setup.
 
 ### Local inference
 
@@ -82,7 +85,7 @@ uv run ariadne dry-run -i --source myproject
 uv run ariadne onboard --source myproject
 ```
 
-Cloud generation needs `OPENAI_API_KEY` for embeddings and either Anthropic or OpenAI for documentation generation; the local Qwen pair requires no cloud keys. `onboard` previews cost and asks before paid work. For MCP integration with Claude Code:
+OpenAI and Claude generation need `OPENAI_API_KEY` for embeddings and either Anthropic or OpenAI for documentation generation; hosted Qwen needs only `DEEPINFRA_API_KEY`, and the local Qwen pair requires no cloud keys. `onboard` previews cost and asks before paid work. For MCP integration with Claude Code:
 
 ```bash
 cd /path/to/your-project

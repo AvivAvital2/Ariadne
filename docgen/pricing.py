@@ -42,14 +42,18 @@ LLM_PRICING: dict[str, tuple[float, float]] = {
     'gpt-5.2': (1.75, 14.00),
     'gpt-5.4': (2.50, 15.00),
     'gpt-5.5': (5.00, 30.00),
+    'gpt-6-astra': (10.00, 50.00),
     'claude-sonnet-4-6': (3.00, 15.00),
     'claude-sonnet-5': _sonnet_5_price(date.today()),
     'claude-opus-4-6': (5.00, 25.00),
     'claude-opus-4-7': (5.00, 25.00),
     'claude-opus-4-8': (5.00, 25.00),
     'claude-opus-5': (5.00, 25.00),
+    'claude-opus-5-5': (4.00, 20.00),
     'claude-haiku-4-5': (1.00, 5.00),
     'claude-fable-5': (10.00, 50.00),
+    # DeepInfra list rates; temporary discounts are not assumed in previews.
+    'Qwen/Qwen3.8-27B': (0.20, 2.50),
 }
 MODEL_CONTEXT_WINDOW_TOKENS: dict[str, int] = {
     'claude-fable-5': 1_000_000,
@@ -155,6 +159,7 @@ def estimate_cost(
     input_tokens_for=None,
     prompt_overhead_for=None,
     per_file_types=None,
+    provider: str | None = None,
 ) -> CostEstimate:
     """Estimate total cost for a generation run.
 
@@ -210,8 +215,11 @@ def estimate_cost(
     files_list = list(files)
     from model_config import CHAT_MODEL
 
-    local = model == CHAT_MODEL
+    local = provider == 'local'
+    hosted_qwen = model == CHAT_MODEL and not local
     rates = (0.0, 0.0) if local else LLM_PRICING.get(model)
+    if hosted_qwen:
+        caching_enabled = batch_enabled = False
 
     # Track per-doc-type call counts so cache reuse can be priced per type.
     calls_per_type: dict[str, int] = {}
@@ -286,7 +294,8 @@ def estimate_cost(
     # Baseline LLM cost (no caching, no batch) for comparison. Embedding is
     # tracked separately so the savings rows below stay apples-to-apples.
     baseline_llm = (input_tokens * in_rate + output_tokens * out_rate) / 1_000_000
-    embedding_cost = 0.0 if local else (embedding_tokens * EMBEDDING_PRICING_PER_M) / 1_000_000
+    embedding_rate = 0.01 if hosted_qwen else EMBEDDING_PRICING_PER_M
+    embedding_cost = 0.0 if local else (embedding_tokens * embedding_rate) / 1_000_000
 
     # Apply caching: each doc-type's static prefix is paid once at 1.25× then
     # 0.1× per subsequent call. A doc-type with n calls contributes
@@ -335,7 +344,7 @@ def estimate_cost(
     )
 
 
-def per_doc_generation_cost(model: str) -> float:
+def per_doc_generation_cost(model: str, *, provider: str | None = None) -> float:
     """Rough LLM cost of generating one doc, for the ROI calculation.
 
     Tracks the configured model's rate card (one LLM call ≈ a typical
@@ -343,9 +352,7 @@ def per_doc_generation_cost(model: str) -> float:
     fixed constant. Falls back to a Sonnet-ish midpoint for models not
     in ``LLM_PRICING`` so ROI never silently zeroes out.
     """
-    from model_config import CHAT_MODEL
-
-    if model == CHAT_MODEL:
+    if provider == 'local':
         return 0.0
     in_rate, out_rate = LLM_PRICING.get(model, (3.0, 15.0))
     # Representative single-call token counts (scaffolding + a ~6 KB
