@@ -26,6 +26,10 @@ from cli.generate import cmd_generate
 from cli.themes_cmd import cmd_themes_build
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from config import Config
+    from inference import InferenceContext
     from library import Library
 
 # A progress callback: (phase_label, current, total). May be sync or a
@@ -59,6 +63,46 @@ def get_library(db_path=None) -> 'Library':
     from cli.core import get_library as _get_library
 
     return _get_library(db_path)
+
+
+async def run_local_onboard(
+    cfg: Config,
+    context: InferenceContext,
+    source: str,
+    doc_types: Sequence[str],
+    progress: ProgressCallback | None = None,
+) -> dict:
+    """Shared CLI/MCP entry to the durable local pipeline, under a caller's writer."""
+    import asyncio
+
+    from docgen.local_pipeline import run_onboard
+    from docgen.orchestrator import DocGenOrchestrator, OrchestratorConfig
+
+    root = cfg.resolve_source(source)
+    if root is None or not root.is_dir():
+        raise ValueError('A valid source is required for onboarding')
+    config = OrchestratorConfig(
+        source_path=root, source_name=source,
+        db_path=context.db_path, staleness_db_path=context.staleness_db_path,
+        model=context.settings.chat.model, provider='local', concurrency=1,
+        inference_context=context, doc_types=tuple(doc_types),
+        dependencies=tuple(cfg.get_source_dependencies(source)),
+        themes_enabled=cfg.themes_enabled,
+        source_config=cfg.get_source_scip_config(source),
+    )
+    notifications = []
+    def report(message: str, current: int = 0, total: int = 0) -> None:
+        if progress is not None:
+            result = progress(message, current, total)
+            if inspect.isawaitable(result):
+                notifications.append(asyncio.ensure_future(result))
+
+    try:
+        async with DocGenOrchestrator(config, progress_callback=report) as orchestrator:
+            return await run_onboard(orchestrator)
+    finally:
+        if notifications:
+            await asyncio.gather(*notifications)
 
 
 async def run_onboard_pipeline(

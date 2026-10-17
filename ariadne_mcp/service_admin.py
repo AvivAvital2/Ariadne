@@ -162,7 +162,7 @@ class AdminMixin:
         totals (live + batched), per-directory tree, per-doc-type split,
         language histogram, and the model price list.
         """
-        from cli.generate_cost import build_estimate, exclusion_savings
+        from cli.generate_cost import build_estimate, build_local_estimate, exclusion_savings
         from docgen.pricing import LLM_PRICING, _supported_doc_types_for
         from docgen.prompts import LANGUAGE_DOC_TYPES
 
@@ -173,9 +173,15 @@ class AdminMixin:
         cfg = self.config
         model = model or cfg.model
         dts = tuple(doc_types) if doc_types else None
-        est = build_estimate(cfg, src, model=model, doc_types=dts, db_path=cfg.db_path)
-        savings = exclusion_savings(
-            cfg, src, model=model, doc_types=dts, db_path=cfg.db_path)
+        local = cfg.provider == 'local'
+        if local:
+            cfg.model_settings(model=model)  # validate overrides before any work
+            est = build_local_estimate(cfg, src, doc_types=dts)
+            savings = []
+        else:
+            est = build_estimate(cfg, src, model=model, doc_types=dts, db_path=cfg.db_path)
+            savings = exclusion_savings(
+                cfg, src, model=model, doc_types=dts, db_path=cfg.db_path)
 
         total = est.total
         rates = total.rates or (0.0, 0.0)
@@ -190,6 +196,12 @@ class AdminMixin:
         }
         for lang, _count in est.languages:
             language_doc_types[lang] = list(_supported_doc_types_for(lang))
+        if local:
+            from docgen.prompts import filter_doc_types_for_language
+
+            for lang, _count in est.languages:
+                language_doc_types[lang] = list(filter_doc_types_for_language(
+                    est.doc_types, lang, override=cfg.source_doc_types_by_language(src)))
         # Grand total = generate + catalog-describe (the phase the web preview
         # previously omitted). The generate-only totals keep their meaning as
         # separate fields; the grand total is what the run actually costs.
@@ -202,6 +214,13 @@ class AdminMixin:
         return EstimateResponse(
             source=src,
             model=model,
+            provider='local' if local else ('anthropic' if model.startswith('claude') else 'openai'),
+            max_concurrency=1 if local else None,
+            estimate_note=(
+                'Provider token charges: $0. Hardware/runtime cost: unestimated. '
+                'Source tokens are approximate; catalog, dependency and theme work '
+                'is incomplete until structural artifacts are available.'
+            ) if local else None,
             input_per_million=rates[0],
             output_per_million=rates[1],
             file_count=est.file_count,
@@ -241,7 +260,7 @@ class AdminMixin:
             available_models=[
                 ModelPrice(
                     model=m, input_per_million=ipm, output_per_million=opm)
-                for m, (ipm, opm) in LLM_PRICING.items()
+                for m, (ipm, opm) in ({model: (0.0, 0.0)} if local else LLM_PRICING).items()
             ],
             language_doc_types=language_doc_types,
             exclusion_savings=[
@@ -668,11 +687,31 @@ class AdminMixin:
         model = model or cfg.model
         types = tuple(doc_types) if doc_types else tuple(DEFAULT_GENERATE_DOC_TYPES)
 
-        result = await run_onboard_pipeline(
-            src, model, types, mode=mode, concurrency=concurrency,
-            progress=progress, db_path=cfg.db_path,
-            include_free_phases=True,
-        )
+        if cfg.provider == 'local':
+            from cli.onboard_pipeline import OnboardError, OnboardResult, run_local_onboard
+
+            cfg.model_settings(model=model)
+            if mode not in ('live', 'batch'):
+                raise ValueError('Onboarding mode must be live or batch')
+            if concurrency not in (None, 1):
+                raise ValueError('Local onboarding requires concurrency 1')
+            context = self.inference_context
+            with context.activate(), context.write_session():
+                run = await run_local_onboard(cfg, context, src, types, progress)
+                if run['state'] != 'completed':
+                    raise OnboardError(
+                        f'Local onboarding {run["state"]}; resume with '
+                        f'ariadne batch resume {run["run_id"]}')
+                result = OnboardResult(
+                    docs_written=self.library.count_documents(),
+                    themes_found=len(self.library.list_themes(coherent_only=False)),
+                )
+        else:
+            result = await run_onboard_pipeline(
+                src, model, types, mode=mode, concurrency=concurrency,
+                progress=progress, db_path=cfg.db_path,
+                include_free_phases=True,
+            )
         cov = self.coverage(src)
         return OnboardResponse(
             source=src, model=model, mode=mode,

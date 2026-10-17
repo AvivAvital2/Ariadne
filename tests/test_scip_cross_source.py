@@ -1511,7 +1511,8 @@ class TestManifestLoader:
             encoding='utf-8',
         )
 
-    def test_loads_single_indexer_entry(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize('kind,language', [('java', 'scala'), ('go', 'go')])
+    def test_loads_single_indexer_entry(self, tmp_path: Path, kind, language) -> None:
         from docgen.scip_cross_source import (
             CrossSourceGraph, load_source_from_manifest,
         )
@@ -1525,7 +1526,7 @@ class TestManifestLoader:
             return synthetic_index
 
         self._write_manifest(tmp_path, [{
-            'kind': 'java',
+            'kind': kind,
             'cwd': '.',
             'scip_path': 'intermediate/index-java.scip',
         }])
@@ -1541,6 +1542,7 @@ class TestManifestLoader:
         names = {s.display_name for s in graph.symbols_in('scalaproject')}
         assert 'LicenseService' in names
         assert 'validate_token' in names
+        assert {s.language for s in graph.symbols_in('scalaproject')} == {language}
 
     def test_loads_multiple_indexer_entries_under_one_source(
         self, tmp_path: Path,

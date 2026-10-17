@@ -743,7 +743,8 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
               <div class="ctl total">
                 <div class="clbl">Estimated total</div>
                 <div class="amt" id="costV">—</div>
-                <div class="sub">incl. ~<span id="embCost">$0</span> embeddings · ~<span id="descCost">$0</span> catalog index · floor → +50%</div>
+                <div class="sub" id="cloudCostNote">incl. ~<span id="embCost">$0</span> embeddings · ~<span id="descCost">$0</span> catalog index · floor → +50%</div>
+                <div class="sub" id="localCostNote" hidden></div>
               </div>
             </div>
           </div>
@@ -836,7 +837,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   let cur=1; const TOTAL=STEPS.length;
 
   const state = {
-    source:null, model:'claude-opus-4-8', batch:false, estimate:null, discover:null,
+    source:null, model:null, batch:false, concurrency:4, estimate:null, discover:null,
     excludeGlobs:[], excludeDirs:[], excludeFiles:[], exemptDirs:[], branches:[], depends:[],
     docTypes:null,            // null = all applicable; else the enabled subset
     fmtExcl:{},               // {doc_type: [excluded languages]} — per-format excludes within a doc type
@@ -906,7 +907,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   window.toggleTheme=function(){ const h=document.documentElement, toLight=h.getAttribute('data-theme')!=='light'; h.setAttribute('data-theme', toLight?'light':'dark'); const b=$('themeBtn'); if(b) b.textContent=toLight?'☾':'☀'; };
   window.ddToggle=function(e){ if(e) e.stopPropagation(); const dd=$('modeldd'); if(dd) dd.classList.toggle('open'); };
   window.toggleAdv=function(e){ if(e) e.stopPropagation(); const p=$('advPop'); if(p) p.hidden=!p.hidden; };
-  window.bumpConc=function(d){ const el=$('concV'); if(el) el.textContent=Math.max(1,Math.min(12,(+el.textContent||4)+d)); };
+  window.bumpConc=function(d){ const el=$('concV'); if(el){ state.concurrency=Math.max(1,Math.min(state.estimate?.max_concurrency||12,(+el.textContent||4)+d)); el.textContent=state.concurrency; } };
   window.recompute=function(){ applyLocalTotals(); };   // themes toggle → instant local recompute
   document.addEventListener('click',e=>{ const dd=$('modeldd'); if(dd && !e.target.closest('#modeldd')) dd.classList.remove('open'); const m=$('depMenu'); if(m && !e.target.closest('#depChips')) m.hidden=true; });
 
@@ -1092,7 +1093,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   function bumpOpt(delta){ state.optDelta=(state.optDelta||0)+delta; }
   function renderModels(e){
     const models=e.available_models||[];
-    const prov=(id)=>id.startsWith('claude')?'Anthropic':(id.startsWith('gpt')?'OpenAI':'Other');
+    const prov=(id)=>e.provider==='local'?'Local':(id.startsWith('claude')?'Anthropic':(id.startsWith('gpt')?'OpenAI':'Other'));
     const groups={}; models.forEach(m=>{ (groups[prov(m.model)]=groups[prov(m.model)]||[]).push(m); });
     let html='';
     Object.keys(groups).forEach(p=>{ html+='<div class="provhdr">'+p+'</div>';
@@ -1308,6 +1309,19 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   function renderScopeSummary(){ const e=state.estimate; if(!e) return; setText('scopeSumText', (e.file_count||0).toLocaleString()+' files in scope · ~'+band(modelTotal(state.model,state.batch))); }
   function renderEstimate(e, rebuild){
     if(!e) return;
+    const local=e.provider==='local';
+    $('cloudCostNote').hidden=local; $('localCostNote').hidden=!local;
+    setText('localCostNote', e.estimate_note||'');
+    if(local){
+      state.batch=false; state.concurrency=e.max_concurrency||1;
+      setText('concV', state.concurrency);
+      $('concV').parentElement.querySelectorAll('button').forEach(b=>b.disabled=true);
+      $('engBatch').style.display='none';
+      $('engApi').classList.add('on');
+      $('engApi').querySelector('.oname').textContent='Local';
+      $('engApi').querySelector('.obadge').textContent='Resumable';
+      $('engApi').querySelector('.odesc').textContent='Runs on your configured servers. Interrupted work can be resumed.';
+    }
     const total = modelTotal(state.model, state.batch);
     setText('costV', band(total)); setText('cbTotal', band(total)); setText('embCost', money(e.embedding_cost_usd));
     setText('descCost', money(modelDescribe(state.model, state.batch)));
@@ -1321,7 +1335,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     const m=e&&(e.available_models||[]).find(x=>x.model===state.model);
     setText('rvSource', state.source||'—');
     setText('rvModel', state.model+(m?(' · $'+m.input_per_million+' / $'+m.output_per_million+' per 1M'):''));
-    setText('rvSpeed', state.batch?'Batch · within 24h':'Live · ready in minutes');
+    setText('rvSpeed', e?.provider==='local'?'Local · resumable · runtime unestimated':(state.batch?'Batch · within 24h':'Live · ready in minutes'));
     setText('rvScope', e?(e.file_count+' files · ~'+(e.input_tokens/1e6).toFixed(1)+'M input tokens'):'—');
     setText('rvDoc', e&&e.by_doc_type.length?e.by_doc_type.map(d=>cap(d.doc_type)).join(', '):'—');
     setText('rvThemes', onState('themesToggle',false)?'On — cross-cutting concerns discovered':'Off');
@@ -1369,9 +1383,10 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     if(!state.source){ banner('Add a source first (Step 1).','err'); return; }
     showEstimating();
     banner('Estimating cost (no API calls)…');
-    const req={source:state.source, model:state.model};
+    const req={source:state.source};
+    if(state.model) req.model=state.model;
     if(state.docTypes) req.doc_types=state.docTypes;
-    try{ const e=await api('/api/estimate', req); state.estimate=e; state.optDelta=0; renderEstimate(e); banner(''); }
+    try{ const e=await api('/api/estimate', req); state.estimate=e; state.model=e.model; state.optDelta=0; renderEstimate(e); banner(''); }
     catch(err){
       banner('Estimate failed: '+err.message,'err');
       const wrap=$('browser'); const rf=wrap&&wrap.querySelector('.brefresh'); if(rf) rf.remove();

@@ -117,8 +117,7 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
     cfg = _config_module.get_config()
     if cfg.provider == 'local':
         from cli.runtime import local_preview
-        from docgen.local_pipeline import run_onboard
-        from docgen.orchestrator import DocGenOrchestrator, OrchestratorConfig
+        from cli.onboard_pipeline import run_local_onboard
         from inference import current_context
 
         context = current_context()
@@ -127,31 +126,9 @@ async def cmd_onboard(args: argparse.Namespace) -> int:
         if not getattr(args, 'approve', False):
             return local_preview(args, cfg, context)
         source = args.source or cfg.default_source
-        root = cfg.resolve_source(source)
-        if root is None or not root.exists():
-            raise ValueError('A valid source is required for onboarding')
-        config = OrchestratorConfig(
-            source_path=root,
-            source_name=source,
-            db_path=context.db_path,
-            staleness_db_path=context.staleness_db_path,
-            model=context.settings.chat.model,
-            provider='local',
-            concurrency=1,
-            inference_context=context,
-            doc_types=tuple(
-                (
-                    getattr(args, 'types', None) or 'explanation,architecture,qa,gotcha,diagram'
-                ).split(',')
-            ),
-            dependencies=tuple(cfg.get_source_dependencies(source)),
-            themes_enabled=cfg.themes_enabled,
-            source_config=cfg.get_source_scip_config(source),
-        )
-        async with DocGenOrchestrator(
-            config, progress_callback=lambda msg, *_: console.print(msg)
-        ) as orchestrator:
-            result = await run_onboard(orchestrator)
+        types = (getattr(args, 'types', None) or 'explanation,architecture,qa,gotcha,diagram').split(',')
+        result = await run_local_onboard(
+            cfg, context, source, types, progress=lambda msg, *_: console.print(msg))
         console.print(
             f'{result["run_id"]}: {result["state"]}; {result["applied"]} documents applied'
         )

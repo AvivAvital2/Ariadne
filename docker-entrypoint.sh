@@ -31,7 +31,13 @@ if [ -n "${ARIADNE_DEBUG:-}" ]; then DEBUG_FLAG="--debug"; fi
 #    defaults (config.py:315-320) and later writes can land off the volume.
 : "${ARIADNE_CONFIG:=/data/ariadne.yaml}"
 mkdir -p "$(dirname "${ARIADNE_CONFIG}")"
-[ -f "${ARIADNE_CONFIG}" ] || printf 'sources: {}\n' > "${ARIADNE_CONFIG}"
+if [ ! -f "${ARIADNE_CONFIG}" ]; then
+    if [ -n "${ARIADNE_CONFIG_TEMPLATE:-}" ]; then
+        cp "${ARIADNE_CONFIG_TEMPLATE}" "${ARIADNE_CONFIG}"
+    else
+        printf 'sources: {}\n' > "${ARIADNE_CONFIG}"
+    fi
+fi
 
 # 1) Start the brain in the background.
 echo "[ariadne] starting MCP brain on ${BRAIN_HOST}:${BRAIN_PORT} ..."

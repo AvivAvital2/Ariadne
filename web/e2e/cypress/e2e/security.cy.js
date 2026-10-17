@@ -52,8 +52,8 @@ describe('Ask console — security + direct connection', () => {
   // ---- (1) direct connection: Ariadne is consulted on EVERY ask -----------
   it('a single ask hits BOTH /api/ask and /api/search — straight to Ariadne', () => {
     cy.get('#q').type('how are retries handled?{enter}');
-    cy.wait('@ask').its('request.body').should('deep.equal', { question: 'how are retries handled?', role: 'developer' });
-    cy.wait('@search').its('request.body').should('deep.equal', { query: 'how are retries handled?', role: 'developer' });
+    cy.wait('@ask').its('request.body').should('deep.equal', { question: 'how are retries handled?', role: 'developer', source: 'proj' });
+    cy.wait('@search').its('request.body').should('deep.equal', { query: 'how are retries handled?', role: 'developer', source: 'proj' });
   });
 
   it('EVERY ask re-invokes Ariadne — repeat, role toggle, and chip click each re-fire both calls', () => {

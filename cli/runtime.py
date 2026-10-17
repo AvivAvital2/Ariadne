@@ -177,36 +177,18 @@ def local_preview(args: argparse.Namespace, config: Config, context: InferenceCo
     """Deterministic, read-only local estimate. Never open a writer or tokenizer."""
     from rich.console import Console
 
-    from docgen.staleness import find_catalog_files
+    from cli.generate_cost import build_local_estimate
 
     console = Console()
     source = getattr(args, 'source', None) or config.default_source
-    root = config.resolve_source(source)
-    if root is None or not root.exists():
-        raise ValueError('A valid source is required for a local estimate')
-    sc = config.get_source_config(source)
-    files = find_catalog_files(
-        root,
-        exclude_patterns=sc.exclude if sc else (),
-        exclude_dir_names=config.resolve_excluded_dirs(source),
-    )
-    target = getattr(args, 'path', None)
-    if target:
-        target = (root / target).resolve()
-        files = [path for path in files if path == target or target in path.parents]
     types = tuple(
         (getattr(args, 'types', None) or 'explanation,architecture,qa,gotcha,diagram').split(',')
     )
-    from docgen.catalog_extractor import _detect_language
-    from docgen.prompts import filter_doc_types_for_language
-
-    calls = sum(
-        len(filter_doc_types_for_language(types, _detect_language(path), override=config.source_doc_types_by_language(source)))
-        for path in files
+    estimate = build_local_estimate(
+        config, source, doc_types=types, target_path=getattr(args, 'path', None),
     )
-    tokens = sum(len(path.read_bytes()) // 4 for path in files)
     console.print(
-        f'Local preview: {len(files)} source files; approximately {calls} generation calls; {tokens} source tokens (character estimate).'
+        f'Local preview: {estimate.file_count} source files; approximately {estimate.total.total_calls} generation calls; {estimate.total.input_tokens} source tokens (character estimate).'
     )
     console.print('Provider token charges: $0. Hardware/runtime cost: unestimated.')
     console.print(

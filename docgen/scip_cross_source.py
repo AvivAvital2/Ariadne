@@ -873,6 +873,7 @@ _KIND_TO_LANGUAGE = {
     'java': 'scala',
     'python': 'python',
     'typescript': 'javascript',
+    'go': 'go',
 }
 
 

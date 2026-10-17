@@ -11,7 +11,31 @@ docker build -t ariadne:local-model-support .
 docker run --rm --network none ariadne:local-model-support --help
 ```
 
-The public image uses Python 3.12 and the locked runtime dependencies. It includes the SCIP indexers and build toolchains; `WITH_JVM=0` omits the JVM tools. Host credentials, operator databases, tests and model weights are excluded from the image. Indexing requires writable source locations. Rebuild and verify this public image before publication; the earlier CLI-image result does not qualify the combined image.
+The public image uses Python 3.12 and the locked runtime dependencies. It includes the SCIP indexers and build toolchains; `WITH_JVM=0` omits the JVM tools. Host credentials, operator databases, tests and model weights are excluded from the image. Indexing requires writable source locations. The [Docker browser journey](../web/e2e/README.md) builds this combined image and checks Qwen configuration, cost estimation, onboarding, search, answers, clews and restart persistence with HTTP model fixtures. Browser checks use `WITH_JVM=0` and exercise Python and Go indexing.
+
+## Browser with a configured model pair
+
+Add `deployments/app/compose.web.yaml` to either CLI preset to start the browser
+and MCP. It copies the selected configuration into `/data/ariadne.yaml` on first
+startup, keeping the wizard's edits in the state volume, and mounts source
+writable for indexing. Existing configuration is preserved on restart.
+
+```sh
+# Cloud: OpenAI, or Claude after editing deployments/app/cloud.yaml.
+docker compose -f deployments/app/compose.yaml -f deployments/app/compose.web.yaml up --build -d
+
+# Local: start the provisioned Qwen servers first, then start the application.
+docker compose -f deployments/local-v1/compose.yaml -f deployments/app/compose.web.yaml --profile client up --build -d ariadne
+```
+
+Open `http://127.0.0.1:8765`; MCP is at `http://127.0.0.1:18000/mcp`
+(`ARIADNE_MCP_PORT` can change that port). The separate web network makes these
+ports reachable while the local model servers stay on their inference network.
+Use a separate Compose project and state volume for each model pair. For
+existing external model servers, use a configuration with their reachable URLs
+as the mounted template. The wizard uses that configuration's model, shows zero
+provider token charges for local inference, and leaves hardware/runtime cost
+unestimated. Local onboarding uses the same resumable pipeline as the CLI.
 
 ## Cloud suite
 

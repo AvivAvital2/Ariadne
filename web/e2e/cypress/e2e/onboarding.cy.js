@@ -27,6 +27,37 @@ describe('Onboarding wizard', () => {
     cy.get('#gen-ready a[href="/static/console.html"]').should('exist').and('contain', 'Ask');
   });
 
+  it('uses configured Qwen for a local preview without cloud pricing or batch promises', () => {
+    const model = 'Qwen/Qwen3.8-27B';
+    cy.intercept('POST', '/api/sources', { default_source: null, sources: [] });
+    cy.intercept('POST', '/api/source_add', { source: 'proj', path: '/tmp/proj', is_default: true });
+    cy.intercept('POST', '/api/discover', { source: 'proj', file_count: 1, languages: [], indexers: [] }).as('discover');
+    cy.intercept('POST', '/api/estimate', {
+      source: 'proj', provider: 'local', model, file_count: 1,
+      input_tokens: 100, total_calls: 1, total_cost_usd: 0, total_cost_batched_usd: 0,
+      grand_total_cost_usd: 0, embedding_cost_usd: 0, max_concurrency: 1,
+      estimate_note: 'Provider token charges: $0. Hardware/runtime cost: unestimated.',
+      languages: [], by_doc_type: [{ doc_type: 'explanation', count: 1, cost_usd: 0, cost_batched_usd: 0 }],
+      by_directory: [], available_models: [{ model, input_per_million: 0, output_per_million: 0 }],
+    }).as('estimate');
+    cy.visit(wizard());
+    cy.get('#srcName').type('proj');
+    cy.get('#srcPath').type('/tmp/proj');
+    cy.get('#nextBtn').click();
+    cy.wait('@discover');
+    cy.get('#nextBtn').click();
+    cy.wait('@estimate').its('request.body').should('not.have.property', 'model');
+    cy.get('#ddnm').should('have.text', model);
+    cy.get('#localCostNote').scrollIntoView().should('be.visible').and('contain', 'Hardware/runtime cost: unestimated');
+    cy.get('#cloudCostNote').should('not.be.visible');
+    cy.get('#engBatch').should('not.be.visible');
+    cy.get('#concV').scrollIntoView().should('have.text', '1').parent().find('button').should('be.disabled');
+    cy.get('#nextBtn').click();
+    cy.get('#nextBtn').click();
+    cy.get('#rvSpeed').should('contain', 'runtime unestimated').and('not.contain', '24h');
+    cy.get('#rvModel').should('contain', model);
+  });
+
   it('full build: Connect → Start build → SSE progress → ready → handoff to console', () => {
     cy.intercept('POST', '/api/sources', { statusCode: 200, body: { default_source: null, sources: [] } }).as('sources');
     cy.intercept('POST', '/api/source_add', {

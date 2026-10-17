@@ -205,9 +205,13 @@ function journeyGenerate({ sourceName, configPath }) {
 // repo root regardless of the cypress cwd.
 const COMPOSE_FILES = [
   '-f', path.join(REPO_ROOT, 'compose.yaml'),
-  '-f', path.join(REPO_ROOT, 'web', 'e2e', 'compose.e2e.yaml'),
+];
+const composeArgs = (project) => ['compose', '-p', project, ...COMPOSE_FILES,
+  ...(currentVariant === 'qwen' ? ['-f', path.join(REPO_ROOT, 'deployments/app/compose.web.yaml')] : []),
+  '-f', path.join(__dirname, 'compose.e2e.yaml'),
+  ...(currentVariant === 'qwen' ? ['-f', path.join(__dirname, 'compose.qwen.yaml')] : []),
   '--project-directory', REPO_ROOT];
-const composeArgs = (project) => ['compose', '-p', project, ...COMPOSE_FILES];
+let currentVariant = null;
 let currentProject = null;      // compose project of the live stack (for teardown)
 let containerWorkspace = null;
 let containerBooted = null;
@@ -254,12 +258,12 @@ async function bootContainer(opts = {}) {
   if (containerBooted) return containerBooted;                    // cached across re-attempts
   containerTornDown = false;                                      // fresh boot (variants boot sequentially)
 
-  // Preflight (fail fast + free): OPENAI_API_KEY is ALWAYS required — embeddings +
-  // search are OpenAI-only regardless of the generation provider (Anthropic has no
-  // embeddings API). ANTHROPIC_API_KEY is required only for the Claude-generation
+  // Cloud preflight: OPENAI_API_KEY supplies embeddings and search for both
+  // cloud variants. Qwen uses isolated HTTP fixtures without credentials.
+  // ANTHROPIC_API_KEY is required only for the Claude-generation
   // variant. Resolve from the shell env or the repo .env, and populate process.env
   // so the compose `environment:` passthrough forwards the value into the container.
-  const required = ['OPENAI_API_KEY'];
+  const required = opts.variantKey === 'qwen' ? [] : ['OPENAI_API_KEY'];
   if (opts.requireAnthropic) required.push('ANTHROPIC_API_KEY');
   for (const k of required) {
     const v = process.env[k] || keyFromDotenv(k);
@@ -280,6 +284,7 @@ async function bootContainer(opts = {}) {
   const project = opts.project || 'ariadne-e2e';
   const webPort = opts.webPort || 18765;
   currentProject = project;
+  currentVariant = opts.variantKey;
   const COMPOSE = composeArgs(project);
 
   // Small MULTI-LANGUAGE source (Python + Go) so the in-container onboard runs
@@ -392,11 +397,13 @@ function reapAll() {
   // gone stack writes an error over the saved log.
   stopContainerLogs();
   if (!containerTornDown && currentProject) {
-    const cf1 = path.join(REPO_ROOT, 'compose.yaml');
-    const cf2 = path.join(REPO_ROOT, 'web', 'e2e', 'compose.e2e.yaml');
-    const base = `docker compose -p ${currentProject} -f "${cf1}" -f "${cf2}" --project-directory "${REPO_ROOT}"`;
-    try { require('node:child_process').execSync(`${base} logs --no-color > "${path.join(__dirname, currentProject + '.log')}" 2>&1`, { stdio: 'ignore' }); } catch (e) { /* stack gone / never started */ }
-    try { require('node:child_process').execSync(`${base} down -v --remove-orphans`, { stdio: 'ignore' }); } catch (e) { /* daemon down / never started */ }
+    const { execFileSync } = require('node:child_process');
+    const args = composeArgs(currentProject);
+    try {
+      const logs = execFileSync('docker', [...args, 'logs', '--no-color']);
+      fs.writeFileSync(path.join(__dirname, currentProject + '.log'), logs);
+    } catch (e) { /* stack gone / never started */ }
+    try { execFileSync('docker', [...args, 'down', '-v', '--remove-orphans'], { stdio: 'ignore' }); } catch (e) { /* daemon down / never started */ }
   }
   if (containerWorkspace) { try { fs.rmSync(containerWorkspace, { recursive: true, force: true }); } catch (e) { /* best effort */ } }
 }
@@ -424,6 +431,7 @@ function ping(port) {
 }
 
 module.exports = defineConfig({
+  video: true,
   e2e: {
     // No baseUrl: the UI specs (console/onboarding) visit the persistent static
     // server via the `fixedStaticUrl` task; backend-atomicity boots a per-test
@@ -433,7 +441,6 @@ module.exports = defineConfig({
     specPattern: 'cypress/e2e/**/*.cy.js',
     supportFile: 'cypress/support/e2e.js',
     fixturesFolder: false,
-    video: true,               // record each spec → cypress/videos/*.mp4 to review the hang
     pageLoadTimeout: 120000,   // 2-min cap on cy.visit (a stuck load fails + saves the video)
     defaultCommandTimeout: 8000,
     taskTimeout: 120000,       // 2-min cap on cy.task (server start/stop)
@@ -468,6 +475,30 @@ module.exports = defineConfig({
         },
         async containerDown() {
           return containerDown();
+        },
+        async containerClews() {
+          const result = await sh('docker', [...composeArgs(currentProject), 'exec', '-T',
+            'ariadne', 'python', '-m', 'tests.container_models', 'seed-clews']);
+          if (result.rc !== 0) throw new Error(result.out);
+          return null;
+        },
+        async containerCheckModels(preview = false) {
+          const result = await sh('docker', [...composeArgs(currentProject), 'exec', '-T',
+            'ariadne', 'python', '-m', 'tests.container_models', preview ? 'check-preview' : 'check']);
+          if (result.rc !== 0) throw new Error(result.out);
+          console.log(result.out);
+          return null;
+        },
+        async containerRestart() {
+          const result = await sh('docker', [...composeArgs(currentProject), 'restart', 'ariadne']);
+          if (result.rc !== 0) throw new Error(result.out);
+          const port = Number(new URL(containerBooted.baseUrl).port);
+          const deadline = Date.now() + 120000;
+          while (Date.now() < deadline) {
+            if (await pingHost('127.0.0.1', port)) return null;
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+          throw new Error('Container did not become ready after restart');
         },
 
         // Boot a FRESH, isolated Ariadne: a new temp config dir (empty DB +

@@ -85,9 +85,9 @@ test('ask: posts to /api/ask + /api/search, renders answer + ranked rail + chips
   const ask = calls.find(c => c.url === '/api/ask');
   const search = calls.find(c => c.url === '/api/search');
   assert.equal(ask.method, 'POST');
-  assert.deepEqual(ask.body, { question: 'how are retries handled?', role: 'developer' });
+  assert.deepEqual(ask.body, { question: 'how are retries handled?', role: 'developer', source: 'proj' });
   assert.equal(search.method, 'POST');
-  assert.deepEqual(search.body, { query: 'how are retries handled?', role: 'developer' });
+  assert.deepEqual(search.body, { query: 'how are retries handled?', role: 'developer', source: 'proj' });
 
   const card = doc.getElementById('answerCard');
   assert.ok(card.innerHTML.includes('http/resilience.py'), 'answer prose rendered (**bold** → text)');

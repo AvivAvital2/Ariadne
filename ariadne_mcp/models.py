@@ -532,6 +532,9 @@ class EstimateResponse(BaseModel):
 
     source: str
     model: str
+    provider: str = 'openai'
+    estimate_note: str | None = None
+    max_concurrency: int | None = None
     input_per_million: float
     output_per_million: float
     file_count: int

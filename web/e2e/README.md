@@ -19,6 +19,25 @@ npm install
 npx cypress run        # headless   (or: npx cypress open)
 ```
 
+The Qwen Docker journey builds the current application image, runs its browser
+and MCP services, and uses two deterministic HTTP model fixtures. It requires
+Docker Desktop (or Docker Engine), but no GPU, model weights or API keys:
+
+```bash
+CYPRESS_CONTAINER=qwen npx cypress run --spec cypress/e2e/container-journey.cy.js
+```
+
+It checks the configured model, an offline cost preview with zero provider
+charges and no database writes, real Python/Go indexing and onboarding,
+semantic search, answers, clew selection and source evidence, and persistence
+after restarting the application. Browser requests use the configured Qwen
+pair without model or source overrides from the test. These are application
+integration checks; they do not qualify Qwen weights, vLLM or GPU performance.
+
+`CYPRESS_CONTAINER=openai` and `CYPRESS_CONTAINER=anthropic` run the same
+container journey against paid cloud APIs. `./run-container-suite.sh` runs all
+three variants; `--parallel` gives each its own ports, Compose project and state.
+
 ## Specs
 - `cypress/e2e/console.cy.js` — Ask console (stubs `/api/*`): load, ask →
   answer + confidence + ranked-sources rail + chips, feedback, role toggle,

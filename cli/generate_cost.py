@@ -444,6 +444,65 @@ def build_estimate(cfg, source_name, *, model, doc_types=None, db_path=None) -> 
     )
 
 
+def build_local_estimate(cfg, source_name, *, doc_types=None, target_path=None) -> GenerateEstimate:
+    """Offline source-only preview; no tokenizer, calibration DB or inference."""
+    from collections import Counter
+
+    from cli.generate import DEFAULT_GENERATE_DOC_TYPES
+    from docgen.catalog_extractor import _detect_language
+    from docgen.cost_by_dir import NodeCost
+    from docgen.pricing import CostEstimate
+    from docgen.prompts import filter_doc_types_for_language
+    from docgen.staleness import find_catalog_files
+
+    root = cfg.resolve_source(source_name)
+    if root is None or not root.is_dir():
+        raise ValueError('A valid source is required for a local estimate')
+    sc = cfg.get_source_config(source_name)
+    files = find_catalog_files(
+        root, exclude_patterns=sc.exclude if sc else (),
+        exclude_dir_names=cfg.resolve_excluded_dirs(source_name),
+    )
+    if target_path:
+        target = (root / target_path).resolve()
+        files = [path for path in files if path == target or target in path.parents]
+    requested = tuple(doc_types) if doc_types else DEFAULT_GENERATE_DOC_TYPES
+    counts = Counter({dt: 0 for dt in requested})
+    directories = Counter()
+    languages = Counter()
+    tokens = 0
+    overrides = cfg.source_doc_types_by_language(source_name)
+    for path in files:
+        lang = _detect_language(path)
+        types = filter_doc_types_for_language(
+            requested, lang, override=overrides)
+        counts.update(types)
+        languages[lang or 'other'] += 1
+        tokens += path.stat().st_size // 4
+        rel = path.relative_to(root)
+        for node in (rel, *rel.parents):
+            directories[node.as_posix()] += len(types)
+
+    def cost(calls, source_tokens=0):
+        return CostEstimate(
+            file_count=len(files), total_calls=calls, input_tokens=source_tokens,
+            output_tokens=0, embedding_tokens=0, llm_cost_usd=0,
+            embedding_cost_usd=0, total_cost_usd=0, cost_lower_bound=0,
+            cost_upper_bound=0, model=cfg.model, rates=(0.0, 0.0))
+
+    total = cost(sum(counts.values()), tokens)
+    by_type = {dt: cost(count) for dt, count in counts.items()}
+    return GenerateEstimate(
+        base_path=root, file_count=len(files), doc_types=requested,
+        total=total, total_batched=total, by_doc_type=tuple(by_type.items()),
+        by_doc_type_batched=by_type,
+        by_directory={path: NodeCost(path, (), 0, 0, count)
+                      for path, count in directories.items()},
+        languages=tuple(sorted(languages.items(), key=lambda item: (-item[1], item[0]))),
+        catalog_describe_cost=0, catalog_describe_cost_batched=0,
+    )
+
+
 def _print_cost_estimate(
     *,
     source_path: Path,

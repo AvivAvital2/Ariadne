@@ -37,7 +37,7 @@ cd ariadne
 uv sync
 ```
 
-For the Docker application image and ready-to-use cloud/local configuration, see [Docker usage](docs/docker.md). The public image retains its web UI, MCP server and SCIP toolchains, with cloud/local presets and explicit CLI commands. It must be rebuilt and verified before publication; the earlier CLI-image checks do not qualify this combined image.
+For the Docker application image and ready-to-use cloud/local configuration, see [Docker usage](docs/docker.md). The public image retains its web UI, MCP server and SCIP toolchains, with cloud/local presets and explicit CLI commands. Add the documented web Compose override to use either model pair from the browser; the [Qwen container journey](web/e2e/README.md) verifies the application with HTTP model fixtures and no paid inference.
 
 ## Prerequisites
 

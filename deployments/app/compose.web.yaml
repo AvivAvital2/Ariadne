@@ -1,0 +1,17 @@
+# Add to either the cloud or local CLI preset to run the browser + MCP.
+# Copy the selected preset once into persistent, writable configuration so
+# source_add/discover can save the wizard's choices across container restarts.
+services:
+  ariadne:
+    command: []
+    environment:
+      ARIADNE_CONFIG: /data/ariadne.yaml
+      ARIADNE_CONFIG_TEMPLATE: /config/ariadne.yaml
+    ports:
+      - "127.0.0.1:8765:8765"
+      - "127.0.0.1:${ARIADNE_MCP_PORT:-18000}:8000"
+    volumes:
+      - ${ARIADNE_SOURCE_DIR:-../..}:/workspace
+    networks: [web]
+networks:
+  web:

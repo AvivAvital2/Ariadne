@@ -23,7 +23,7 @@ DOCUMENT = (
 
 
 class Deployment:
-    def __init__(self, model: str, prefix: str):
+    def __init__(self, model: str, prefix: str, *, host='127.0.0.1', port=0):
         self.model = model
         self.prefix = prefix
         self.requests = []
@@ -39,6 +39,9 @@ class Deployment:
                 pass
 
             def do_GET(self):
+                if self.path == '/__requests':
+                    self.reply(200, deployment.requests)
+                    return
                 deployment.requests.append((self.path, None, dict(self.headers)))
                 if self.path != prefix + '/v1/models':
                     self.reply(400, {'error': 'unexpected route'})
@@ -97,7 +100,7 @@ class Deployment:
                 else:
                     self.reply(400, {'error': 'unexpected inference route'})
 
-        self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self.server = ThreadingHTTPServer((host, port), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.base_url = f'http://127.0.0.1:{self.server.server_port}{prefix}/v1'

@@ -1,8 +1,6 @@
 """Local-model integration with public CLI archive and indexing workflows."""
 
 import sqlite3
-import sys
-import types
 import zipfile
 
 import pytest
@@ -67,7 +65,7 @@ def test_local_cli_archive_import_preserves_and_checks_provenance(
                 assert library.get_sections(restored.id)
 
 
-def test_literal_detector_does_not_skip_cleanup_when_only_prior_calls_exist(tmp_path, monkeypatch):
+def test_literal_detector_does_not_skip_cleanup_when_only_prior_calls_exist(tmp_path):
     from docgen.scip_persist import persist_literal_url_clients
 
     path = tmp_path / 'catalog.db'
@@ -77,19 +75,8 @@ def test_literal_detector_does_not_skip_cleanup_when_only_prior_calls_exist(tmp_
         conn.execute(
             'INSERT INTO http_client_calls '
             '(source_name, call_site_file, call_site_line, http_method, raw_url, sink_name, confidence) '
-            "VALUES ('alpha', 'client.py', 1, 'GET', '/old', 'literal', 'high')"
+            "VALUES ('alpha', 'client.py', 1, 'GET', '/old', 'literal-url', 'high')"
         )
-    visited = []
-
-    def ingest_literal_url_clients(*, source_name, conn):
-        visited.append(source_name)
-        conn.execute('DELETE FROM http_client_calls WHERE source_name = ?', (source_name,))
-        return 0
-
-    module = types.ModuleType('docgen.scip_literal_url_extractor')
-    module.ingest_literal_url_clients = ingest_literal_url_clients
-    monkeypatch.setitem(sys.modules, module.__name__, module)
     assert persist_literal_url_clients(path, [('alpha', tmp_path), ('empty', tmp_path)]) == 0
-    assert visited == ['alpha']
     with sqlite3.connect(path) as conn:
         assert conn.execute('SELECT count(*) FROM http_client_calls').fetchone()[0] == 0

@@ -44,6 +44,7 @@ docker-compose.yml
 
 # Test inputs and generated verification output are not runtime inputs.
 tests/
+web/e2e/
 evaluation/
 evals/
 designs/

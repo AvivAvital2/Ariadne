@@ -27,6 +27,67 @@ from ariadne_mcp.server_admin import ariadne_onboard, ariadne_source_add
 from ariadne_mcp.service import AriadneService
 
 
+@pytest.mark.parametrize('batch', [False, True])
+async def test_local_onboard_uses_durable_pipeline_and_configured_endpoints(
+    monkeypatch, tmp_path, batch,
+):
+    import json
+    import sqlite3
+    import config
+    from tests.local_model_server import deployments, trap_inference
+    from tests.test_local_workflows import fixture_config
+
+    with deployments() as (chat, embed):
+        trap_inference(monkeypatch, [chat.base_url, embed.base_url])
+        cfg = fixture_config(tmp_path, chat, embed)
+        root = cfg.get_source_path('alpha')
+        (root / 'core.py').rename(root / 'settings.json')
+        (root / 'settings.json').write_text('{"timeout": 30, "enabled": true}\n')
+        monkeypatch.setattr(config, '_global_config', cfg)
+        monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+        monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
+        ctx = _FakeCtx()
+        service = AriadneService.get()
+        try:
+            result = await ariadne_onboard(
+                'alpha', doc_types=['explanation'], batch=batch, concurrency=1, ctx=ctx)
+            assert result.model == cfg.model
+            assert result.files_indexed == 1
+            assert result.docs_written > 0
+            assert result.coverage_percent == 100
+            assert result.themes_ok
+            assert any('Local onboarding' in (message or '') for _, _, message in ctx.progress)
+            with sqlite3.connect(cfg.db_path) as conn:
+                state, checkpoints = conn.execute(
+                    'SELECT state, checkpoints_json FROM spool_runs').fetchone()
+                assert state == 'completed'
+                assert {'structural', 'catalog-embed', 'base', 'reconcile'} <= set(json.loads(checkpoints))
+            search = await service.search('How is the timeout configured?', source='alpha')
+            assert search.documents
+            answer = await service.ask('How is the timeout configured?', source='alpha')
+            assert answer.answer
+            assert chat.requests and embed.requests
+        finally:
+            await service.close()
+
+
+@pytest.mark.parametrize('kwargs', [{'model': 'gpt-5.5'}, {'concurrency': 4}])
+async def test_local_onboard_rejects_conflicting_options_before_writes(
+    monkeypatch, tmp_path, kwargs,
+):
+    import config
+    from tests.local_model_server import deployments
+    from tests.test_local_workflows import fixture_config
+
+    with deployments() as (chat, embed):
+        cfg = fixture_config(tmp_path, chat, embed)
+        monkeypatch.setattr(config, '_global_config', cfg)
+        with pytest.raises(ValueError):
+            await ariadne_onboard('alpha', **kwargs)
+        assert not Path(cfg.db_path).exists()
+        assert chat.requests == embed.requests == []
+
+
 @pytest.fixture(autouse=True)
 def _isolated_config(monkeypatch, tmp_path):
     cfg_path = tmp_path / 'ariadne.yaml'

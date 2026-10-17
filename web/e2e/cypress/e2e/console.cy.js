@@ -46,8 +46,8 @@ describe('Ask console', () => {
   it('ask: posts ask + search, renders answer, ranked rail, chips', () => {
     cy.get('#q').type('how are retries handled?');
     cy.get('#askBtn').click();
-    cy.wait('@ask').its('request.body').should('deep.equal', { question: 'how are retries handled?', role: 'developer' });
-    cy.wait('@search').its('request.body').should('deep.equal', { query: 'how are retries handled?', role: 'developer' });
+    cy.wait('@ask').its('request.body').should('deep.equal', { question: 'how are retries handled?', role: 'developer', source: 'proj' });
+    cy.wait('@search').its('request.body').should('deep.equal', { query: 'how are retries handled?', role: 'developer', source: 'proj' });
     cy.get('#answerGrid').should('be.visible');
     cy.get('#answerCard').should('contain', 'http/resilience.py');
     cy.get('#answerCard .badge').first().should('contain', 'high confidence');

@@ -269,9 +269,11 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
     $('askBtn').disabled = true;
     setStatus('Following the thread…');
     try {
+      const source = await sourceReady;
+      if(!source) throw new Error('Add a source through onboarding before asking a question.');
       const [a, s] = await Promise.all([
-        postJSON('/api/ask', {question, role}),
-        postJSON('/api/search', {query: question, role}),
+        postJSON('/api/ask', {question, role, source}),
+        postJSON('/api/search', {query: question, role, source}),
       ]);
       setStatus('');
       renderAnswer(a, s);
@@ -298,11 +300,15 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
     $('themeBtn').textContent = dark ? '☀' : '☾';
   });
 
-  // Show the current default source in the pill (best-effort; empty state ok).
-  fetch('/api/sources', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})
+  // Scope both requests to the source displayed in the pill.
+  const sourceReady = fetch('/api/sources', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})
     .then(r => r.json())
-    .then(d => { $('srcName').textContent = d.default_source || (d.sources && d.sources[0] && d.sources[0].name) || 'no source yet'; })
-    .catch(() => { $('srcName').textContent = 'MCP'; });
+    .then(d => {
+      const source = d.default_source || (d.sources && d.sources[0] && d.sources[0].name);
+      $('srcName').textContent = source || 'no source yet';
+      return source;
+    })
+    .catch(() => { $('srcName').textContent = 'MCP'; return null; });
 
   renderChips();
 })();

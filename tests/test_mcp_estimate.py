@@ -36,6 +36,45 @@ import pytest
 from ariadne_mcp.server_admin import ariadne_estimate, ariadne_source_add
 
 
+async def test_local_estimate_is_offline_read_only_and_uses_configured_model(
+    monkeypatch, tmp_path, _isolated_config,
+):
+    import httpx
+    import yaml
+    from tests.local_model_server import local_config
+
+    src = tmp_path / 'proj'
+    _make_source(src)
+    data = local_config('http://127.0.0.1:9/v1', 'http://127.0.0.1:9/v1')
+    data.update(default_source='proj', sources={'proj': {
+        'path': str(src), 'exclude': ['web/**'],
+        'doc_types_by_language': {'python': ['explanation']},
+    }})
+    _isolated_config.write_text(yaml.safe_dump(data))
+
+    def offline(*args, **kwargs):
+        raise AssertionError('A local estimate must not contact model servers')
+
+    monkeypatch.setattr(httpx.Client, 'send', offline)
+    monkeypatch.setattr(httpx.AsyncClient, 'send', offline)
+    est = await ariadne_estimate('proj')
+    assert est.provider == 'local'
+    assert est.model == data['llm']['model']
+    assert [m.model for m in est.available_models] == [est.model]
+    assert est.file_count == 4
+    assert est.total_calls > 0 and est.input_tokens > 0
+    assert est.total_cost_usd == est.grand_total_cost_usd == est.total_cost_batched_usd == 0
+    assert est.embedding_cost_usd == 0
+    assert est.max_concurrency == 1
+    assert 'Hardware/runtime cost: unestimated' in est.estimate_note
+    assert {d.rel_path for d in est.by_directory} >= {'pkg/a.py', 'pkg/b.py', 'pkg'}
+    assert not (tmp_path / 'state').exists()
+    assert not (src / '.ariadne').exists()
+    with pytest.raises(ValueError):
+        await ariadne_estimate('proj', model='gpt-5.5')
+    assert not (tmp_path / 'state').exists()
+
+
 @pytest.fixture(autouse=True)
 def _isolated_config(monkeypatch, tmp_path):
     """Isolated, pre-created ariadne.yaml (so ARIADNE_CONFIG is authoritative

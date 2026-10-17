@@ -1,0 +1,39 @@
+# Deterministic local-protocol variant of the real app stack. Test helpers are
+# mounted, never baked into the production image. No GPU or cloud keys needed.
+services:
+  ariadne:
+    networks: [default, web]
+    depends_on:
+      qwen-fixture:
+        condition: service_healthy
+    env_file: !override []
+    environment: !override
+      ARIADNE_CONFIG: /data/ariadne.yaml
+      ARIADNE_CONFIG_TEMPLATE: /data/local-template.yaml
+      ARIADNE_DEBUG: "1"
+      PYTHONPATH: /opt/test-fixtures:/opt/ariadne
+    volumes: !override
+      - "${E2E_WORKSPACE}:/workspace"
+      - qwen-data:/data
+      - ./tests:/opt/test-fixtures/tests:ro
+      - ./evaluation/answer-path:/opt/test-fixtures/evaluation/answer-path:ro
+  qwen-fixture:
+    image: ariadne:e2e-qwen
+    entrypoint: []
+    command: [python, -m, tests.container_models, serve]
+    environment:
+      PYTHONPATH: /opt/test-fixtures:/opt/ariadne
+    volumes:
+      - qwen-data:/data
+      - ./tests:/opt/test-fixtures/tests:ro
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:8100/chat/v1/models]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+    restart: "no"
+volumes:
+  qwen-data:
+networks:
+  default:
+    internal: true

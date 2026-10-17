@@ -71,6 +71,8 @@ Each new library binds to its generation model, embedding model and recipe. A di
 
 Cloud batching selects the configured OpenAI or Anthropic batch API. Local batching runs a durable foreground worker, resumed through `ariadne batch resume local:RUN_UUID`; it has no cloud batch discount. Local previews make no inference calls or corpus writes. Local provider token charges are zero; hardware and runtime costs remain unestimated.
 
+The browser wizard selects the configured model for its initial preview. In local mode it offers that Qwen pair, uses concurrency 1 and the durable onboarding pipeline, and shows zero provider charges with hardware/runtime cost unestimated. The [web Compose override](docker.md#browser-with-a-configured-model-pair) enables the browser for either deployment preset.
+
 ## What the evidence establishes
 
 The hosted tests exercise generation, validation, storage, document/chunk/section retrieval, MCP answering, replacement, replay and rollback. The separate [50-question benchmark](retrieval-verification.md) measures embeddings and passage delivery. Claude and GPT share the OpenAI embedding backend, so its retrieval score is not a score for either model's answer quality.

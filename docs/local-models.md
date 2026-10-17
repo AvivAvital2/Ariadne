@@ -10,6 +10,8 @@ For paid verification without local servers, use the [shared hosted workflow run
 
 The [Docker application image](docker.md) includes cloud/local presets and has passed local registry push/pull, installed-package CLI/MCP checks with networking disabled, and state persistence across container recreation. External publication and real GPU qualification remain separate.
 
+The browser uses the same configured pair for cost previews, onboarding, search and answers. Add the [web Compose override](docker.md#browser-with-a-configured-model-pair) to either preset. The [Qwen browser journey](../web/e2e/README.md) exercises the combined image with deterministic HTTP fixtures, including clew retrieval and application restart.
+
 Start from [ariadne.local.yaml.example](../ariadne.local.yaml.example). Set independent `/v1` endpoints, actual artifact and tokenizer revisions, BF16 weight representation, and fresh library/sidecar paths. Credential settings name environment variables; `null` omits authorization. Local requests ignore `OPENAI_BASE_URL`, cloud keys and proxy environment variables. HTTP redirects are refused. Token counting uses each local server's `/tokenize`, including the rendered non-thinking chat template. Generation reserves its complete requested output budget plus 64 tokens. Inputs that do not fit fail explicitly.
 
 ```sh
