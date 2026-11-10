@@ -31,6 +31,9 @@ async def test_compact_plan_is_question_scoped_before_any_retrieval(question):
     assert captured['max_tokens'] == 384
     system, user = [message['content'] for message in captured['messages']]
     assert 'C<n>: <requirement>' in system
+    assert 'C1:, C2:, C3:, C4:, C5:' in system
+    assert 'capital C immediately followed by a number and a colon' in system
+    assert 'No other label prefixes, hyphens, bullets or Markdown.' in system
     assert user.endswith('Question: ' + question)
     assert 'Do not answer the question or propose how the code works.' in user
     assert 'Do not introduce code identifiers absent from the question.' in user

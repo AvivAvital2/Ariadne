@@ -225,10 +225,15 @@ class TestCheapFailure:
         assert response.confidence == "low"
         assert diagnostics["compact"]["status"] == "no-cards"
 
+    @pytest.mark.parametrize('plan', [
+        'I could not plan anything.',
+        'CO1: Establish how pkg.Writer.write flushes rows.',
+        'CO-1: Establish how pkg.Writer.write flushes rows.',
+    ])
     def test_unparseable_plan_fails_without_any_further_call(
-            self, service):
+            self, service, plan):
         chat = RecordingChat({
-            "scip-obligation-plan": "I could not plan anything.",
+            "scip-obligation-plan": plan,
         })
 
         response, diagnostics = _run(service, chat)

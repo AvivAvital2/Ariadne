@@ -2176,7 +2176,11 @@ async def _ask_compact(self, question, *, source, notes,
         messages=[
             {"role": "system",
              "content": "You plan proof obligations. Reply with "
-                        "C<n>: <requirement> lines only."},
+                        "C<n>: <requirement> lines only. "
+                        "Use the literal labels C1:, C2:, C3:, C4:, C5: in order, "
+                        "using only as many as needed. "
+                        "Start each line with capital C immediately followed by a number and a colon. "
+                        "No other label prefixes, hyphens, bullets or Markdown."},
             {"role": "user",
              "content": "Create proof obligations only for the requirements stated in the question. "
                         "Each obligation must describe evidence to establish, not an assumed answer. "
