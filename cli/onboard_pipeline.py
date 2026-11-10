@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable
 
 from cli.catalog import cmd_catalog_describe
+from cli.core import cmd_rebuild
 from cli.generate import cmd_generate
 from cli.themes_cmd import cmd_themes_build
 
@@ -71,6 +72,7 @@ async def run_local_onboard(
     source: str,
     doc_types: Sequence[str],
     progress: ProgressCallback | None = None,
+    *, client_run_id: str | None = None,
 ) -> dict:
     """Shared CLI/MCP entry to the durable local pipeline, under a caller's writer."""
     import asyncio
@@ -99,7 +101,7 @@ async def run_local_onboard(
 
     try:
         async with DocGenOrchestrator(config, progress_callback=report) as orchestrator:
-            return await run_onboard(orchestrator)
+            return await run_onboard(orchestrator, client_run_id=client_run_id)
     finally:
         if notifications:
             await asyncio.gather(*notifications)
@@ -167,6 +169,17 @@ async def run_onboard_pipeline(
         quiet=not verbose, db=db_path, concurrency=cc,
     )
 
+    # Describe and generate REWRITE doc content (a Description: block, then a
+    # crossref section), and library.update_document correctly NULLs the vector
+    # when that happens — "so the incremental embed path re-does this doc". But
+    # nothing ran that path, so the enriched docs shipped unembedded: 34,718 of
+    # them in the databricks pack, i.e. precisely the best-described content was
+    # missing from the vector space. This is that pass.
+    embed_args = argparse.Namespace(
+        db=db_path, only_missing=True, source=source, yes=True,
+        batch=use_batch, live=not use_batch,
+    )
+
     # (label, command, args, fatal). A fatal phase stops the pipeline; themes
     # is a semantic-clustering augmentation, so its failure must not discard a
     # completed (and, for a spool, paid) generate + embed run.
@@ -174,6 +187,12 @@ async def run_onboard_pipeline(
         ('Describing catalog elements', cmd_catalog_describe, catalog_describe_args, True),
         ('Generating documentation', cmd_generate, generate_args, True),
         ('Building themes', cmd_themes_build, themes_args, False),
+        # Last: themes adds docs of its own, and this must see everything the
+        # earlier phases rewrote. Non-fatal for the same reason as themes — a
+        # failure here must not discard a completed, paid generate run; the
+        # docs remain and a later `rebuild --only-missing --source` picks
+        # them up.
+        ('Embedding new and changed docs', cmd_rebuild, embed_args, False),
     ]
 
     if include_free_phases:

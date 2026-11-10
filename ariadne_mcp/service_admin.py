@@ -3,6 +3,10 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from docgen.spool import SpoolStore
 
 from ariadne_mcp.models import (
     AdminActionResponse,
@@ -19,6 +23,9 @@ from ariadne_mcp.models import (
     IndexerPlan,
     LanguageCount,
     ListResponse,
+    LocalRunRecord,
+    LocalRunResponse,
+    LocalRunsResponse,
     ModelPrice,
     OnboardResponse,
     SourceAddResponse,
@@ -40,6 +47,86 @@ class AdminMixin:
     - self.get_branch()
     - self.clear_cache()
     """
+
+    # ------------------------------------------------------------------
+    # Durable local runs (inspection does not require model servers or a writer)
+    # ------------------------------------------------------------------
+
+    def _local_run_store(
+        self, source: str | None, run_id: str | None = None,
+    ) -> tuple[SpoolStore, str]:
+        from docgen.spool import SpoolStore
+
+        context = self.inference_context
+        if context is None or not context.local:
+            raise ValueError('Local run controls require a local model configuration')
+        resolved = self._resolve_source(source)
+        if not resolved or self.config.get_source_config(resolved) is None:
+            raise ValueError('A configured source is required for local run controls')
+        if context.db_path.exists():
+            context.validate()
+        elif run_id is not None:
+            raise ValueError(f'Unknown local run {run_id}')
+        return SpoolStore(context), resolved
+
+    @staticmethod
+    def _local_run_record(store: SpoolStore, run: dict, source: str) -> LocalRunRecord:
+        import json
+
+        scope = json.loads(run['scope_json'])
+        if scope.get('source_name') != source:
+            raise ValueError('Local run does not belong to the selected source')
+        return LocalRunRecord(
+            **{key: run[key] for key in (
+                'run_id', 'operation_kind', 'phase', 'state', 'cancel_requested',
+                'created_at', 'updated_at',
+            )},
+            source=source,
+            counts=store.counts(run['run_id']),
+            client_run_id=scope.get('client_run_id'),
+        )
+
+    def local_runs(
+        self, source: str | None = None, *, run_id: str | None = None,
+        client_run_id: str | None = None,
+    ) -> LocalRunsResponse:
+        """Inspect source-owned runs offline, preserving binding/version checks."""
+        import json
+
+        store, source = self._local_run_store(source, run_id)
+        runs = ([store.get_run(run_id)] if run_id is not None else
+                [store.get_run(row['run_id']) for row in store.list_runs()])
+        records = []
+        for run in runs:
+            scope = json.loads(run['scope_json'])
+            if run_id is None and scope.get('source_name') != source:
+                continue
+            record = self._local_run_record(store, run, source)
+            if client_run_id is None or record.client_run_id == client_run_id:
+                records.append(record)
+        return LocalRunsResponse(runs=records)
+
+    def local_run_cancel(self, run_id: str, source: str | None = None) -> LocalRunResponse:
+        """Terminally cancel a source-owned run without acquiring its corpus writer."""
+        store, source = self._local_run_store(source, run_id)
+        self._local_run_record(store, store.get_run(run_id), source)
+        store.cancel(run_id)
+        return LocalRunResponse(run=self._local_run_record(store, store.get_run(run_id), source))
+
+    async def local_run_resume(self, run_id: str, source: str | None = None) -> LocalRunResponse:
+        """Resume an unfinished run under its own bound corpus write operation."""
+        from docgen.local_pipeline import resume_run
+        from docgen.spool import TERMINAL_RUNS
+
+        store, source = self._local_run_store(source, run_id)
+        record = self._local_run_record(store, store.get_run(run_id), source)
+        if record.state in TERMINAL_RUNS:
+            return LocalRunResponse(run=record)
+        context = store.context
+        with context.activate(), context.write_session():
+            with context.open_library(operation='write') as library:
+                await resume_run(library, run_id)
+        return LocalRunResponse(run=self._local_run_record(store, store.get_run(run_id), source))
 
     # ------------------------------------------------------------------
     # Source configuration (onboarding "Connect" / "Scope")
@@ -673,6 +760,7 @@ class AdminMixin:
         mode: str = 'live',
         concurrency: int | None = None,
         progress=None,
+        client_run_id: str | None = None,
     ) -> OnboardResponse:
         """Run a COMPLETE onboard for a source (the wizard's "Generate" step).
 
@@ -696,6 +784,7 @@ class AdminMixin:
         cfg = self.config
         model = model or cfg.model
         types = tuple(doc_types) if doc_types else tuple(DEFAULT_GENERATE_DOC_TYPES)
+        run_id = None
 
         if cfg.provider == 'deepinfra' and mode != 'live':
             raise ValueError('Hosted Qwen supports live onboarding only')
@@ -710,7 +799,10 @@ class AdminMixin:
                 raise ValueError('Local onboarding requires concurrency 1')
             context = self.inference_context
             with context.activate(), context.write_session():
-                run = await run_local_onboard(cfg, context, src, types, progress)
+                run = await run_local_onboard(
+                    cfg, context, src, types, progress, client_run_id=client_run_id,
+                )
+                run_id = run['run_id']
                 if run['state'] != 'completed':
                     raise OnboardError(
                         f'Local onboarding {run["state"]}; resume with '
@@ -744,4 +836,5 @@ class AdminMixin:
             coverage_percent=round(cov.coverage_percent, 1),
             doc_types=list(types),
             themes_ok=result.themes_ok,
+            run_id=run_id,
         )

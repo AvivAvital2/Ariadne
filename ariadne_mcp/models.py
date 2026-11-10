@@ -613,6 +613,29 @@ class SourceListResponse(BaseModel):
     default_source: str | None = None
 
 
+class LocalRunRecord(BaseModel):
+    """Safe durable-run metadata, without model requests or generated responses."""
+
+    run_id: str
+    operation_kind: str
+    source: str
+    phase: str
+    state: str
+    cancel_requested: bool
+    created_at: str
+    updated_at: str
+    counts: dict[str, int]
+    client_run_id: str | None = None
+
+
+class LocalRunsResponse(BaseModel):
+    runs: list[LocalRunRecord] = Field(default_factory=list)
+
+
+class LocalRunResponse(BaseModel):
+    run: LocalRunRecord
+
+
 class OnboardResponse(BaseModel):
     """Response from ariadne_onboard — the paid build's "ready" stats.
 
@@ -631,3 +654,4 @@ class OnboardResponse(BaseModel):
     coverage_percent: float
     doc_types: list[str] = Field(default_factory=list)
     themes_ok: bool = True
+    run_id: str | None = None

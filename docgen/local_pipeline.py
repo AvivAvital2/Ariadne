@@ -699,9 +699,14 @@ async def refresh_incremental(library: Library, source_name: str, source_path: P
         await live_post_process(orchestrator)
 
 
-async def run_onboard(orchestrator: DocGenOrchestrator) -> dict:
+async def run_onboard(
+    orchestrator: DocGenOrchestrator, *, client_run_id: str | None = None,
+) -> dict:
     store = SpoolStore(orchestrator._library.inference_context, orchestrator._library)
-    run_id = store.create([], operation='onboard', scope=_scope(orchestrator), phase='structural')
+    scope = _scope(orchestrator)
+    if client_run_id is not None:
+        scope['client_run_id'] = client_run_id
+    run_id = store.create([], operation='onboard', scope=scope, phase='structural')
     orchestrator._emit(f'Local onboarding {run_id}; resume with ariadne batch resume {run_id}')
     return await complete_onboard(store, run_id, orchestrator)
 

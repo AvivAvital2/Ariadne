@@ -624,6 +624,8 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
 
     <div class="stage-body">
       <div class="wrap">
+        <section id="localModels" class="local-models" aria-label="Local model controls" hidden></section>
+        <section id="localRuns" class="local-models" aria-label="Saved local builds" hidden></section>
         <!-- ───── STEP 1 · CONNECT ───── -->
         <section class="step on" data-step="1">
           <div class="eyebrow">Step 1 of 5 · Connect <span class="tag">ariadne source add</span></div>
@@ -690,7 +692,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
         <section class="step" data-step="3">
           <div class="eyebrow">Step 3 of 5 · Preview <span class="tag">scope &amp; cost</span></div>
           <h1 class="title">Refine what’s in scope</h1>
-          <p class="lede">This phase is free — no API calls. Browse the tree, exclude what you don’t want documented, and watch the total update. Excluded folders stay listed, so you can change your mind.</p>
+          <p class="lede">The scope and cost preview does not call your models. Browse the tree, exclude what you don’t want documented, and watch the total update. Excluded folders stay listed, so you can change your mind.</p>
 
           <div id="previewBar"></div>
           <p class="hint" id="onboardingModels" hidden>Compare model pairs and their estimated costs here. Your choice is saved only when you start the build; search and answers then use that pair.</p>
@@ -821,6 +823,9 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   </main>
   </div>
 
+<link rel="stylesheet" href="/static/local-models.css">
+<script src="/static/local-models.js"></script>
+<script src="/static/local-runs.js"></script>
 <script>
 (function(){
   const $ = (id)=>document.getElementById(id);
@@ -840,7 +845,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   let cur=1; const TOTAL=STEPS.length;
 
   const state = {
-    projectId:null, onboardingModels:[], profileId:null, estimating:false,
+    projectId:null, savedProject:null, onboardingModels:[], profileId:null, estimating:false,
     source:null, model:null, batch:false, concurrency:4, estimate:null, discover:null,
     excludeGlobs:[], excludeDirs:[], excludeFiles:[], exemptDirs:[], branches:[], depends:[],
     docTypes:null,            // null = all applicable; else the enabled subset
@@ -849,11 +854,41 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     tree:null, cols:[],       // cols = Miller-column drill path (dir names)
     optDelta:0,               // optimistic $ adjustment shown instantly on toggle,
                               // reset when the authoritative estimate returns
-    jobId:null, buildTimer:null,   // background generate job id + its status-poll timer
+    jobId:null, buildTimer:null, streamLost:false,   // background build and connection state
   };
 
-  let bannerEl;
+  let localRuns=null;
+  const localModels=createLocalModels($('localModels'),()=>{syncBuildButton();localRuns?.render();});
+  localRuns=createLocalRuns($('localRuns'),{
+    canResume:project=>!project.managed_local||localModels.ready,
+    onChange:runs=>{
+      const run=runs.find(r=>r.client_run_id===state.jobId);
+      if(!run) return;
+      if(run.state==='completed'){
+        state.es?.close(); localStorage.removeItem('ariadneOnboardJob');
+        setProgress(100); showReady(null);
+      }else if(['cancelled','failed','obsolete'].includes(run.state)){
+        state.es?.close(); localStorage.removeItem('ariadneOnboardJob');
+        setRun('Build '+run.state+'. Completed work is retained.');
+      }else if(!run.active_here){
+        state.es?.close(); setRun('Saved build is unfinished. Resume it using Saved local builds.');
+      }
+    },
+  });
+  function managedChoice(){ return (state.savedProject||state.onboardingModels.find(m=>m.id===state.profileId))?.managed_local; }
+  function useSavedProject(project){
+    state.savedProject=project; localModels.setProfile(project);
+    localRuns.setProject(project); syncBuildButton();
+    if(state.streamLost) recoverLostStream();
+  }
+  function syncBuildButton(){
+    $('nextBtn').disabled=state.estimating || (cur>=3&&!state.estimate) ||
+      (cur===TOTAL && managedChoice() && !localModels.ready);
+  }
+
+  let bannerEl, bannerVersion=0;
   function banner(msg, kind){
+    ++bannerVersion;
     if(!bannerEl){
       bannerEl=document.createElement('div');
       bannerEl.style.cssText='position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:9999;padding:9px 16px;border-radius:10px;font:500 13px/1.4 var(--sans);box-shadow:var(--shadow);max-width:80vw;text-align:center';
@@ -865,6 +900,10 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     bannerEl.style.background = err?'var(--red)':(ok?'var(--green)':'var(--panel)');
     bannerEl.style.color = (err||ok)?'#0b1220':'var(--text)';
     bannerEl.style.border = '1px solid '+(err?'var(--red)':(ok?'var(--green)':'var(--line)'));
+  }
+  function dismissBannerAfter(delay){
+    const version=bannerVersion;
+    setTimeout(()=>{ if(version===bannerVersion) banner(''); },delay);
   }
   async function api(path, body){
     if(state.projectId) body={...body, project_id:state.projectId};
@@ -903,6 +942,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     const aw=$('advWrap'); if(aw) aw.style.display=(cur===4)?'flex':'none';
     const ap=$('advPop'); if(ap) ap.hidden=true;
     if(cur===TOTAL){ const gc=$('gen-config'),gr=$('gen-running'),gd=$('gen-ready'); if(gc)gc.style.display='block'; if(gr)gr.style.display='none'; if(gd)gd.style.display='none'; }
+    syncBuildButton();
   }
   window.goStep=function(n){ cur=Math.max(1,Math.min(TOTAL,n)); render(); const sb=document.querySelector('.stage-body'); if(sb)sb.scrollTop=0; onEnter(cur); };
   window.back=function(){ goStep(cur-1); };
@@ -1106,7 +1146,8 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
           '<span class="mn">'+esc(m.model)+'</span><span class="mv">'+esc(m.embedding_model)+'</span><span class="mp">'+esc(m.reason||'')+'</span><span class="me">'+(m.id===state.profileId&&e?'~'+money(modelTotal(e.model,state.batch)):'Preview cost')+'</span></div>').join('')).join('');
       seg.querySelectorAll('.ml[data-model]').forEach(row=>row.onclick=()=>selectModel(row.dataset.model));
       const choice=state.onboardingModels.find(m=>m.id===state.profileId);
-      setText('ddnm', choice?choice.model:'Choose a model pair');
+      localModels.setProfile(state.savedProject||choice);
+      $('ddnm').textContent=choice?choice.model:'Choose a model pair';
       setText('ddrate', e?'$'+e.input_per_million+' / $'+e.output_per_million:'');
       setText('modelPair', choice?'Embeddings: '+choice.embedding_model+' · '+choice.provider:'');
       return;
@@ -1171,7 +1212,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     const all=(state.allDocTypes&&state.allDocTypes.length)?state.allDocTypes:(state.estimate&&state.estimate.by_doc_type||[]).map(d=>d.doc_type);
     let set=state.docTypes===null?all.slice():state.docTypes.slice();
     const i=set.indexOf(dt); if(i>=0) set.splice(i,1); else set.push(dt);
-    if(!set.length){ banner('Keep at least one doc type.',''); setTimeout(()=>banner(''),1500); return; }
+    if(!set.length){ banner('Keep at least one doc type.',''); dismissBannerAfter(1500); return; }
     state.docTypes=(set.length>=all.length)?null:set;
     applyLocalTotals();   // doc-type cost is local math (by_doc_type) — no re-walk
   }
@@ -1185,7 +1226,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     const arr=state.fmtExcl[dt]||(state.fmtExcl[dt]=[]);
     const i=arr.indexOf(lang), excluding=i<0;
     if(excluding && arr.length+1>=fmts.length){
-      banner('Keep at least one format — turn the whole doc type off instead.',''); setTimeout(()=>banner(''),1800); return;
+      banner('Keep at least one format — turn the whole doc type off instead.',''); dismissBannerAfter(1800); return;
     }
     if(excluding) arr.push(lang); else arr.splice(i,1);
     if(!arr.length) delete state.fmtExcl[dt];
@@ -1397,7 +1438,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     if(!state.source){ banner('Add a source first (Step 1).','err'); return; }
     showDiscovering();
     banner('Discovering languages & index plan… (no API calls)');
-    try{ const d=await api('/api/discover',{source:state.source}); state.discover=d; renderDiscover(d); banner('Discovered '+(d.file_count||0)+' files','ok'); setTimeout(()=>banner(''),1400); }
+    try{ const d=await api('/api/discover',{source:state.source}); state.discover=d; renderDiscover(d); banner('Discovered '+(d.file_count||0)+' files','ok'); dismissBannerAfter(1400); }
     catch(err){ banner('Discover failed: '+err.message,'err'); const plan=$('indexPlan'); if(plan) plan.innerHTML='<div class="bempty">Discover failed — '+esc(err.message)+'</div>'; }
   }
   function showEstimating(){
@@ -1443,7 +1484,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
       const wrap=$('browser'); const rf=wrap&&wrap.querySelector('.brefresh'); if(rf) rf.remove();
       if(wrap && !state.tree) wrap.innerHTML='<div class="bempty">Estimate failed — '+esc(err.message)+'</div>';
     }
-    finally{ if(version===estimateVersion){ state.estimating=false; $('nextBtn').disabled=!state.estimate; const cv=$('costV'); if(cv) cv.classList.remove('cvload'); } }
+    finally{ if(version===estimateVersion){ state.estimating=false; syncBuildButton(); const cv=$('costV'); if(cv) cv.classList.remove('cvload'); } }
   }
   // The per-source per-language doc-type override from the doc-type screen's
   // per-format excludes: {language: [doc types still enabled]} for every
@@ -1505,7 +1546,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
           branches:state.branches, ref:(($('refInput')||{}).value||'').trim()||null });
         if(r.project_id){ state.projectId=r.project_id; state.model=null; state.estimate=null; }
         state.source=r.source; renderGit(r.git);
-        if(r.created===false){ banner('Source “'+r.source+'” already exists — updating it.',''); setTimeout(()=>banner(''),3000); } else banner('');
+        if(r.created===false){ banner('Source “'+r.source+'” already exists — updating it.',''); dismissBannerAfter(3000); } else banner('');
       }catch(err){ banner('Add source failed: '+err.message,'err'); return; }
       goStep(2);
     } else { goStep(cur+1); }
@@ -1536,12 +1577,15 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
       await saveScope();
       const types=(state.docTypes&&state.docTypes.length)?state.docTypes:null;
       const choice=state.onboardingModels.find(m=>m.id===state.profileId);
-      if(choice&&!choice.available) throw new Error(choice.reason);
+      if(choice?.managed_local){
+        if(!await localModels.refresh()) throw new Error('Start local models and wait for Ready before building.');
+      }else if(choice&&!choice.available) throw new Error(choice.reason);
       const r=await api('/api/onboard',{source:state.source,
         ...(state.profileId&&!state.projectId?{onboarding_model:state.profileId}:{model:state.model}),
         batch:state.batch, types, concurrency:state.concurrency, themes:themesOn()});
       state.jobId=r.job_id;
       state.projectId=r.project_id||state.projectId;
+      if(state.projectId&&choice) useSavedProject({...choice,id:state.projectId,source:state.source});
       try{ localStorage.setItem('ariadneOnboardJob', JSON.stringify({job_id:r.job_id, source:state.source, project_id:state.projectId})); }catch(e){}
       streamBuild();
     }catch(err){ banner('Could not start generation: '+err.message,'err'); showBuildConfig(); }
@@ -1550,8 +1594,19 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   // single `done` (carrying the ready stats) or `error`. EventSource auto-
   // reconnects on a transient drop; a 404 (job gone after a server restart)
   // closes it and we surface the "come back" note.
+  function recoverLostStream(){
+    if(state.projectId&&!state.savedProject){
+      setRun('Event stream unavailable. Loading saved project settings…'); return;
+    }
+    if(state.savedProject?.provider==='local'){
+      setRun('Event stream unavailable. Checking the saved build…'); localRuns.refresh(); return;
+    }
+    setRun('Lost track of this build (did the server restart?). A batch keeps running server-side; otherwise start again.');
+    localStorage.removeItem('ariadneOnboardJob');
+  }
   function streamBuild(){
     if(!state.jobId) return;
+    state.streamLost=false;
     if(state.es){ try{ state.es.close(); }catch(e){} }
     const es=new EventSource('/api/onboard/events?job_id='+encodeURIComponent(state.jobId));
     state.es=es;
@@ -1564,14 +1619,18 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
         es.close(); localStorage.removeItem('ariadneOnboardJob');
         setProgress(100); showReady(m.result);
       } else if(m.type==='error'){
-        es.close(); localStorage.removeItem('ariadneOnboardJob');
+        es.close(); if(state.savedProject?.provider!=='local') localStorage.removeItem('ariadneOnboardJob');
         setRun('Generation failed: '+(m.error||'unknown error')+'. Check the server logs.');
+        localRuns.refresh();
+      } else if(m.type==='cancelled'||m.type==='interrupted'){
+        es.close(); if(m.type==='cancelled') localStorage.removeItem('ariadneOnboardJob');
+        setRun(m.type==='cancelled'?'Build cancelled. Completed work is retained.':'Build interrupted. Saved progress can be resumed below.');
+        localRuns.refresh();
       }
     };
     es.onerror=()=>{
       if(es.readyState===EventSource.CLOSED){
-        setRun('Lost track of this build (did the server restart?). A batch keeps running server-side; otherwise start again.');
-        localStorage.removeItem('ariadneOnboardJob');
+        state.streamLost=true; recoverLostStream();
       }
     };
   }
@@ -1646,12 +1705,20 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
       state.jobId=saved.job_id; if(saved.source) state.source=saved.source;
       state.projectId=saved.project_id||null;
       cur=TOTAL; render(); showBuilding(); setRun('Reconnecting to your build…'); streamBuild();
+      if(state.projectId){
+        fetch('/api/projects').then(r=>{if(!r.ok) throw new Error('Could not load saved project.');return r.json();})
+          .then(data=>{
+            const project=(data.projects||[]).find(p=>p.id===state.projectId);
+            if(!project) throw new Error('Saved project no longer exists.');
+            useSavedProject(project);
+          }).catch(error=>setRun(error.message+' Reload to retry.'));
+      }
     } else {
       onEnter(cur);   // initial step (Connect) → load the dependency picker, etc.
     }
   })();
   banner('Connected to Ariadne over MCP — add a source to begin.', 'ok');
-  setTimeout(()=>banner(''), 2600);
+  dismissBannerAfter(2600);
 })();
 </script>
 </body>

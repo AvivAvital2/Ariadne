@@ -7,15 +7,26 @@ Ariadne entirely "over MCP".
 """
 from __future__ import annotations
 
-import sys
 import asyncio
 import json
+import sys
 import uuid
 from contextlib import AsyncExitStack
 from pathlib import Path
 
 from aiohttp import web
 
+from local_models import MAC_PROFILE_IDS
+from web.jobs import (
+    ProjectBusyError,
+    check_managed_admission,
+    check_project_ready,
+    finish_callers,
+    launch_job,
+    project_admission,
+    run_tool,
+)
+from web.local_runs import register_routes as register_run_routes
 from web.mcp_client import (
     MCPCallError,
     connect_http,
@@ -73,7 +84,11 @@ def _make_tool_handler(tool: str):
                 async with store.preview(choice, args.get('source')) as preview:
                     status, body = await dispatch_tool(preview, tool, args)
                 return web.json_response(body, status=status)
+            if project_id and tool in ('ariadne_ask', 'ariadne_search'):
+                check_project_ready(request.app, project_id)
             bridge = await _project_bridge(request.app, project_id, args)
+            if project_id and tool in ('ariadne_ask', 'ariadne_search'):
+                check_project_ready(request.app, project_id)
         except (ValueError, KeyError) as exc:
             return web.json_response({'error': str(exc)}, status=400)
         status, body = await dispatch_tool(bridge, tool, args)
@@ -113,6 +128,75 @@ async def _onboarding_models(request):
 async def _projects(request):
     store = request.app.get('projects')
     return web.json_response({'projects': store.list_projects() if store else []})
+
+
+def _runtime_status(app: web.Application) -> dict:
+    control = app['runtime_actions']
+    status = app['projects'].runtime.status()
+    task = control['task']
+    status['busy'] = task is not None and not task.done()
+    if control.get('stopping'):
+        status['phase'] = 'stopping'
+    if control['error']:
+        status.update(phase='error', error=control['error'])
+    return status
+
+
+async def _local_models(request: web.Request) -> web.Response:
+    if request.app.get('projects') is None:
+        return web.json_response({'error': 'Project onboarding is not configured'}, status=404)
+    return web.json_response(_runtime_status(request.app))
+
+
+async def _local_model_action(request: web.Request) -> web.Response:
+    """Start a fixed, owned operation; model paths and commands never come from HTTP."""
+    origin = request.headers.get('Origin')
+    if origin and origin != f'{request.scheme}://{request.host}':
+        return web.json_response({'error': 'Cross-origin runtime action rejected'}, status=403)
+    if request.app.get('projects') is None:
+        return web.json_response({'error': 'Project onboarding is not configured'}, status=404)
+    body = await _read_json(request)
+    if (not isinstance(body, dict) or set(body) not in ({'action'}, {'action', 'profile_id'})
+            or body['action'] not in ('download', 'start', 'stop')):
+        return web.json_response({'error': 'Expected one action: download, start or stop'}, status=400)
+    action = body['action']
+    if 'profile_id' in body and (action == 'stop' or not isinstance(body['profile_id'], str)
+                                 or body['profile_id'] not in MAC_PROFILE_IDS):
+        return web.json_response({'error': 'Select a registered local model profile for download or start'}, status=400)
+    status = _runtime_status(request.app)
+    if status.get('platform_error') and action != 'stop':
+        return web.json_response({'error': status['platform_error']}, status=400)
+    if status['busy'] and action != 'stop':
+        return web.json_response({'error': 'A local model operation is already running'}, status=409)
+    control = request.app['runtime_actions']
+    previous = control['task']
+    runtime = request.app['projects'].runtime
+    control['error'] = None
+    control['stopping'] = action == 'stop'
+    if action == 'stop' and previous is not None:
+        previous.cancel()
+
+    async def run() -> None:
+        try:
+            if action == 'stop' and previous is not None:
+                await asyncio.gather(previous, return_exceptions=True)
+            if action == 'stop':
+                jobs = [job for job in request.app['jobs'].values()
+                        if job.get('managed_local') and not job['task'].done()]
+                for job in jobs:
+                    await job['queue'].put({'type': 'interrupted', 'error': 'Models stopped; saved work can be resumed.'})
+                await request.app['projects'].interrupt_managed()
+                await finish_callers(jobs, 'interrupted')
+            options = {'profile_id': body['profile_id']} if 'profile_id' in body else {}
+            await {'download': runtime.setup, 'start': runtime.start, 'stop': runtime.stop}[action](**options)
+        except Exception as exc:  # noqa: BLE001 — expose background operation failure to the UI
+            control['error'] = str(exc)
+        finally:
+            if control['task'] is asyncio.current_task():
+                control['stopping'] = False
+
+    control['task'] = asyncio.create_task(run())
+    return web.json_response(_runtime_status(request.app), status=202)
 
 
 async def _index(request: web.Request) -> web.Response:
@@ -241,18 +325,7 @@ async def _run_onboard(bridge, args: dict, queue: asyncio.Queue) -> None:
     single ``{'type': 'done', 'result': {...}}`` or ``{'type': 'error', ...}``.
     The terminal event always fires, so the SSE stream can never hang.
     """
-    async def _progress(progress, total, message):
-        await queue.put({'type': 'progress', 'current': progress,
-                         'total': total, 'message': message})
-
-    try:
-        result = await bridge.call(
-            'ariadne_onboard', args, progress_callback=_progress)
-        await queue.put({'type': 'done', 'result': result})
-    except MCPCallError as exc:
-        await queue.put({'type': 'error', 'error': str(exc)})
-    except Exception as exc:  # never leave the SSE stream hanging
-        await queue.put({'type': 'error', 'error': str(exc)})
+    await run_tool(bridge, 'ariadne_onboard', args, queue)
 
 
 async def _onboard_start(request: web.Request) -> web.Response:
@@ -270,18 +343,27 @@ async def _onboard_start(request: web.Request) -> web.Response:
             store = request.app.get('projects')
             if store is None:
                 raise ValueError('Project onboarding is not configured on this server')
-            project = await store.start(body['onboarding_model'], body['source'],
-                                        themes_enabled=body.get('themes'))
-            project_id = project['id']
-        bridge = await _project_bridge(request.app, project_id, body)
+            check_managed_admission(request.app, managed=body['onboarding_model'] in MAC_PROFILE_IDS)
+            project_id = store.project_id_for(body['onboarding_model'], body['source'])
+        with project_admission(request.app, project_id):
+            if body.get('onboarding_model'):
+                project = await store.start(body['onboarding_model'], body['source'],
+                                            themes_enabled=body.get('themes'))
+                project_id = project['id']
+            check_project_ready(request.app, project_id)
+            bridge = await _project_bridge(request.app, project_id, body)
+            check_project_ready(request.app, project_id)
+            job_id = uuid.uuid4().hex[:12]
+            project = request.app['projects'].describe(project_id) if project_id else None
+            args = _onboard_tool_args(body)
+            if project and project['provider'] == 'local':
+                args['client_run_id'] = job_id
+            launch_job(request.app, bridge, 'ariadne_onboard', args, project=project,
+                       job_id=job_id, profile_id=body.get('onboarding_model'))
+    except ProjectBusyError as exc:
+        return web.json_response({'error': str(exc)}, status=409)
     except ValueError as exc:
         return web.json_response({'error': str(exc)}, status=400)
-    job_id = uuid.uuid4().hex[:12]
-    queue: asyncio.Queue = asyncio.Queue()
-    job = {'id': job_id, 'queue': queue}
-    request.app['jobs'][job_id] = job
-    job['task'] = asyncio.create_task(
-        _run_onboard(bridge, _onboard_tool_args(body), queue))
     return web.json_response({'job_id': job_id, 'status': 'running',
                               **({'project_id': project_id} if project_id else {})})
 
@@ -292,19 +374,24 @@ async def _onboard_events(request: web.Request) -> web.StreamResponse:
     job = request.app['jobs'].get(job_id) if job_id else None
     if job is None:
         return web.json_response({'error': 'unknown job_id'}, status=404)
+    try:
+        sequence = int(request.headers.get('Last-Event-ID', '0'))
+    except ValueError:
+        return web.json_response({'error': 'Invalid event id'}, status=400)
     resp = web.StreamResponse(headers={
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'X-Accel-Buffering': 'no',
     })
     await resp.prepare(request)
-    queue = job['queue']
-    while True:
-        event = await queue.get()
-        await resp.write(f'data: {json.dumps(event)}\n\n'.encode())
-        if event['type'] in ('done', 'error'):
-            break
-    request.app['jobs'].pop(job_id, None)
+    try:
+        while True:
+            for sequence, event in await job['queue'].read_after(sequence):
+                await resp.write(f'id: {sequence}\ndata: {json.dumps(event)}\n\n'.encode())
+                if event['type'] in ('done', 'error', 'cancelled', 'interrupted'):
+                    return resp
+    except (ConnectionResetError, ConnectionError):
+        pass  # A browser disconnect does not interrupt the owned execution.
     return resp
 
 
@@ -343,9 +430,14 @@ def make_app(bridge=None, *, server_params=None, mcp_url=None, projects=None) ->
     """
     app = web.Application()
     app['jobs'] = {}
+    app['project_admissions'] = set()
     app['projects'] = projects
+    app['runtime_actions'] = {'task': None, 'error': None, 'stopping': False}
+    register_run_routes(app)
     app.router.add_get('/api/onboarding-models', _onboarding_models)
     app.router.add_get('/api/projects', _projects)
+    app.router.add_get('/api/local-models', _local_models)
+    app.router.add_post('/api/local-models', _local_model_action)
     app.on_cleanup.append(_cleanup_projects)
     app.router.add_post('/api/onboard', _onboard_start)
     app.router.add_get('/api/onboard/events', _onboard_events)
@@ -370,6 +462,8 @@ def make_app(bridge=None, *, server_params=None, mcp_url=None, projects=None) ->
 
 async def _cleanup_projects(app):
     tasks = [job['task'] for job in app['jobs'].values() if 'task' in job]
+    if task := app['runtime_actions']['task']:
+        tasks.append(task)
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)

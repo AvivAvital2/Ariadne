@@ -130,6 +130,7 @@ describe('Model pair selected per onboarding', () => {
     cy.intercept('POST', '/api/discover', {source:'demo', file_count:1, languages:[], indexers:[]}).as('discover');
     cy.intercept('POST', '/api/estimate', estimate(choice)).as('estimate');
     cy.intercept('POST', '/api/onboard', ()=>{throw new Error('Must not submit a build without credentials');});
+    cy.clock(Date.now(),['setTimeout','clearTimeout']);
     cy.visit(base+'/');
     cy.get('#srcName').type('demo');
     cy.get('#srcPath').type('/workspace/demo');
@@ -142,6 +143,9 @@ describe('Model pair selected per onboarding', () => {
     cy.get('#nextBtn').click();
     cy.wait('@estimate');
     cy.get('#nextBtn').click();
+    cy.contains('Could not start generation: Missing DEEPINFRA_API_KEY').should('be.visible');
+    // Timers from earlier successful steps must not dismiss this build error.
+    cy.tick(3000);
     cy.contains('Could not start generation: Missing DEEPINFRA_API_KEY').should('be.visible');
     cy.get('#gen-config').should('be.visible');
   });

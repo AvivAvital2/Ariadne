@@ -138,6 +138,8 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
 </header>
 
 <main class="content">
+  <section id="localModels" class="local-models" aria-label="Local model controls" hidden></section>
+  <section id="localRuns" class="local-models" aria-label="Saved local builds" hidden></section>
   <div class="hero">
     <div class="inner">
       <h1>Follow the <span class="thread">thread</span> through your codebase.</h1>
@@ -158,6 +160,9 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
   </div>
 </main>
 
+<link rel="stylesheet" href="/static/local-models.css">
+<script src="/static/local-models.js"></script>
+<script src="/static/local-runs.js"></script>
 <script>
 (function(){
   const $ = id => document.getElementById(id);
@@ -166,6 +171,12 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
   let role = 'developer';
   let lastQuestion = '';
   const projectId=new URLSearchParams(location.search).get('project');
+  let managed=false, asking=false, projectPending=!!projectId;
+  let localRuns=null;
+  const localModels=createLocalModels($('localModels'),()=>{syncAskButton();localRuns?.render();});
+  localRuns=createLocalRuns($('localRuns'),{canResume:project=>!project.managed_local||localModels.ready});
+  function syncAskButton(){ $('askBtn').disabled=asking || projectPending || (managed&&!localModels.ready); }
+  syncAskButton();
   const DEFAULT_CHIPS = [
     'How does search ranking work?',
     'Where is retry logic handled?',
@@ -266,12 +277,14 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
 
   async function ask(){
     const question = $('q').value.trim();
-    if(!question) return;
+    if(!question || asking) return;
     lastQuestion = question;
     $('answerGrid').hidden = true;
-    $('askBtn').disabled = true;
+    asking=true; syncAskButton();
     setStatus('Following the thread…');
     try {
+      await projectReady;
+      if(managed && !await localModels.refresh()) throw new Error('Start local models and wait for Ready before asking.');
       const source = await sourceReady;
       if(!source) throw new Error('Add a source through onboarding before asking a question.');
       const [a, s] = await Promise.all([
@@ -283,7 +296,7 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
     } catch(e){
       setStatus('Could not answer: ' + e.message, true);
     } finally {
-      $('askBtn').disabled = false;
+      asking=false; syncAskButton();
     }
   }
 
@@ -312,13 +325,25 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
     })
     .catch(() => { $('srcName').textContent = 'MCP'; return null; });
 
-  fetch('/api/projects').then(r=>r.json()).then(data=>{
-    const projects=data.projects||[]; if(!projects.length) return;
+  const projectReady=fetch('/api/projects').then(r=>{
+    if(!r.ok) throw new Error('Could not load project settings. Reload to retry.');
+    return r.json();
+  }).then(data=>{
+    const projects=data.projects||[];
+    const selected=projects.find(p=>p.id===projectId);
+    managed=!!selected?.managed_local;
+    localModels.setProfile(selected);
+    localRuns.setProject(selected);
+    projectPending=false; syncAskButton();
+    if(!projects.length) return;
     const picker=$('projectPicker'); picker.hidden=false;
     picker.innerHTML='<option value="">Default library</option>'+projects.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.source+' · '+p.model+' ('+p.provider+')')+'</option>').join('');
     picker.value=projectId||'';
     picker.onchange=()=>{ location.href='/static/console.html'+(picker.value?'?project='+encodeURIComponent(picker.value):''); };
-  }).catch(()=>{});
+  }).catch(error=>{ if(projectId){setStatus(error.message,true);throw error;} });
+  // Keep initialization failures visible without an unhandled rejection;
+  // a query still awaits the original promise and cannot bypass the failure.
+  projectReady.catch(()=>{});
 
   renderChips();
 })();

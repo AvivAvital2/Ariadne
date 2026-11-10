@@ -3,15 +3,17 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import Context
 
-from docgen.trace_flow_llm_bridge import build_llm_bridge
 from ariadne_mcp.models import (
     AdminActionResponse,
     DiscoverResponse,
     EstimateResponse,
+    LocalRunResponse,
+    LocalRunsResponse,
     OnboardResponse,
     SourceAddResponse,
     SourceListResponse,
 )
+from docgen.trace_flow_llm_bridge import build_llm_bridge
 
 
 async def ariadne_branch_sync(
@@ -565,6 +567,48 @@ def ariadne_list_sources() -> SourceListResponse:
     return AriadneService.get().list_sources()
 
 
+async def ariadne_local_runs(
+    source: str | None = None,
+    run_id: str | None = None,
+    client_run_id: str | None = None,
+) -> LocalRunsResponse:
+    """Inspect durable local runs for a source, including when model servers are offline.
+
+    Reports saved-response and applied-document counts, without exposing prompts
+    or generated content. A running record can survive an interrupted process;
+    it does not by itself prove that an executor is currently active.
+    """
+    from ariadne_mcp.service import AriadneService
+
+    return AriadneService.get().local_runs(source, run_id=run_id, client_run_id=client_run_id)
+
+
+async def ariadne_local_run_cancel(
+    run_id: str, source: str | None = None,
+) -> LocalRunResponse:
+    """Terminally cancel a local run, preserving already applied documents.
+
+    Works offline and while another operation owns the corpus writer. Cancelled
+    runs cannot be resumed; ordinary process interruption remains resumable.
+    """
+    from ariadne_mcp.service import AriadneService
+
+    return AriadneService.get().local_run_cancel(run_id, source)
+
+
+async def ariadne_local_run_resume(
+    run_id: str, source: str | None = None,
+) -> LocalRunResponse:
+    """Resume unfinished local work with its saved model pair, scope and attempt budgets.
+
+    Requires model servers and exclusive corpus write ownership. Saved responses
+    are reused. Terminal runs are returned unchanged and do no further work.
+    """
+    from ariadne_mcp.service import AriadneService
+
+    return await AriadneService.get().local_run_resume(run_id, source)
+
+
 async def ariadne_onboard(
     source: str | None = None,
     model: str | None = None,
@@ -572,6 +616,7 @@ async def ariadne_onboard(
     batch: bool = False,
     concurrency: int | None = None,
     ctx: Context | None = None,
+    client_run_id: str | None = None,
 ) -> OnboardResponse:
     """Generate documentation for a source end-to-end — the onboarding "Generate" step.
 
@@ -589,6 +634,7 @@ async def ariadne_onboard(
         batch: Use the ~50%-off Message Batches API (up to 24h SLA) instead of
             live dispatch.
         concurrency: Max parallel LLM calls; defaults to each phase's default.
+        client_run_id: Optional browser correlation ID, persisted for local runs.
     """
     from ariadne_mcp.service import AriadneService
 
@@ -599,13 +645,26 @@ async def ariadne_onboard(
     return await AriadneService.get().onboard(
         source, model=model, doc_types=doc_types,
         mode='batch' if batch else 'live', concurrency=concurrency,
-        progress=_report,
+        progress=_report, client_run_id=client_run_id,
     )
 
 
 def register_tools(mcp) -> None:
     """Register admin tools with the MCP server."""
     from mcp.types import ToolAnnotations
+
+    mcp.tool(annotations=ToolAnnotations(
+        title='Inspect Local Runs', readOnlyHint=True, destructiveHint=False,
+        idempotentHint=True, openWorldHint=False,
+    ))(ariadne_local_runs)
+    mcp.tool(annotations=ToolAnnotations(
+        title='Cancel Local Run', readOnlyHint=False, destructiveHint=False,
+        idempotentHint=True, openWorldHint=False,
+    ))(ariadne_local_run_cancel)
+    mcp.tool(annotations=ToolAnnotations(
+        title='Resume Local Run', readOnlyHint=False, destructiveHint=False,
+        idempotentHint=False, openWorldHint=False,
+    ))(ariadne_local_run_resume)
 
     mcp.tool(annotations=ToolAnnotations(
         title='Branch Sync',

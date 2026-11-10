@@ -13,6 +13,12 @@ from tempfile import TemporaryDirectory
 import yaml
 
 from config import Config
+from local_models import (
+    MAC_ACCURACY_PROFILE_ID,
+    MAC_PROFILE_IDS,
+    managed_model_profile,
+)
+from local_runtime import MacRuntime
 from model_config import CHAT_MODEL, EMBEDDING_MODEL, credential_env, identity_hash, resolve_models
 from web.mcp_client import MCPBridge, connect_stdio, stdio_server_params
 
@@ -22,6 +28,8 @@ class ProjectStore:
         self.config = config
         self.root = config.config_dir.resolve() / 'web-projects'
         self._sessions = {}
+        self._interruptions = {}
+        self.runtime = MacRuntime(config.config_dir.resolve() / 'local-models')
 
     def profiles(self) -> dict:
         """Only configuration and credential presence are read; no inference calls."""
@@ -43,6 +51,7 @@ class ProjectStore:
             if key in ('llm', 'embeddings', 'execution', 'model', 'provider', 'defaults')
         }
         profiles.update(self.config._explicit.get('onboarding_models', {}) or {})
+        profiles.update({profile_id: managed_model_profile(profile_id) for profile_id in MAC_PROFILE_IDS})
         return profiles
 
     def choices(self) -> list[dict]:
@@ -63,7 +72,14 @@ class ProjectStore:
                 'preview_available': True,
                 'reason': 'Missing ' + ', '.join(missing) if missing else None,
             })
-        if not any(choice['provider'] == 'local' for choice in choices):
+            if key in MAC_PROFILE_IDS:
+                reason = self._runtime_unavailable(key)
+                choices[-1].update(
+                    **self._managed_details(key, settings.profile_hash),
+                    available=reason is None, reason=reason,
+                )
+        if not any(choice['provider'] == 'local' and not choice.get('managed_local')
+                   for choice in choices):
             choices.append({
                 'id': 'qwen-local', 'model': CHAT_MODEL, 'provider': 'local',
                 'embedding_model': EMBEDDING_MODEL, 'label': 'Qwen (local)',
@@ -71,6 +87,34 @@ class ProjectStore:
                 'preview_available': False,
             })
         return choices
+
+    @staticmethod
+    def _managed_details(profile_id: str, profile_hash: str) -> dict:
+        details = {'managed_local': True, 'managed_local_profile': profile_id,
+                   'profile_hash': profile_hash, 'qualification': 'unqualified'}
+        if profile_id not in MAC_PROFILE_IDS:
+            return details
+        accuracy = profile_id == MAC_ACCURACY_PROFILE_ID
+        return {**details,
+                'label': ('Experimental Qwen local on Mac (27B thinking + 8B embeddings, Q4; 32GB qualification target)'
+                          if accuracy else 'Experimental legacy Qwen local on Mac (9B generation + 8B embeddings, Q4)'),
+                'quality_note': ('Experimental: 27B thinking has not passed Ariadne quality qualification.'
+                                 if accuracy else 'Experimental: initial generated documents contained factual errors; this candidate is not production qualified.'),
+                'memory_note': ('32GB qualification target; 24GB fit is unqualified. Memory use has not been measured on M5.'
+                                if accuracy else 'Legacy 9B profile retained for existing projects; M5 memory use remains unqualified.')}
+
+    def _runtime_unavailable(self, profile_id: str) -> str | None:
+        if not isinstance(profile_id, str) or profile_id not in MAC_PROFILE_IDS:
+            return 'Unknown managed local profile; the saved project has not been changed.'
+        status = self.runtime.status()
+        if status['platform_error']:
+            return status['platform_error']
+        if status['phase'] != 'ready':
+            return 'Start local models before building this project.'
+        expected = resolve_models(managed_model_profile(profile_id)).profile_hash
+        if status.get('profile_id') != profile_id or status.get('profile_hash') != expected:
+            return 'Stop current local models, then start the model profile saved for this project.'
+        return None
 
     def path(self, project_id: str) -> Path:
         if not isinstance(project_id, str) or not re.fullmatch(r'[a-f0-9]{24}', project_id):
@@ -98,6 +142,9 @@ class ProjectStore:
         data['defaults'] = {k: v for k, v in data.get('defaults', {}).items()
                             if k not in ('model', 'provider')}
         data.update(copy.deepcopy(profile))
+        data.pop('managed_local_profile', None)
+        if profile_id in MAC_PROFILE_IDS:
+            data['managed_local_profile'] = profile_id
         # Keep source settings (including discovery and exclusions) and resolve
         # paths before relocating the configuration beside its own databases.
         sources = {}
@@ -131,11 +178,12 @@ class ProjectStore:
     def prepare(self, profile_id: str, name: str, source_path: str | None = None,
                 *, themes_enabled: bool | None = None) -> dict:
         """Save the selected pair only when the user starts a build."""
+        if profile_id in MAC_PROFILE_IDS and (reason := self._runtime_unavailable(profile_id)):
+            raise ValueError(reason)
         data = self._configuration(profile_id, name, source_path)
         settings = resolve_models(data)
         settings.check_credentials()
-        project_id = identity_hash({'path': data['sources'][name]['path'], 'source': name,
-                                    'models': settings.identity})[:24]
+        project_id = self._project_identity(profile_id, name, data)
         directory = self.root / project_id
         path = directory / 'ariadne.yaml'
         if path.exists():
@@ -150,6 +198,19 @@ class ProjectStore:
         temporary.replace(path)
         return self.describe(project_id)
 
+    def project_id_for(self, profile_id: str, name: str) -> str:
+        """Resolve admission identity without saving config or closing a session."""
+        return self._project_identity(profile_id, name, self._configuration(profile_id, name))
+
+    @staticmethod
+    def _project_identity(profile_id: str, name: str, data: dict) -> str:
+        project_identity = {'path': data['sources'][name]['path'], 'source': name,
+                            'models': resolve_models(data).identity}
+        if profile_id in MAC_PROFILE_IDS:
+            # Externally managed endpoints must retain their own project config.
+            project_identity['managed_local_profile'] = profile_id
+        return identity_hash(project_identity)[:24]
+
     async def start(self, profile_id: str, name: str, *, themes_enabled: bool | None = None) -> dict:
         project = self.prepare(profile_id, name, themes_enabled=themes_enabled)
         # A repeated onboarding can change scope; reload the saved source settings.
@@ -158,12 +219,26 @@ class ProjectStore:
             await previous.close()
         return project
 
+    def check_runtime_ready(self, project_id: str) -> None:
+        cfg = Config(self.path(project_id))
+        if 'managed_local_profile' not in cfg._explicit:
+            return
+        profile_id = cfg._explicit['managed_local_profile']
+        if not isinstance(profile_id, str) or profile_id not in MAC_PROFILE_IDS:
+            raise ValueError('Unknown managed local profile; the saved project has not been changed.')
+        if cfg.model_settings().identity != resolve_models(managed_model_profile(profile_id)).identity:
+            raise ValueError('The saved model pair differs from its pinned profile; the project has not been changed.')
+        if reason := self._runtime_unavailable(profile_id):
+            raise ValueError(reason)
+
     def describe(self, project_id: str) -> dict:
         cfg = Config(self.path(project_id))
         settings = cfg.model_settings()
         return {'id': project_id, 'source': cfg.default_source,
                 'model': settings.chat.model, 'provider': settings.chat.provider,
-                'embedding_model': settings.embeddings.model}
+                'embedding_model': settings.embeddings.model,
+                **(self._managed_details(cfg._explicit['managed_local_profile'], settings.profile_hash)
+                   if 'managed_local_profile' in cfg._explicit else {})}
 
     def list_projects(self) -> list[dict]:
         return [self.describe(path.parent.name)
@@ -176,8 +251,41 @@ class ProjectStore:
             session = self._sessions[project_id] = ProjectSession(path)
         return await session.connect()
 
+    async def interrupt(self, project_id: str) -> None:
+        """Reap this project's owned MCP process without changing persisted work."""
+        self.path(project_id)
+        session = self._sessions.get(project_id)
+        if session is not None:
+            cleanup = self._interruptions.get(project_id)
+            if cleanup is None:
+                cleanup = self._interruptions[project_id] = asyncio.create_task(
+                    self._interrupt_session(project_id, session))
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                # A disconnected browser must not strand the owned MCP worker.
+                await asyncio.shield(cleanup)
+                raise
+
+    async def _interrupt_session(self, project_id: str, session: ProjectSession) -> None:
+        try:
+            await session.close()
+            if self._sessions.get(project_id) is session:
+                self._sessions.pop(project_id)
+        finally:
+            self._interruptions.pop(project_id, None)
+
+    async def interrupt_managed(self) -> None:
+        """Stop owned sessions using the managed runtime, preserving other projects."""
+        await asyncio.gather(*(self.interrupt(project_id)
+                               for project_id in tuple(self._sessions)
+                               if self.describe(project_id).get('managed_local')))
+
     async def close(self) -> None:
-        await asyncio.gather(*(s.close() for s in self._sessions.values()))
+        try:
+            await asyncio.gather(*(s.close() for s in self._sessions.values()))
+        finally:
+            await self.runtime.stop()
 
 
 class ProjectSession:
@@ -212,4 +320,13 @@ class ProjectSession:
     async def close(self) -> None:
         self.stop.set()
         if self.task:
-            await self.task
+            if not self.ready.is_set():
+                # A child may never answer initialize; stop.wait() is not reached
+                # until then. Cancel startup so its own task unwinds the stack.
+                self.error = RuntimeError('Project session interrupted during startup')
+                self.task.cancel()
+                await asyncio.gather(self.task, return_exceptions=True)
+                # A task canceled before its first step never runs _run's finally.
+                self.ready.set()
+            else:
+                await self.task
