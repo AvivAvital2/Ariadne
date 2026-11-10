@@ -17,7 +17,8 @@ dependencies = [
     # `ariadne discover --review` (Phase 2j.c). PyYAML can't preserve
     # comments + formatting on write; ruamel.yaml's RoundTripLoader can.
     "ruamel.yaml>=0.18",
-    "mcp>=1.26.0",
+    # Ariadne uses the v1 FastMCP and client APIs; MCP 2 requires a migration.
+    "mcp>=1.26.0,<2",
     "python-dotenv>=1.0",
     "ast-grep-py",
     "ruff>=0.15.12",
@@ -78,7 +79,7 @@ dev = [
     # sufficient: tells us what code is reached, not whether the
     # behavior is validated. Pair with mutmut below for the
     # functional half.
-    "pytest-cov>=5.0",
+    "pytest-cov>=7.1.0",
     # Mutation testing — flips ==/!=, +/-, True/False etc. in source
     # and reruns tests. Surviving mutants = code that's line-covered
     # but not behaviorally tested ("paperweight" tests). Use this
@@ -127,6 +128,8 @@ addopts = ["--ignore=.env"]
 
 [tool.coverage.run]
 branch = true
+# Preserve pytest-cov per-test contexts on the verified Python 3.14 toolchain.
+core = "ctrace"
 source = [
     ".",
     "docgen",
@@ -155,6 +158,16 @@ exclude_lines = [
 show_missing = true
 skip_covered = false
 precision = 1                     # one decimal place — coarser %s mask drift
+
+# Keep reports under build/. Preserve per-test contexts in HTML and the
+# coverage database; repeating every context in JSON makes full reports huge.
+[tool.coverage.json]
+output = "build/coverage/coverage.json"
+show_contexts = false
+
+[tool.coverage.html]
+directory = "build/coverage/html"
+show_contexts = true
 
 
 # ---------------------------------------------------------------------------
