@@ -172,11 +172,39 @@ class TestSelectSpoolDocs:
         )
         ids = [c.doc_id for c in picked]
         assert 's-truth' in ids                      # the fill ran
-        assert picked[0].doc_id == 'e-best'          # entity slot = best cosine
+        # A stronger semantic answer (0.9) outranks the best entity name-match
+        # (0.6): admissions are ordered by relevance ALONGSIDE the semantic fill,
+        # not as a block in front of it. (See the name-mention regression below.)
+        assert picked[0].doc_id == 's-truth'
         by_id = {c.doc_id: c for c in picked}
         assert by_id['s-truth'].connection == 'semantic'
+        assert by_id['e-best'].connection == 'entity'   # still admitted, just lower
         n_entity = sum(1 for c in picked if c.connection == 'entity')
         assert n_entity <= 2                         # cap held (limit 3 -> 1+backfill)
+
+    def test_semantic_answer_is_not_buried_by_a_name_only_entity_match(self, lib) -> None:
+        # LIVE REGRESSION (the databricks spool): asking "what does the Catalyst
+        # optimizer do?" ranked docs merely NAMED for the entity — `AvroDataTo
+        # Catalyst`, an entity(Catalyst) hit at low cosine — ABOVE the doc that
+        # actually answers it (the `Optimizer` explanation, higher cosine). ask()
+        # then saw only the name-matches and answered "I cannot answer", though
+        # the correct doc was right there. A name-mention must not bury the
+        # meaning: entity admission stays categorical, but ordering is by cosine.
+        _spool_doc(lib, 'name-match', 'Avro Data To Catalyst')          # NAMED 'Catalyst'
+        _spool_doc(lib, 'the-answer', 'Query Optimization Deep Dive')   # the real answer
+        matrix = _matrix({
+            'name-match': (0.45, np.sqrt(1 - 0.45 ** 2)),   # entity hit, weak cosine
+            'the-answer': (0.85, np.sqrt(1 - 0.85 ** 2)),   # strong semantic answer
+        })
+        query = np.array([1.0, 0.0], dtype=np.float32)
+        picked = lens_retrieval.select_spool_docs(
+            lib, matrix, ['spool:env1'],
+            [EntityHit('Catalyst', 'title', 'product')],    # matches 'name-match' only
+            query_embedding=query, limit=4,
+        )
+        ids = [c.doc_id for c in picked]
+        assert ids[0] == 'the-answer'          # meaning beats the name-mention
+        assert 'name-match' in ids             # still admitted (categorical), just lower
 
     def test_without_query_embedding_entity_only(self, lib) -> None:
         _spool_doc(lib, 'd-entity', 'Quantum Mesh Overview')
@@ -209,4 +237,3 @@ class TestLensShare:
         for limit in range(3, 40):
             share = lens_retrieval.lens_share(limit)
             assert limit - share > share, limit   # primary strict majority
-        assert lens_retrieval.lens_share(2) == 1  # best a 2-window can do

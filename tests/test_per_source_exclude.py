@@ -14,13 +14,6 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 
-def test_source_config_has_exclude_defaulting_empty():
-    from config import SourceConfig
-
-    sc = SourceConfig(path='/tmp/x')
-    assert sc.exclude == ()
-
-
 def test_source_config_accepts_exclude_tuple():
     from config import SourceConfig
 
@@ -56,37 +49,9 @@ def test_config_reads_exclude_from_yaml(tmp_path):
     )
 
 
-def test_config_exclude_absent_yields_empty_tuple(tmp_path):
-    """Sources without an ``exclude:`` block produce an empty tuple."""
-    from config import Config
-
-    yaml_path = tmp_path / 'ariadne.yaml'
-    yaml_path.write_text(
-        'sources:\n'
-        '  myapp:\n'
-        '    path: /tmp/myapp\n',
-        encoding='utf-8',
-    )
-    cfg = Config(config_path=yaml_path)
-    sc = cfg.get_source_config('myapp')
-    assert sc is not None
-    assert sc.exclude == ()
-
-
 # ---------------------------------------------------------------------------
 # Orchestrator layer: exclude_patterns is honored during file discovery
 # ---------------------------------------------------------------------------
-
-
-def test_orchestrator_config_has_exclude_patterns_default_empty():
-    from docgen.orchestrator import OrchestratorConfig
-
-    cfg = OrchestratorConfig(
-        source_path=Path('/tmp'),
-        db_path=Path('/tmp/x.db'),
-        staleness_db_path=Path('/tmp/s.db'),
-    )
-    assert cfg.exclude_patterns == ()
 
 
 def test_orchestrator_config_accepts_exclude_patterns():

@@ -109,21 +109,7 @@ def test_theme_touching_source_is_carried_with_scoped_members(rich_db, tmp_path)
         full.close(); sl.close()
     assert sliced == sorted([rich_db['cat_sdk1'], rich_db['cat_sdk2']]), 'members not restricted to source'
     assert sliced == scoped, 'theme membership diverged from scoped-full'
-
-
-def test_theme_without_source_members_is_omitted(rich_db, tmp_path):
-    out = _export(rich_db, tmp_path)
-    sl = Library(out)
-    try:
-        clusters = {t.cluster_id for t in sl.list_themes(coherent_only=True)}
-    finally:
-        sl.close()
-    assert 'c_touch' in clusters          # positive: the relevant theme is here
-    assert 'c_noise' not in clusters      # negative: a noise-only theme is not
-
-
-def test_no_dangling_theme_members(rich_db, tmp_path):
-    out = _export(rich_db, tmp_path)
+    assert 'c_noise' not in clusters
     conn = sqlite3.connect(out)
     try:
         members = [r[0] for r in conn.execute('SELECT element_id FROM theme_members')]
@@ -132,10 +118,6 @@ def test_no_dangling_theme_members(rich_db, tmp_path):
         conn.close()
     assert members, 'expected at least one theme member in the slice'
     assert all(m in doc_ids for m in members), 'theme_members reference docs absent from the slice'
-
-
-def test_doc_graph_carries_internal_edges_and_drops_external(rich_db, tmp_path):
-    out = _export(rich_db, tmp_path)
     conn = sqlite3.connect(out)
     try:
         edges = conn.execute('SELECT source_id, target_id FROM doc_graph').fetchall()

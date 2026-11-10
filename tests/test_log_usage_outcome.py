@@ -25,17 +25,6 @@ def library(tmp_path: Path):
     lib.close()
 
 
-def test_log_usage_with_zero_results_does_not_raise(library):
-    """Zero-result search should record a usage event cleanly. Bites
-    when log_usage overrides the schema's DEFAULT 'call' with NULL."""
-    event_id = library.log_usage(
-        tool_name='ariadne_search',
-        query='nothing matches',
-        result_count=0,
-    )
-    assert event_id is not None
-
-
 def test_log_usage_with_zero_results_records_call_outcome(library):
     """The recorded outcome for a zero-result call is 'call' — the
     neutral 'awaiting-feedback' sentinel, matching the schema

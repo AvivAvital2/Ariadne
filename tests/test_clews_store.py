@@ -399,7 +399,6 @@ def test_symbol_target_menu_includes_route_owner_members(conn):
                        if name == "pkg.Owner.SHARED_FIELD")
     assert menu.text.count("pkg.Owner") >= 2
     assert f"{run_label}. pkg.Owner.run" in menu.text
-    assert f"{run_label}. pkg.Owner.run" in menu.text
     assert f"{field_label}. pkg.Owner.SHARED_FIELD" in menu.text
 def test_symbol_target_menu_reaches_a_second_hop_endpoint(conn):
     from library.clews import ClewMatch, clew_symbol_menu
@@ -1241,7 +1240,6 @@ def test_family_menu_keeps_full_owner_identity_on_each_card():
     menu = clew_family_menu([first, second], question="run pipeline")
     assert menu.text.count("pkg.pipeline") == 2
     assert "pkg.pipeline.Alpha" in menu.text
-    assert "pkg.pipeline.Alpha" in menu.text
     assert "pkg.pipeline.Beta" in menu.text
 def test_nearest_matches_reuses_one_vector_index_per_unchanged_source(conn, monkeypatch):
     import library.clews as clews_module
@@ -1323,26 +1321,6 @@ def _plain_match(*route):
         "structure_score": 0, "origin_rank": None})()
 
 
-class TestDeterministicRarityWeighting:
-    def test_rare_token_route_beats_common_token_ties(self):
-        from library.clews import deterministic_clew_matches
-
-        # "write" appears across three routes, "sink" in one; a raw
-        # overlap count ties the writer route with the sink route and
-        # alphabetical identity would pick the writer.
-        matches = [
-            _plain_match("pkg.BatchWriter.writeBatch"),
-            _plain_match("pkg.LogWriter.writeLog"),
-            _plain_match("pkg.FileWriter.writeFile"),
-            _plain_match("pkg.Sink.addBatch"),
-        ]
-
-        chosen = deterministic_clew_matches(
-            "how does the sink write each batch", matches, limit=1)
-
-        assert chosen[0].clew.route == ("pkg.Sink.addBatch",)
-
-
 class TestFullRankExposure:
     def test_full_ranking_orders_every_match_without_a_shortlist(self):
         from library.clews import (
@@ -1365,3 +1343,4 @@ class TestFullRankExposure:
         shortlist = deterministic_clew_matches(
             "how does the sink write each batch", matches, limit=1)
         assert shortlist[0].clew.id == ordered[0].clew.id
+        assert shortlist[0].clew.route == ("pkg.Sink.addBatch",)

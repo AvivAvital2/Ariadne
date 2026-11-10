@@ -109,20 +109,9 @@ def test_scip_reachability_pulls_cross_source_callees(scip_db, tmp_path):
         g.load_from(gc)
     callee_sources = {e.callee.source_name for e in g.callees_of('sdk.func')}
     assert 'ariadne' in callee_sources, 'cross-source callee not queryable in the slice'
-
-
-def test_local_symbols_are_namespaced_on_export(scip_db, tmp_path):
-    out = tmp_path / 'slice.db'
-    export_source_db(scip_db['path'], 'sdk', out, include_scip=True)
-    conn = sqlite3.connect(out)
-    try:
-        syms = {r[0] for r in conn.execute('SELECT canonical_id FROM scip_symbols')}
-        edges = conn.execute('SELECT callee_canonical_id FROM scip_edges').fetchall()
-    finally:
-        conn.close()
     assert 'sdk::local 5' in syms, 'local symbol not namespaced'
     assert 'local 5' not in syms, 'raw local id must not survive export'
-    assert ('sdk::local 5',) in edges, 'edge endpoint not rewritten to match'
+    assert any(callee == 'sdk::local 5' for _, callee in edges), 'edge endpoint not rewritten to match'
 
 
 def test_merge_does_not_corrupt_an_unrelated_local_symbol(scip_db, tmp_path):

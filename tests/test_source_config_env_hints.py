@@ -24,6 +24,10 @@ def test_source_config_has_env_hints_default_empty():
     from config import SourceConfig
     sc = SourceConfig(path='/tmp/x')
     assert sc.env_hints == {}
+    assert sc.swagger_paths == ()
+    assert sc.exclude_dirs == ()
+    assert sc.exempt_dirs == ()
+    assert sc.exclude == ()
 
 
 def test_source_config_accepts_env_hints_dict():
@@ -87,6 +91,8 @@ def test_config_yaml_without_env_hints_yields_empty_dict(tmp_path):
     sc = cfg.get_source_config('myapp')
     assert sc is not None
     assert sc.env_hints == {}
+    assert sc.swagger_paths == ()
+    assert sc.exclude == ()
 
 
 def test_config_yaml_string_source_yields_empty_env_hints(tmp_path):
@@ -180,15 +186,6 @@ def test_env_hints_with_non_string_values_rejected(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_source_config_has_swagger_paths_default_empty():
-    """swagger_paths defaults to an empty tuple — sources without
-    OpenAPI specs declared work as before. The field is the entry
-    point for Phase 7c's Swagger ingestion."""
-    from config import SourceConfig
-    sc = SourceConfig(path='/tmp/x')
-    assert sc.swagger_paths == ()
-
-
 def test_source_config_accepts_swagger_paths_tuple():
     from config import SourceConfig
     sc = SourceConfig(
@@ -219,22 +216,6 @@ def test_config_reads_swagger_paths_from_yaml(tmp_path):
     )
 
 
-def test_yaml_without_swagger_paths_yields_empty_tuple(tmp_path):
-    """Backwards compat: a source declared without swagger_paths
-    loads as an empty tuple, not None or KeyError."""
-    from config import Config
-
-    yaml_path = tmp_path / 'ariadne.yaml'
-    yaml_path.write_text(
-        'sources:\n  myapp:\n    path: /tmp/myapp\n',
-        encoding='utf-8',
-    )
-    cfg = Config(config_path=yaml_path)
-    sc = cfg.get_source_config('myapp')
-    assert sc is not None
-    assert sc.swagger_paths == ()
-
-
 def test_malformed_swagger_paths_raises_config_error(tmp_path):
     """swagger_paths must be a list of strings. A scalar/dict raises
     ConfigError at load time — same fail-loud principle as env_hints."""
@@ -251,4 +232,3 @@ def test_malformed_swagger_paths_raises_config_error(tmp_path):
     import pytest
     with pytest.raises(ConfigError):
         Config(config_path=yaml_path)
-

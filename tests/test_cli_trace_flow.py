@@ -75,7 +75,7 @@ def _seed_chain(
 
 
 class TestJsonOutput:
-    def test_returns_zero_on_success(
+    def test_includes_start_metadata(
         self, db_path: Path, capsys: pytest.CaptureFixture,
     ) -> None:
         from cli.trace import cmd_trace_flow
@@ -86,31 +86,6 @@ class TestJsonOutput:
         )
         rc = cmd_trace_flow(args)
         assert rc == 0
-
-    def test_output_is_valid_json(
-        self, db_path: Path, capsys: pytest.CaptureFixture,
-    ) -> None:
-        from cli.trace import cmd_trace_flow
-
-        _seed_chain(db_path, [('A', 'B')])
-        args = SimpleNamespace(
-            symbol='A', depth=5, json=True, db=str(db_path),
-        )
-        cmd_trace_flow(args)
-        out = capsys.readouterr().out
-        # Must parse as JSON without error
-        json.loads(out)
-
-    def test_includes_start_metadata(
-        self, db_path: Path, capsys: pytest.CaptureFixture,
-    ) -> None:
-        from cli.trace import cmd_trace_flow
-
-        _seed_chain(db_path, [('A', 'B')])
-        args = SimpleNamespace(
-            symbol='A', depth=5, json=True, db=str(db_path),
-        )
-        cmd_trace_flow(args)
         data = json.loads(capsys.readouterr().out)
 
         assert 'start' in data

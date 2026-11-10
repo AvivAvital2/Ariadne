@@ -78,6 +78,7 @@ def test_every_hop_carries_coordinates_and_its_document(library):
     assert bundle.documents_found == 3
     # order is the trace's order, never a relevance order
     assert [h.citation.hop for h in bundle.hops] == [1, 2, 1]
+    assert all(h.citation.line_start for h in bundle.hops), 'coordinates survive'
 def test_which_hops_carry_a_document_follows_the_stop_reason_the_walk_recorded(library):
     """``descended`` and ``leaf`` earn their document; ``plumbing`` is cited and left alone.
 
@@ -107,24 +108,6 @@ def test_a_hop_with_no_document_still_carries_its_coordinates(library):
     assert ghost.title is None
     assert (ghost.citation.file, ghost.citation.line_start) == ('pkg/ghost.py', 9)
     assert bundle.documents_found == 3
-def test_every_explained_hop_is_attached_and_the_renderer_bounds_the_prompt(library):
-    """Curation has no size budget: ``render_spine`` is the only thing that bounds output.
-
-    Measured across evidence caps of 6k, 12k, 20k, 60k and 200k chars, the rendered spine
-    stayed at ~20,000 chars every time — the cap changed nothing about the prompt, only
-    which hops were explained, decided before the renderer knew what it would keep. Two
-    constants were guessing at one constraint and the one that binds was not the one being
-    tuned.
-
-    So every chain-material hop is attached, and the omission is reported once, by the
-    stage that performs it: ``render_spine`` cuts from the tail, preserving execution
-    order, and says how many hops it dropped.
-    """
-    bundle = curate_bundle(library, CHAIN, source=SOURCE)
-    explained = [h for h in bundle.hops if h.evidence]
-
-    assert len(explained) == 2, "both chain-material hops carry their document"
-    assert all(h.citation.line_start for h in bundle.hops), 'coordinates survive'
 
 
 def test_an_empty_chain_yields_an_empty_bundle_not_an_error(library):

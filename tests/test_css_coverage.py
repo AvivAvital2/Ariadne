@@ -12,7 +12,8 @@ contract is:
 - Running catalog-sync on a .css file produces a ``file_index`` doc
   with no element docs, searchable by name
 
-This file grows one demand at a time.
+This file grows one demand at a time. See
+``designs/directional-closure-scoping.md`` Phase 6.
 """
 from __future__ import annotations
 
@@ -20,16 +21,11 @@ from pathlib import Path
 
 
 class TestCSSCoverage:
-    # ---- T1 -----------------------------------------------------------
+    # ---- Language detection and extraction ----------------------------
     # The smallest possible demand: ``_detect_language`` returns ``'css'``
     # for a ``.css`` path. Without this, .css files fall through to
     # ``None`` and never get a file_index doc.
-    def test_t1_detect_language_returns_css(self) -> None:
-        from docgen.catalog_extractor import _detect_language
 
-        assert _detect_language(Path('/tmp/styles.css')) == 'css'
-
-    # ---- T2 -----------------------------------------------------------
     # CSS has no semantic symbols to extract — selectors / rules aren't
     # "elements" in the Ariadne sense. ``extract_elements`` must return
     # an empty list rather than try to parse CSS with the JS or HTML
@@ -47,7 +43,7 @@ class TestCSSCoverage:
         elements = extract_elements(css_file, source_root=tmp_path)
         assert elements == []
 
-        # T1 still holds.
+        # CSS remains a recognized language despite having no elements.
         from docgen.catalog_extractor import _detect_language
         assert _detect_language(css_file) == 'css'
 

@@ -53,13 +53,6 @@ def _make_config(tmp_path: Path) -> OrchestratorConfig:
 
 
 class TestConfirmCallbackField:
-    def test_default_is_none(self, tmp_path: Path) -> None:
-        """Without explicit assignment the field is None — that's the
-        "no confirmation needed" default for tests/CI. Pins the
-        attribute name and default."""
-        orch = DocGenOrchestrator(_make_config(tmp_path))
-        assert orch.confirm_callback is None
-
     def test_can_be_assigned_post_construction(
         self, tmp_path: Path,
     ) -> None:
@@ -70,6 +63,7 @@ class TestConfirmCallbackField:
         Bites a fix that uses ``@frozen`` instead of ``@define`` and
         forgets the field needs to be settable at runtime."""
         orch = DocGenOrchestrator(_make_config(tmp_path))
+        assert orch.confirm_callback is None
 
         async def my_callback(msg: str) -> bool:
             return True

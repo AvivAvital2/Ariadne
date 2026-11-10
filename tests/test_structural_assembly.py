@@ -127,7 +127,7 @@ def _trace(conn, **kw):
 
 
 def test_the_chain_follows_call_site_order_and_nests_depth_first(conn):
-    """The whole contract in one sequence: line order, and callees inline after them."""
+    """Ordered calls retain repeated sites, exclude plumbing descendants and externals."""
     citations, truncation = _trace(conn)
 
     assert [(c.qualified_name, c.hop, c.call_site_line) for c in citations] == [
@@ -136,30 +136,12 @@ def test_the_chain_follows_call_site_order_and_nests_depth_first(conn):
         ('pkg.zulu.Zulu.specific', 1, 30),
         ('pkg.gamma.Gamma.finish', 2, 40),   # Zulu's own call, immediately after it
         ('pkg.alpha.Alpha.run', 3, 60),      # Gamma's call back — the cycle, cited once
-        ('pkg.zulu.Zulu.specific', 1, 35),   # only now back to Alpha.run's next line
+        ('pkg.zulu.Zulu.specific', 1, 35),   # second site; Gamma's body is not walked twice
     ]
     assert not truncation.truncated
     first = citations[0]
     assert (first.file, first.line_start) == ('pkg/aaa_util.py', 2)
     assert (first.call_site_file, first.relation) == ('pkg/alpha.py', 'calls')
-
-
-def test_a_callee_is_cited_at_every_call_site_but_descended_into_once(conn):
-    """Two call sites are two pieces of evidence; the body is only worth walking once."""
-    citations, _ = _trace(conn)
-    names = [c.qualified_name for c in citations]
-
-    assert names.count('pkg.zulu.Zulu.specific') == 2
-    assert names.count('pkg.gamma.Gamma.finish') == 1
-
-
-def test_plumbing_is_cited_but_never_descended_into(conn):
-    """Dropping ubiquitous callees would lose branch conditions, so cite and stop."""
-    citations, _ = _trace(conn)
-    names = [c.qualified_name for c in citations]
-
-    assert 'pkg.aaa_util.Util.common' in names
-    assert 'pkg.omega.Omega.deep' not in names
 
 
 def test_a_shared_local_binding_is_never_cited_or_traversed(conn):
@@ -178,13 +160,6 @@ def test_a_foreign_source_is_neither_cited_nor_traversed(conn):
 
     assert 'pkg2.other.Other.thing' not in names
     assert 'pkg.omega.Omega.deep' not in names
-
-
-def test_a_callee_with_no_definition_is_skipped(conn):
-    """An external moniker resolves nowhere in the corpus and cannot be quoted."""
-    citations, _ = _trace(conn)
-
-    assert all('Lib' not in c.qualified_name for c in citations)
 
 
 def test_depth_stops_the_descent_and_reports_what_was_deferred(conn):
@@ -508,12 +483,6 @@ class TestTypeReferencesAreCitedNotTraversed:
         _edge(conn, ALPHA_RUN, dataset, line=15, edge_type='type_ref')
         conn.commit()
         return conn
-
-    def test_a_type_reference_is_a_hop(self, touching):
-        citations, _ = _trace(touching)
-
-        assert 'pkg.data.Dataset' in [c.qualified_name for c in citations], (
-            'a type the body touches is part of what the body does')
 
     def test_a_type_reference_is_typed_as_a_reference_not_a_call(self, touching):
         """The distinction is the point: synthesis must not report a mention as a call."""

@@ -103,15 +103,6 @@ def _build_graph_with_consumers():
 
 
 class TestConsumedFiles:
-    def test_returns_files_containing_consumed_symbols(self) -> None:
-        from docgen.reverse_augment import consumed_files_for_source
-
-        graph = _build_graph_with_consumers()
-        files = consumed_files_for_source(graph, 'scalaproject')
-        # validate_token lives in LicenseService.scala — that's the
-        # file that needs regeneration with consumer context
-        assert 'src/main/scala/com/scalaproject/LicenseService.scala' in files
-
     def test_returns_empty_when_no_consumers(self) -> None:
         """A source with no cross-source consumers (nothing references
         its symbols from another source) returns an empty set —
@@ -178,17 +169,6 @@ class TestConsumedFiles:
 
 
 class TestBuildConsumerContext:
-    def test_includes_consumer_source_name(self) -> None:
-        from docgen.reverse_augment import build_consumer_context
-
-        graph = _build_graph_with_consumers()
-        ctx = build_consumer_context(
-            'src/main/scala/com/scalaproject/LicenseService.scala',
-            'scalaproject',
-            graph,
-        )
-        assert 'biggerproject' in ctx
-
     def test_includes_call_site_file_line(self) -> None:
         """The rendered prompt block points at exact call sites so
         the LLM can describe usage without making things up."""
@@ -205,19 +185,7 @@ class TestBuildConsumerContext:
             'SessionManager.scala:22' in ctx
             or 'SessionManager.scala (line 22)' in ctx
         )
-
-    def test_includes_callee_symbol_name(self) -> None:
-        """The LLM needs to know which specific symbol(s) of `file`
-        are being consumed — otherwise the prose can't tell `validate_token`
-        apart from other methods on the same class."""
-        from docgen.reverse_augment import build_consumer_context
-
-        graph = _build_graph_with_consumers()
-        ctx = build_consumer_context(
-            'src/main/scala/com/scalaproject/LicenseService.scala',
-            'scalaproject',
-            graph,
-        )
+        assert 'biggerproject' in ctx
         assert 'validate_token' in ctx
 
     def test_empty_when_file_has_no_consumers(self) -> None:

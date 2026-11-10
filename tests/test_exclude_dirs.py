@@ -14,12 +14,6 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 
-def test_source_config_has_exclude_dirs_default_empty():
-    from config import SourceConfig
-    sc = SourceConfig(path='/tmp/x')
-    assert sc.exclude_dirs == ()
-
-
 def test_source_config_accepts_exclude_dirs_tuple():
     from config import SourceConfig
     sc = SourceConfig(
@@ -118,3 +112,4 @@ def test_orchestrator_config_has_exclude_dir_names_default_empty():
         staleness_db_path=Path('/tmp/s.db'),
     )
     assert cfg.exclude_dir_names == ()
+    assert cfg.exclude_patterns == ()

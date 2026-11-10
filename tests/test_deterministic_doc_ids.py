@@ -51,19 +51,9 @@ def test_doc_id_for_distinguishes_sources():
     a = doc_id_for('ariadne', 'explanation', 'x.py')
     b = doc_id_for('myproject', 'explanation', 'x.py')
     assert a != b
-
-
-def test_doc_id_for_returns_string_uuid():
-    """Output must be a UUID-format string (so it slots into existing
-    documents.id TEXT PRIMARY KEY column).
-    """
     import uuid as _uuid
-
-    from schema import doc_id_for
-
-    result = doc_id_for('ariadne', 'explanation', 'x.py')
-    parsed = _uuid.UUID(result)  # raises if not a UUID
-    assert str(parsed) == result
+    parsed = _uuid.UUID(a)
+    assert str(parsed) == a
 
 
 def test_writer_add_explanation_accepts_doc_id(tmp_path, monkeypatch):

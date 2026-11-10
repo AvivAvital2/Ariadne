@@ -176,6 +176,7 @@ async def test_tools_are_exposed_on_the_live_server():
     tools = {t.name: t for t in await server.mcp.list_tools()}
     assert 'ariadne_data' in tools, 'ariadne_data not exposed on the live server'
     assert 'ariadne_schema' in tools, 'ariadne_schema not exposed on the live server'
+    assert 'ariadne_data_health' in tools
     # the agent-facing selectors survive onto the published input schema
     assert {'symbol', 'table'} <= set(tools['ariadne_data'].inputSchema['properties'])
     assert 'table' in tools['ariadne_schema'].inputSchema['properties']
@@ -205,9 +206,3 @@ def test_ariadne_data_health_surfaces_gaps_and_dead_columns(tmp_path, monkeypatc
     out = ariadne_data_health(source='shop')
     assert any('legacy' in g for g in out['gaps'])
     assert {'table': 'orders', 'column': 'dead'} in out['dead_columns']
-
-
-async def test_ariadne_data_health_exposed_on_the_live_server():
-    import ariadne_mcp.server as server
-    tools = {t.name for t in await server.mcp.list_tools()}
-    assert 'ariadne_data_health' in tools

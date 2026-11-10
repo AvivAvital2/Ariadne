@@ -288,6 +288,9 @@ def test_persist_all_sources_writes_scip_symbols_from_manifest(
             "SELECT source_name, qualified_name, kind "
             "FROM scip_symbols WHERE source_name = 'svc'",
         ).fetchall()
+        state_count = conn.execute(
+            "SELECT COUNT(*) FROM scip_index_state WHERE source_name = 'svc'"
+        ).fetchone()[0]
     finally:
         conn.close()
 
@@ -296,6 +299,7 @@ def test_persist_all_sources_writes_scip_symbols_from_manifest(
     assert source_name == 'svc'
     assert 'Service' in qn
     assert kind == 'Class'
+    assert state_count == 0, 'no merged index.scip → no scip_index_state row (refuse to fabricate a SHA)'
 
 
 def test_persist_all_sources_skips_failing_source(tmp_path: Path) -> None:
@@ -462,56 +466,6 @@ def test_persist_all_sources_upserts_scip_index_state_on_re_persist(
     expected_sha = hashlib.sha256(b'second-payload-different').hexdigest()
     assert rows[0][0] == expected_sha, (
         'second persist must overwrite the row with the new SHA'
-    )
-
-
-def test_persist_all_sources_skips_scip_index_state_when_no_merged_file(
-    tmp_path: Path,
-) -> None:
-    """When the merged ``index.scip`` doesn't exist (e.g., index
-    was --dry-run, or merge failed and discover wrote the manifest
-    but no artifact), ``scip_symbols``/``scip_edges`` still fill from
-    the per-indexer intermediates, but ``scip_index_state`` stays
-    empty for that source. Better an absent row than a row with
-    fabricated SHA.
-    """
-    from docgen.scip_persist import persist_all_sources
-
-    db_path = tmp_path / 'ariadne.db'
-    source_root = tmp_path / 'svc'
-    source_root.mkdir()
-    _write_manifest(source_root, [{
-        'kind': 'python',
-        'scip_path': 'intermediate/index-python.scip',
-    }])
-    # NOTE: no merged index.scip on disk.
-
-    def _factory(scip_path, *, repo, max_staleness_days):
-        return _synthetic_python_index_with_one_class(repo=repo)
-
-    persisted = persist_all_sources(
-        db_path, [('svc', source_root)], index_factory=_factory,
-    )
-    assert persisted == 1  # graph data still persists
-
-    conn = sqlite3.connect(db_path)
-    try:
-        symbol_count = conn.execute(
-            "SELECT COUNT(*) FROM scip_symbols WHERE source_name = 'svc'",
-        ).fetchone()[0]
-        state_count = conn.execute(
-            "SELECT COUNT(*) FROM scip_index_state "
-            "WHERE source_name = 'svc'",
-        ).fetchone()[0]
-    finally:
-        conn.close()
-
-    assert symbol_count == 1, (
-        'graph symbols should still persist without a merged file'
-    )
-    assert state_count == 0, (
-        'no merged index.scip → no scip_index_state row '
-        '(refuse to fabricate a SHA)'
     )
 
 

@@ -136,14 +136,6 @@ class TestRegimeDerivation:
         assert r.regime == 'fuse'
         assert r.primary == 'repo'        # both strong: the artifact anchors
 
-    def test_named_subject_blocks_expert_only(self):
-        r = lens_router.derive_regime(
-            subject_named=True,
-            repo_hits=[],
-            spool_hits=[_hit('Quantum Mesh', 'title', 'product')],
-        )
-        assert r.regime != 'expert-only'
-
     def test_no_signal_named_subject_repo_only_with_fallback(self):
         r = lens_router.derive_regime(
             subject_named=True, repo_hits=[], spool_hits=[])

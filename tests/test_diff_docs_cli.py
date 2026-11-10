@@ -32,10 +32,7 @@ class TestArgparse:
         args = parser.parse_args(['diff-docs', '--file', 'x.py'])
         assert args.command == 'diff-docs'
         assert args.file == 'x.py'
-
-    def test_diff_docs_handler_in_handlers_map(self) -> None:
         from cli.themes_cmd import HANDLERS
-
         assert 'diff-docs' in HANDLERS
 
     def test_diff_docs_supports_doc_type_filter(self) -> None:

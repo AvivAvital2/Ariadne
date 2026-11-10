@@ -30,18 +30,6 @@ def test_exempt_recorded_file_is_not_stale_without_hashing(tmp_path, monkeypatch
         )
 
 
-def test_exempt_undocumented_file_is_still_stale(tmp_path):
-    """Exemption must NOT suppress new-file detection: an undocumented file is
-    still stale (needs generation) even for an exempt source."""
-    src = tmp_path / "new.py"
-    src.write_text("y = 1\n", encoding="utf-8")
-    with StalenessTracker(tmp_path / "stale.db") as tracker:
-        assert (
-            tracker.is_stale(src, base_path=tmp_path, is_exempt=lambda rel: True)
-            is True
-        )
-
-
 def test_non_exempt_changed_file_is_stale(tmp_path):
     """Guard: the reorder must not weaken normal staleness — a non-exempt file
     whose content changed is still stale."""

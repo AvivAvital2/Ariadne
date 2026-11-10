@@ -25,6 +25,7 @@ class TestDocument:
         assert doc.created_at is not None
         assert doc.updated_at is not None
         assert doc.metadata == {}
+        assert doc.embedding_bytes() is None
 
     def test_create_document_with_values(self) -> None:
         """Test creating a document with custom values."""
@@ -90,11 +91,6 @@ class TestDocument:
 
         restored = np.frombuffer(embedding_bytes, dtype=np.float32)
         assert np.allclose(restored, embedding)
-
-    def test_embedding_bytes_none(self) -> None:
-        """Test embedding_bytes returns None when embedding is None."""
-        doc = Document()
-        assert doc.embedding_bytes() is None
 
 
 class TestChunk:

@@ -1076,7 +1076,6 @@ def test_component_menu_keeps_semantic_boundary_names_on_each_card():
     components = component_menu_for(graph, menu)
     assert components.text.count("Shared") == 4
     assert 'G1. entry Shared.run; terminal Shared.run' in components.text
-    assert 'G1. entry Shared.run; terminal Shared.run' in components.text
     assert 'G2. entry Shared.run; terminal Shared.run' in components.text
 def test_graph_connector_closure_adds_one_connected_copy_for_a_localized_seed():
     from library.chain_menu import (

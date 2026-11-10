@@ -852,22 +852,6 @@ def test_rebuild_embeds_unembedded_docs(tmp_path, fake_embed, capsys):
 
 # --- build-matrix -----------------------------------------------------------
 
-def test_build_matrix_writes_artifact(tmp_path, capsys):
-    lib = _lib(tmp_path)
-    _add(lib, title='M', embedding=_vec(0))
-    db = lib.path
-    lib.close()
-    rc = cmd_build_matrix(_ns(db=db))
-    out = _out(capsys)
-    assert rc == 0
-    assert 'Embedding matrix ready' in out and '1 docs' in out
-    # the artifact file is actually on disk
-    lib2 = _reopen(db)
-    artifact = matrix_dir_for(lib2) / ARTIFACT_NAME
-    lib2.close()
-    assert artifact.exists()
-
-
 def test_build_matrix_no_embeddings(tmp_path, capsys):
     lib = _lib(tmp_path)
     db = lib.path
@@ -883,10 +867,12 @@ def test_build_matrix_recreate_confirm_no_keeps_artifact(tmp_path, capsys):
     db = lib.path
     lib.close()
     assert cmd_build_matrix(_ns(db=db)) == 0  # build it first
-    capsys.readouterr()
+    out = _out(capsys)
+    assert 'Embedding matrix ready' in out and '1 docs' in out
     lib2 = _reopen(db)
     artifact = matrix_dir_for(lib2) / ARTIFACT_NAME
     lib2.close()
+    assert artifact.exists()
     with mock.patch.object(core_console, 'input', return_value='n') as prompt:
         rc = cmd_build_matrix(_ns(db=db, recreate=True))
     assert rc == 0

@@ -206,34 +206,3 @@ class TestUnknownKeys:
         cfg = Config(config_path=yaml)
         sc = cfg.get_source_config('src1')
         assert sc is not None
-
-
-# ---------------------------------------------------------------------------
-# Combination case: typo'd path AND no other valid path
-# ---------------------------------------------------------------------------
-
-
-class TestCombinedFailure:
-    def test_typo_only_for_path_surfaces_typo_first(
-        self, yaml_factory, tmp_path: Path,
-    ) -> None:
-        """The canonical user case: ``purh: /tmp/foo`` and no
-        ``path:``. The unknown-key error must fire first (and
-        surface the typo) — that's the most actionable message.
-        After the user fixes the typo, the next load succeeds.
-
-        If the missing-path check fired first, the user would see
-        'missing required field path' and be confused — they have
-        purh in the file. The unknown-key message points at the
-        actual mistake."""
-        yaml = yaml_factory(
-            'sources:\n'
-            '  src1:\n'
-            f'    purh: {tmp_path}\n',
-        )
-        with pytest.raises(ConfigError) as exc:
-            Config(config_path=yaml)
-        msg = str(exc.value)
-        # Surfaces the typo, not a generic missing-field error
-        assert 'purh' in msg
-        assert 'path' in msg

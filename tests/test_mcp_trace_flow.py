@@ -93,6 +93,7 @@ class TestMcpWrapper:
         assert hop['callee_symbol_id'] == 'B'
         assert hop['line'] == 7
         assert result['truncated'] is False
+        assert 'diagram' not in result
 
     def test_depth_zero_returns_no_hops(
         self, db_with_simple_edge: Path,
@@ -275,13 +276,3 @@ class TestSequenceDiagram:
         assert diagram.startswith('```dot')
         assert 'digraph' in diagram
         assert 'alpha' in diagram and 'beta' in diagram  # both source lifelines
-
-    def test_diagram_absent_by_default(
-        self, db_with_simple_edge: Path,
-    ) -> None:
-        """Default call is unchanged — no ``diagram`` key, so existing
-        consumers (and token budgets) are unaffected."""
-        from ariadne_mcp.server_admin import ariadne_trace_flow
-
-        result = asyncio.run(ariadne_trace_flow(start_symbol='A', depth=5))
-        assert 'diagram' not in result

@@ -133,20 +133,9 @@ def test_shared_declaration_fuses_columns_across_sources(conn):
         (A_WRITER, 'write'), (A_ATTR, 'maps_to'),
         (B_READER, 'filter'), (B_ATTR, 'maps_to'),
     }
-
-
-def test_unlisted_source_is_never_fused(conn):
-    # svc_c is not named in the declaration: even with an identically-named
-    # column it stays a distinct per-source node — never a name match.
-    g = _graph(conn, _AB)
     assert C_COL in g._symbols
     assert _callers(g, C_COL) == {(C_OTHER, 'filter'), (C_ATTR, 'maps_to')}
     assert (C_OTHER, 'filter') not in _callers(g, SHARED_COL)
-
-
-def test_table_node_fuses_too(conn):
-    # The gate applies to table nodes (column_name NULL), not only columns.
-    g = _graph(conn, _AB)
     assert SHARED_TBL in g._symbols
     assert _callers(g, SHARED_TBL) == {(A_CLS, 'maps_to'), (B_CLS, 'maps_to')}
 

@@ -99,17 +99,42 @@ def test_rank_parity_with_sqlite(lib: Library, tmp_path: Path) -> None:
     assert matrix.rank(QUERY, ['d1', 'd2', 'd3'], 3) == expected
 
 
-def test_rank_candidate_scoping_isolation(lib: Library, tmp_path: Path) -> None:
-    matrix = _matrix_of_three(lib, tmp_path)
-    ranked = matrix.rank(QUERY, ['d1', 'd3'], 2)  # d2 omitted, though it scores highest
-    assert [doc_id for doc_id, _ in ranked] == ['d1', 'd3']
-    assert 'd2' not in {doc_id for doc_id, _ in ranked}
 
 
 def test_rank_skips_unknown_ids(lib: Library, tmp_path: Path) -> None:
     matrix = _matrix_of_three(lib, tmp_path)
     assert [d for d, _ in matrix.rank(QUERY, ['d1', 'unknown'], 5)] == ['d1']
     assert matrix.rank(QUERY, ['unknown'], 5) == []
+
+
+def test_rank_scores_only_candidate_rows_not_whole_matrix(
+    lib: Library, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """rank() must score only the candidate rows, never the full matrix.
+
+    Scoring the whole matrix runs the similarity kernel over every row and
+    pages in the entire (multi-GB, mmap'd) matrix on each query — synchronous
+    work on the single event-loop thread that serialises concurrent readers.
+    The candidate set is tiny relative to the corpus, so the kernel must see
+    only the candidate rows. We assert it is handed exactly the 2 candidate
+    rows, not the whole 3-row matrix.
+    """
+    import search
+    matrix = _matrix_of_three(lib, tmp_path)  # 3-row matrix
+    row_counts: list[int] = []
+    real = search.batch_dot_similarity
+
+    def _spy(query, embeddings):
+        row_counts.append(int(embeddings.shape[0]))
+        return real(query, embeddings)
+
+    monkeypatch.setattr(search, 'batch_dot_similarity', _spy)
+    ranked = matrix.rank(QUERY, ['d1', 'd3'], 2)  # 2 of the 3 rows are candidates
+    assert [d for d, _ in ranked] == ['d1', 'd3']  # result unchanged
+    assert row_counts == [2], (
+        f'similarity kernel scored {row_counts} rows; expected [2] — the whole '
+        'matrix is being scanned instead of just the candidate rows'
+    )
 
 
 # --- integration into _rank_ids_by_embedding -------------------------------
@@ -153,12 +178,6 @@ def _service_with_disagreeing_matrix(library: Library, tmp_path: Path, monkeypat
     return svc
 
 
-def test_integration_uses_matrix_when_fresh(lib: Library, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    svc = _service_with_disagreeing_matrix(lib, tmp_path, monkeypatch)
-    ranked = asyncio.run(svc._rank_ids_by_embedding(['d1', 'd2'], 'q', 2))
-    assert ranked[0][0] == 'd1'  # matrix path (SQLite would give d2)
-
-
 def test_integration_falls_back_when_stale(lib: Library, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     svc = _service_with_disagreeing_matrix(lib, tmp_path, monkeypatch)
     _bump_updated_at(lib, 'd1')  # stamp changes → is_fresh False
@@ -195,8 +214,8 @@ def test_integration_caches_matrix_handle(lib: Library, tmp_path: Path, monkeypa
     # not repeated), and the result is unchanged.
     svc = _service_with_disagreeing_matrix(lib, tmp_path, monkeypatch)
     first = asyncio.run(svc._rank_ids_by_embedding(['d1', 'd2'], 'q', 2))
-    second = asyncio.run(svc._rank_ids_by_embedding(['d1', 'd2'], 'q', 2))
     assert first[0][0] == 'd1'
+    second = asyncio.run(svc._rank_ids_by_embedding(['d1', 'd2'], 'q', 2))
     assert second[0][0] == 'd1'
 
 

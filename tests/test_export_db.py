@@ -121,25 +121,7 @@ def test_export_contains_exactly_the_source_documents(full_db, tmp_path):
         sl.close()
     assert ids == set(full_db['sdk_ids'])
     assert manifest.doc_count == full_db['sdk_count']
-
-
-def test_export_excludes_other_sources(full_db, tmp_path):
-    out = tmp_path / 'slice.db'
-    export_source_db(full_db['path'], 'sdk', out)
-    sl = Library(out)
-    try:
-        ids = {d.id for d in sl.list_documents()}
-    finally:
-        sl.close()
-    # Pair the positive (source docs present) with the negative (no noise) so
-    # an empty slice can't pass this vacuously.
-    assert set(full_db['sdk_ids']) <= ids, 'source docs missing from slice'
-    assert not (ids & set(full_db['noise_ids'])), 'noise-source docs leaked into the slice'
-
-
-def test_export_carries_chunks_and_sections_for_source_only(full_db, tmp_path):
-    out = tmp_path / 'slice.db'
-    export_source_db(full_db['path'], 'sdk', out)
+    assert not ids & set(full_db['noise_ids']), 'noise-source docs leaked into the slice'
     conn = sqlite3.connect(out)
     try:
         chunk_docs = {r[0] for r in conn.execute('SELECT DISTINCT document_id FROM chunks')}
@@ -149,20 +131,6 @@ def test_export_carries_chunks_and_sections_for_source_only(full_db, tmp_path):
     assert full_db['sdk_chunk_doc'] in chunk_docs
     assert full_db['sdk_chunk_doc'] in sec_docs
     assert full_db['noise_chunk_doc'] not in chunk_docs, 'noise chunk leaked'
-
-
-def test_unknown_source_raises(full_db, tmp_path):
-    with pytest.raises(SourceNotFoundError):
-        export_source_db(full_db['path'], 'does-not-exist', tmp_path / 'x.db')
-
-
-# --------------------------------------------------------------------------
-# Embedding fidelity + retrieval parity (the load-bearing contract)
-# --------------------------------------------------------------------------
-
-def test_embeddings_carried_byte_for_byte(full_db, tmp_path):
-    out = tmp_path / 'slice.db'
-    export_source_db(full_db['path'], 'sdk', out)
     src = sqlite3.connect(f"file:{full_db['path']}?mode=ro", uri=True)
     bnd = sqlite3.connect(out)
     try:
@@ -174,6 +142,15 @@ def test_embeddings_carried_byte_for_byte(full_db, tmp_path):
     finally:
         src.close(); bnd.close()
 
+
+def test_unknown_source_raises(full_db, tmp_path):
+    with pytest.raises(SourceNotFoundError):
+        export_source_db(full_db['path'], 'does-not-exist', tmp_path / 'x.db')
+
+
+# --------------------------------------------------------------------------
+# Embedding fidelity + retrieval parity (the load-bearing contract)
+# --------------------------------------------------------------------------
 
 def test_retrieval_parity_over_qa_battery(full_db, tmp_path):
     """Slice retrieval == full-library-scoped-to-source retrieval, for every
@@ -255,35 +232,24 @@ def _make_target_with_other_source(path):
     return other
 
 
-def test_import_merges_source_and_leaves_other_untouched(full_db, tmp_path):
+def test_import_is_idempotent(full_db, tmp_path):
     bundle = tmp_path / 'bundle.db'
     export_source_db(full_db['path'], 'sdk', bundle)
     target = tmp_path / 'target.db'
     other_id = _make_target_with_other_source(target)
 
     import_source_db(target, bundle)
-
     tgt = Library(target)
     try:
-        by_source = {}
-        for d in tgt.list_documents():
-            by_source.setdefault(d.source_name, set()).add(d.id)
+        first_docs = tgt.list_documents()
     finally:
         tgt.close()
+    first = len([d for d in first_docs if d.source_name == 'sdk'])
+    by_source = {}
+    for d in first_docs:
+        by_source.setdefault(d.source_name, set()).add(d.id)
     assert by_source.get('sdk') == set(full_db['sdk_ids']), 'sdk docs not merged in'
     assert by_source.get('other') == {other_id}, 'unrelated source was disturbed'
-
-
-def test_import_is_idempotent(full_db, tmp_path):
-    bundle = tmp_path / 'bundle.db'
-    export_source_db(full_db['path'], 'sdk', bundle)
-    target = tmp_path / 'target.db'
-    _make_target_with_other_source(target)
-
-    import_source_db(target, bundle)
-    tgt = Library(target)
-    first = len([d for d in tgt.list_documents() if d.source_name == 'sdk'])
-    tgt.close()
 
     import_source_db(target, bundle)
     tgt = Library(target)

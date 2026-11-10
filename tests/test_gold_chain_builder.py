@@ -1434,26 +1434,6 @@ def test_review_validation_enforces_required_claim_transitions(builder, tmp_path
     errors = builder.validate_review(review_file)
 
     assert any("required transition proof" in error for error in errors)
-def test_delta_update_oracle_declares_causal_topology_and_command_term():
-    requirements_path = (
-        Path(__file__).parents[1]
-        / "evaluation/chain-benchmark/requirements.json")
-    requirements = {
-        int(item["id"]): item
-        for item in json.loads(requirements_path.read_text())}
-    claim = next(
-        item for item in requirements[12]["claims"]
-        if item["id"] == "delta-update")
-    anchors = {item["anchor"]: item for item in claim["anchors"]}
-
-    assert anchors["delta-update-command"]["kind"] == "Object"
-    assert anchors["delta-update-command"]["line"] == 501
-    assert claim["transitions"] == [
-        ["delta-analysis", "delta-update-constructor"],
-        ["delta-update-constructor", "delta-update-plan"],
-        ["delta-update-plan", "delta-update-preprocessor"],
-        ["delta-update-preprocessor", "delta-update-expression-generator"],
-        ["delta-update-preprocessor", "delta-update-command"]]
 def test_coherent_path_sets_deduplicate_branch_traversal_order(builder):
     paths = [
         _review_path("a-b", "a", "b", "a1", "b1"),
@@ -1529,6 +1509,30 @@ def test_first_gold_batch_declares_complete_causal_trees():
         assert anchors["delta-merge-constructor"]["line"] == 336
         assert anchors["delta-merge-plan"]["kind"] == "Class"
         assert anchors["delta-merge-plan"]["line"] == 315
+
+    update = next(
+        claim for claim in requirements[12]["claims"]
+        if claim["id"] == "delta-update")
+    update_anchors = {item["anchor"]: item for item in update["anchors"]}
+    assert update_anchors["delta-update-command"]["kind"] == "Object"
+    assert update_anchors["delta-update-command"]["line"] == 501
+
+    merge_api = next(
+        claim for claim in requirements[10]["claims"]
+        if claim["id"] == "delta-api-convergence")
+    builder_anchors = {item["anchor"]: item for item in merge_api["anchors"]}
+    assert builder_anchors["delta-builder-constructor"] == {
+        "anchor": "delta-builder-constructor",
+        "symbol": "io.delta.tables.DeltaMergeBuilder",
+        "file": "spark/src/main/scala/io/delta/tables/DeltaMergeBuilder.scala",
+        "line": 386,
+        "kind": "Object"}
+    assert builder_anchors["delta-builder-type"] == {
+        "anchor": "delta-builder-type",
+        "symbol": "io.delta.tables.DeltaMergeBuilder",
+        "file": "spark/src/main/scala/io/delta/tables/DeltaMergeBuilder.scala",
+        "line": 153,
+        "kind": "Class"}
 def test_bidirectional_search_prefers_edges_local_to_selected_endpoint_files(builder, conn):
     _symbol(conn, "left", "pkg.Left.run", "zzz-core/Left.scala")
     _symbol(conn, 'aaa_wrong', "pkg.ConnectBridge.run", "aaa-connect/Bridge.scala")
@@ -1571,38 +1575,6 @@ def test_companion_edge_uses_selected_duplicate_definition_site(builder, conn):
     assert path["edges"][0]["file"] == "core/Plan.scala"
     assert path["edges"][0]["line"] == 20
     assert {node["file"] for node in path["nodes"]} == {"core/Plan.scala"}
-def test_delta_merge_api_oracle_tracks_builder_construction_identity():
-    requirements_path = (
-        Path(__file__).parents[1]
-        / "evaluation/chain-benchmark/requirements.json")
-    requirements = {
-        int(item["id"]): item
-        for item in json.loads(requirements_path.read_text())}
-    claim = next(
-        item for item in requirements[10]["claims"]
-        if item["id"] == "delta-api-convergence")
-    anchors = {item["anchor"]: item for item in claim["anchors"]}
-
-    assert anchors["delta-builder-constructor"] == {
-        "anchor": "delta-builder-constructor",
-        "symbol": "io.delta.tables.DeltaMergeBuilder",
-        "file": "spark/src/main/scala/io/delta/tables/DeltaMergeBuilder.scala",
-        "line": 386,
-        "kind": "Object"}
-    assert anchors["delta-builder-type"] == {
-        "anchor": "delta-builder-type",
-        "symbol": "io.delta.tables.DeltaMergeBuilder",
-        "file": "spark/src/main/scala/io/delta/tables/DeltaMergeBuilder.scala",
-        "line": 153,
-        "kind": "Class"}
-    assert claim["transitions"] == [
-        ["delta-table-merge-api", "delta-builder-constructor"],
-        ["delta-builder-constructor", "delta-builder-type"],
-        ["delta-builder-type", "build-delta-merge-plan"],
-        ["execute-delta-builder", "build-delta-merge-plan"],
-        ["build-delta-merge-plan", "delta-merge-constructor"],
-        ["delta-merge-constructor", "delta-merge-plan"],
-        ["delta-merge-plan", "delta-merge-preprocessor"]]
 def test_second_gold_batch_declares_source_proven_causal_trees():
     requirements_path = (
         Path(__file__).parents[1]
@@ -1692,6 +1664,12 @@ def test_second_gold_batch_declares_source_proven_causal_trees():
             ("org.apache.spark.sql.delta.DeltaOptions.WRITE_PARTITION_COLUMNS", 305),
         (16, "delta-commit", "delta-commit-job"):
             ("org.apache.spark.sql.delta.files.DelayedCommitProtocol.commitJob", 89),
+        (17, "callback-wiring", "delta-execute-write"):
+            ("org.apache.spark.sql.delta.files.DeltaFileFormatWriter.executeWrite", 224),
+        (17, "callback-wiring", "delta-write-and-commit"):
+            ("org.apache.spark.sql.delta.files.DeltaFileFormatWriter.writeAndCommit", 294),
+        (17, "callback-wiring", "delta-execute-task"):
+            ("org.apache.spark.sql.delta.files.DeltaFileFormatWriter.executeTask", 395),
         (23, "constraint-enforcement", "not-null-constraint"):
             ("org.apache.spark.sql.delta.constraints.Constraints.NotNull", 45),
         (27, "delegation", "delegate-field"):
@@ -1728,33 +1706,6 @@ def test_required_transition_matching_ignores_anchor_declaration_order(builder):
     assert rejected == []
 
 
-def test_q17_callback_oracle_names_each_real_writer_transition():
-    requirements_path = (
-        Path(__file__).parents[1]
-        / "evaluation/chain-benchmark/requirements.json")
-    requirements = {
-        int(item["id"]): item
-        for item in json.loads(requirements_path.read_text())}
-    callback = next(
-        claim for claim in requirements[17]["claims"]
-        if claim["id"] == "callback-wiring")
-    anchors = {item["anchor"]: item for item in callback["anchors"]}
-
-    assert callback["transitions"] == [
-        ["delta-file-writer", "delta-execute-write"],
-        ["delta-execute-write", "delta-write-and-commit"],
-        ["delta-write-and-commit", "file-commit-job"],
-        ["delta-execute-write", "delta-execute-task"],
-        ["delta-execute-task", "file-setup-task"]]
-    assert (anchors["delta-execute-write"]["symbol"],
-            anchors["delta-execute-write"]["line"]) == (
-        "org.apache.spark.sql.delta.files.DeltaFileFormatWriter.executeWrite", 224)
-    assert (anchors["delta-write-and-commit"]["symbol"],
-            anchors["delta-write-and-commit"]["line"]) == (
-        "org.apache.spark.sql.delta.files.DeltaFileFormatWriter.writeAndCommit", 294)
-    assert (anchors["delta-execute-task"]["symbol"],
-            anchors["delta-execute-task"]["line"]) == (
-        "org.apache.spark.sql.delta.files.DeltaFileFormatWriter.executeTask", 395)
 def test_third_gold_batch_declares_source_proven_causal_trees():
     requirements_path = (
         Path(__file__).parents[1]

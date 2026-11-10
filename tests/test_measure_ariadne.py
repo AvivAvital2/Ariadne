@@ -132,6 +132,7 @@ def test_score_answers_requires_the_complete_reviewed_gold_proof(
     assert report["summary"]["questions"] == 1
     assert report["summary"]["passed_claims"] == 1
     assert report["summary"]["total_cost_usd"] == pytest.approx(0.25)
+    assert report["summary"]["cost_scope"] == "captured LLM completions only; embedding API charges excluded"
     claim = report["questions"][0]["claims"][0]
     assert claim["passed"] is True
     assert claim["missing_symbols"] == []
@@ -188,14 +189,6 @@ def test_ariadne_command_can_only_launch_the_ariadne_arm(measure, tmp_path):
     assert "raw" not in command
     assert "docker" not in command
     assert command[-2:] == ["--only", "4,6"]
-def test_cost_is_labeled_as_completion_only(measure, tmp_path):
-    corpus, answer = _answer(tmp_path)
-    gold = {"status": "reviewed-gold", "questions": [_gold_question()]}
-
-    report = measure.score_answers([answer], gold, corpus)
-
-    assert report["summary"]["cost_scope"] == (
-        "captured LLM completions only; embedding API charges excluded")
 def test_main_dry_run_prints_only_the_ariadne_command(measure, capsys):
     result = measure.main(["--dry-run", "--only", "4,6"])
 

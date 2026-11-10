@@ -64,6 +64,14 @@ class TestBlindRunner:
 
         first = shadow_eval.blind_artifact(
             service, 1, "how does run reach helper?", vector, source=SOURCE)
+        assert "seed_union" in first
+        assert isinstance(first["expansion"], dict)
+        assert "required" in first["body_plan"]
+        assert isinstance(first["facets"], list)
+        assert first.get("resolution_census")
+        for row in first["raw_pool"]:
+            assert row["resolution"] in ("exact", "ambiguous", "missing")
+
         second = shadow_eval.blind_artifact(
             service, 1, "how does run reach helper?", vector, source=SOURCE)
 
@@ -174,21 +182,10 @@ class TestGrader:
             self.make_artifact(menu_has_helper=False), items)
         assert menu_loss["raw"] is True
         assert menu_loss["internal_menu"] is False
+        assert menu_loss["retained"] is True
 
 
 class TestFrontierSemantics:
-    def test_retention_without_menu_visibility_stops_the_frontier_at_raw(
-            self):
-        grader = TestGrader()
-        items = shadow_eval.required_items(grader.make_claim())
-        flags = shadow_eval.claim_stage_flags(
-            grader.make_artifact(menu_has_helper=False), items)
-
-        # Retained by a net while never menu-visible: real information
-        # in the flags, but the consecutive frontier stays at raw.
-        assert flags["retained"] is True
-        assert flags["internal_menu"] is False
-
     def test_raw_surface_includes_the_clew_candidate_pool(self):
         grader = TestGrader()
         artifact = grader.make_artifact(menu_has_helper=True)
@@ -201,21 +198,6 @@ class TestFrontierSemantics:
         flags = shadow_eval.claim_stage_flags(artifact, items)
 
         assert flags["raw"] is True
-
-
-class TestArtifactRecording:
-    def test_artifact_records_seed_union_expansion_and_body_plan(
-            self, service):
-        vector = np.zeros(3072, dtype=np.float32)
-
-        artifact = shadow_eval.blind_artifact(
-            service, 1, "how does run reach helper?", vector,
-            source=SOURCE)
-
-        assert "seed_union" in artifact
-        assert isinstance(artifact["expansion"], dict)
-        assert "required" in artifact["body_plan"]
-        assert isinstance(artifact["facets"], list)
 
 
 class TestExactIdentityResolution:
@@ -243,15 +225,3 @@ class TestExactIdentityResolution:
         assert ambiguous["resolution"] == "ambiguous"
         assert ambiguous["canonical_id"] == "unresolved"
         assert ambiguous["resolution_candidates"] == ["dup-a", "dup-b"]
-
-    def test_artifact_v3_carries_resolution_on_every_raw_row(
-            self, service):
-        vector = np.zeros(3072, dtype=np.float32)
-
-        artifact = shadow_eval.blind_artifact(
-            service, 1, "how does run reach helper?", vector,
-            source=SOURCE)
-
-        assert artifact.get("resolution_census")
-        for row in artifact["raw_pool"]:
-            assert row["resolution"] in ("exact", "ambiguous", "missing")

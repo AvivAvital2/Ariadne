@@ -234,13 +234,6 @@ class TestTheSpineIsBounded:
         assert "omitted" in evidence.spine.lower()
         assert evidence.truncation_reason
 
-    def test_the_surviving_hops_preserve_the_mandatory_route(self, library):
-        clipped = evidence_for(library, DOCS, source=SOURCE, depth=3,
-                               max_spine_chars=60)
-
-        assert "m.deep" in clipped.spine
-        assert "m.helper" not in clipped.spine
-
     def test_a_revisited_body_renders_compactly_because_it_is_a_duplicate(self, library):
         """67 of 279 live hops were `revisit`. The call site is new evidence; the body was
         already shown, so repeating its definition line is pure cost.

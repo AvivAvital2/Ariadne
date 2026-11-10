@@ -75,9 +75,3 @@ def test_required_columns_present(
         f'Either restore them in library.py / library_*.py migrations '
         f'or update callers + this test.'
     )
-
-
-def test_documents_table_exists(fresh_library: Library) -> None:
-    """The ``documents`` table is the primary read surface — its
-    absence is catastrophic."""
-    assert _columns(fresh_library, 'documents'), 'documents table is missing entirely'

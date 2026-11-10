@@ -526,12 +526,6 @@ def test_load_status_cache_missing_is_empty(tmp_path):
     assert _load_status_cache(tmp_path / 'nope.json') == {}
 
 
-def test_load_status_cache_valid(tmp_path):
-    p = tmp_path / 'c.json'
-    p.write_text(json.dumps({'src1': {'cache_key': 'k'}}))
-    assert _load_status_cache(p) == {'src1': {'cache_key': 'k'}}
-
-
 def test_load_status_cache_non_dict_is_empty(tmp_path):
     p = tmp_path / 'c.json'
     p.write_text(json.dumps([1, 2, 3]))
@@ -548,6 +542,7 @@ def test_save_status_cache_roundtrip(tmp_path):
     p = tmp_path / 'c.json'
     _save_status_cache(p, {'src1': {'cache_key': 'k'}})
     assert json.loads(p.read_text()) == {'src1': {'cache_key': 'k'}}
+    assert _load_status_cache(p) == {'src1': {'cache_key': 'k'}}
 
 
 def test_save_status_cache_swallows_oserror(tmp_path):

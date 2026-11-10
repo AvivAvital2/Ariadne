@@ -11,6 +11,8 @@ file *is* the spec for the directional-closure rule:
 Fixture nomenclature: ``shared`` is a leaf library; ``product`` depends
 on ``shared``; ``extension`` depends on ``product``. The directional
 rule is what we're testing — the names just denote dep direction.
+
+See ``designs/directional-closure-scoping.md`` Phase 1 for the cycle plan.
 """
 from __future__ import annotations
 
@@ -60,16 +62,12 @@ sources:
         assert cfg.scope_closure('product') == frozenset(
             {'product', 'shared'},
         )
-        # T1's demand still holds for shared-in-isolation (no consumers
-        # in this fixture's reverse direction beyond product). With
-        # product as shared's consumer, shared is a leaf and its closure
-        # flips to reverse → T4 will exercise that explicitly; here it
-        # produces {shared, product}.
+        # shared is a leaf, so reverse closure includes its consumer product.
         assert cfg.scope_closure('shared') == frozenset(
             {'shared', 'product'},
         )
 
-    # ---- T3 -----------------------------------------------------------
+    # ---- T3/T4: transitive forward and leaf-reverse closure ------------
     # Transitive forward closure: extension.depends_on = [product] only;
     # product.depends_on = [shared]. shared is reachable from extension
     # only via product — closure MUST recurse.
@@ -100,46 +98,9 @@ sources:
             {'product', 'shared'},
         )
         # shared is a leaf; reverse closure includes both consumers
-        # (product directly, extension via product). T4 elevates this
-        # exact assertion to a named demand.
+        # (product directly, extension via product).
         assert cfg.scope_closure('shared') == frozenset(
             {'shared', 'product', 'extension'},
-        )
-
-    # ---- T4 -----------------------------------------------------------
-    # The directional flip: shared has no depends_on (it's a leaf), but
-    # product and extension both declare shared transitively.
-    # scope_closure('shared') must flip to the REVERSE direction and
-    # include shared's transitive consumers. This is the load-bearing
-    # demand that lets a leaf shared-library see its consumer-side
-    # context.
-    def test_t4_leaf_flips_to_reverse_closure(self, tmp_path: Path) -> None:
-        from config import Config
-
-        cfg_path = _write_config(tmp_path, '''\
-sources:
-  shared:
-    path: /tmp/shared
-  product:
-    path: /tmp/product
-    depends_on: [shared]
-  extension:
-    path: /tmp/extension
-    depends_on: [product]
-''')
-        cfg = Config(cfg_path)
-        # shared is a leaf → reverse closure: shared and everyone that
-        # transitively consumes shared (product directly; extension via
-        # product).
-        assert cfg.scope_closure('shared') == frozenset(
-            {'shared', 'product', 'extension'},
-        )
-        # Non-leaves still use forward closure.
-        assert cfg.scope_closure('product') == frozenset(
-            {'product', 'shared'},
-        )
-        assert cfg.scope_closure('extension') == frozenset(
-            {'extension', 'product', 'shared'},
         )
 
     # ---- T5 -----------------------------------------------------------

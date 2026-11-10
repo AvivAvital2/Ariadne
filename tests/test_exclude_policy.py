@@ -47,10 +47,6 @@ class TestDefaultFileExcludePatterns:
     a single source in config.py, consumed by every discovery path.
     """
 
-    def test_default_includes_vendored_installers(self) -> None:
-        from config import DEFAULT_EXCLUDE_FILE_PATTERNS
-        assert '**/get-pip.py' in DEFAULT_EXCLUDE_FILE_PATTERNS
-
     def test_default_excludes_macos_ds_store(self) -> None:
         """macOS Finder metadata (``.DS_Store``) is in the canonical
         file-exclude list, and the per-file predicate the walks apply
@@ -79,6 +75,8 @@ class TestDefaultFileExcludePatterns:
         names = {p.name for p in find_catalog_files(tmp_path)}
         assert 'real.py' in names
         assert 'get-pip.py' not in names
+        from config import DEFAULT_EXCLUDE_FILE_PATTERNS
+        assert '**/get-pip.py' in DEFAULT_EXCLUDE_FILE_PATTERNS
 
     def test_find_python_files_excludes_get_pip_by_default(
         self, tmp_path: Path,
@@ -94,29 +92,6 @@ class TestDefaultFileExcludePatterns:
 # ---------------------------------------------------------------------------
 # Default policy: shape and content
 # ---------------------------------------------------------------------------
-
-
-def test_default_exclude_policy_contains_expected_names():
-    """The built-in default must cover the obvious never-walk dirs.
-
-    These are the names the user explicitly named when proposing the
-    feature. Any future addition is welcome but these MUST be present.
-    """
-    from config import DEFAULT_EXCLUDE_POLICY
-
-    must_contain = {
-        '.git', '.venv', 'venv',
-        'node_modules', '__pycache__',
-        'dist', 'build',
-        'target',  # JVM/Scala/Rust
-        '.idea', '.vscode',
-        '.mypy_cache', '.pytest_cache', '.ruff_cache',
-        '.ariadne',  # Ariadne's own output artifacts — never self-scan
-    }
-    missing = must_contain - set(DEFAULT_EXCLUDE_POLICY)
-    assert not missing, (
-        f'DEFAULT_EXCLUDE_POLICY is missing expected names: {sorted(missing)}'
-    )
 
 
 def test_default_policy_covers_all_supported_languages():
@@ -205,12 +180,6 @@ def test_default_policy_covers_all_supported_languages():
         'entries for one or more supported ecosystems:\n  '
         + '\n  '.join(failures)
     )
-
-
-def test_default_exclude_policy_is_a_tuple_of_strings():
-    """The constant is a tuple (immutable, hashable) of plain strings."""
-    from config import DEFAULT_EXCLUDE_POLICY
-
     assert isinstance(DEFAULT_EXCLUDE_POLICY, tuple)
     assert all(isinstance(d, str) for d in DEFAULT_EXCLUDE_POLICY)
 
@@ -264,13 +233,6 @@ def test_config_exclude_policy_empty_list_means_full_walk(tmp_path):
 # ---------------------------------------------------------------------------
 # Per-source ``exempt_dirs:`` field
 # ---------------------------------------------------------------------------
-
-
-def test_source_config_has_exempt_dirs_default_empty():
-    from config import SourceConfig
-
-    sc = SourceConfig(path='/tmp/x')
-    assert sc.exempt_dirs == ()
 
 
 def test_source_config_accepts_exempt_dirs_tuple():

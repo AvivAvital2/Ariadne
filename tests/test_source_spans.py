@@ -55,24 +55,21 @@ class TestLeadingDocumentation:
         assert (span.line_start, span.line_end) == (6, 8)
         assert "Preprocesses rules." in span.text
         assert span.associated_symbol == "pkg.Preprocess"
-
-    def test_annotations_between_documentation_and_definition_are_spanned(
-            self):
-        extraction = extract()
-
         annotations = [span for span in extraction.spans
                        if span.association_reason == "annotation"]
         assert len(annotations) == 1
         assert (annotations[0].line_start, annotations[0].line_end) == (9, 9)
         assert annotations[0].text.strip() == "@Experimental"
-
-    def test_distant_comments_are_excluded_by_contiguity(self):
-        # The license banner is separated from the definition by the
-        # package line; it never rides in on a leading-doc association.
-        extraction = extract()
-
         for span in extraction.spans:
             assert "Copyright" not in span.text
+        expected_hash = hashlib.sha256(FILE_TEXT.encode()).hexdigest()
+
+        lines = FILE_TEXT.splitlines()
+        for span in extraction.spans:
+            assert span.source_hash == expected_hash
+            assert span.text == "\n".join(
+                lines[span.line_start - 1:span.line_end])
+            assert span.source_name == "src1"
 
     def test_blank_separation_beyond_the_bound_yields_no_span(self):
         text = "// stray note\n\n\n\ndef apply(): pass\n"
@@ -110,17 +107,6 @@ class TestFileHeader:
 
 
 class TestProvenance:
-    def test_text_is_byte_exact_and_bound_to_the_file_hash(self):
-        extraction = extract()
-        expected_hash = hashlib.sha256(FILE_TEXT.encode()).hexdigest()
-
-        lines = FILE_TEXT.splitlines()
-        for span in extraction.spans:
-            assert span.source_hash == expected_hash
-            assert span.text == "\n".join(
-                lines[span.line_start - 1:span.line_end])
-            assert span.source_name == "src1"
-
     def test_duplicate_spans_deduplicate_and_extraction_is_idempotent(self):
         first = extract()
         second = extract()
