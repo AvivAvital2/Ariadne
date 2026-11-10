@@ -40,11 +40,6 @@ class TestDataClasses:
         assert e.is_dataclass is False
         assert e.is_attrs is False
         assert e.is_abstract is False
-
-    def test_python_enrichment_is_frozen(self) -> None:
-        from docgen.catalog_enrich import PythonEnrichment
-
-        e = PythonEnrichment()
         with pytest.raises(Exception):  # noqa: B017 attrs.exceptions.FrozenInstanceError
             e.decorators = ('foo',)  # type: ignore[misc]
 

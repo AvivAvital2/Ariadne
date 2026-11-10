@@ -35,14 +35,8 @@ class TestStructuredDoc:
         assert d.see_also == ()
         assert d.deprecated is None
         assert d.since is None
-
-    def test_is_frozen(self) -> None:
-        from docgen.doc_parser import StructuredDoc
-
-        d = StructuredDoc()
         with pytest.raises(Exception):  # noqa: B017
             d.summary = 'mutated'  # type: ignore[misc]
-
 
 # ---------------------------------------------------------------------------
 # Scaladoc grammar

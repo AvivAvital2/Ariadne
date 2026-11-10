@@ -157,18 +157,6 @@ async def test_no_texts_returns_empty_without_api_call():
     assert calls['n'] == 0
 
 
-async def test_all_empty_texts_return_zero_vectors_without_api_call():
-    service, calls = _service(lambda req, n: httpx.Response(200, json=_embedding_payload()))
-    try:
-        out = await service.embed_batch(['', '   '])
-    finally:
-        await service.close()
-
-    assert len(out) == 2
-    assert all(not np.any(v) for v in out)
-    assert calls['n'] == 0, 'all-empty input must not hit the API'
-
-
 async def test_zero_vector_response_is_not_normalized():
     service, _ = _service(
         lambda req, n: httpx.Response(

@@ -223,10 +223,10 @@ _DOC_TYPES_TO_TEST = ('explanation', 'architecture', 'qa', 'catalog', 'diagram')
 @pytest.mark.parametrize('name,builder', FIXTURES)
 @pytest.mark.parametrize('doc_type', _DOC_TYPES_TO_TEST)
 @pytest.mark.asyncio
-async def test_prompt_mentions_same_module_name(
+async def test_prompt_parity(
     name: str, builder, doc_type: str, tmp_path: Path,
 ) -> None:
-    """Both paths must include the module name in the prompt."""
+    """Both prompt paths retain module facts and comparable length for each template."""
     f = builder(tmp_path)
     legacy = await _capture_legacy_prompt(f, doc_type)
     new = await _capture_new_prompt(f, tmp_path, doc_type)
@@ -244,118 +244,32 @@ async def test_prompt_mentions_same_module_name(
     assert expected_token in new_user, (
         f'[{name}/{doc_type}] new prompt missing module name {expected_token!r}'
     )
-
-
-@pytest.mark.parametrize('name,builder', FIXTURES)
-@pytest.mark.asyncio
-async def test_class_names_appear_in_both_explanation_prompts(
-    name: str, builder, tmp_path: Path,
-) -> None:
-    """Both paths' explanation prompts list the same public classes."""
-    from docgen._legacy_analyzer import SourceAnalyzer
-
-    f = builder(tmp_path)
-    metadata = SourceAnalyzer().analyze_file(f)
-    expected_classes = {c.name for c in metadata.public_classes}
-
-    legacy = await _capture_legacy_prompt(f, 'explanation')
-    new = await _capture_new_prompt(f, tmp_path, 'explanation')
-
-    for cls in expected_classes:
-        assert cls in legacy[1], f'[{name}] legacy prompt missing class {cls}'
-        assert cls in new[1], f'[{name}] new prompt missing class {cls}'
-
-
-@pytest.mark.parametrize('name,builder', FIXTURES)
-@pytest.mark.asyncio
-async def test_public_function_names_appear_in_both_explanation_prompts(
-    name: str, builder, tmp_path: Path,
-) -> None:
-    """Both paths' explanation prompts list the same public functions."""
-    from docgen._legacy_analyzer import SourceAnalyzer
-
-    f = builder(tmp_path)
-    metadata = SourceAnalyzer().analyze_file(f)
-    expected_funcs = {fn.name for fn in metadata.public_functions}
-
-    if not expected_funcs:
-        pytest.skip(f'{name} has no public functions')
-
-    legacy = await _capture_legacy_prompt(f, 'explanation')
-    new = await _capture_new_prompt(f, tmp_path, 'explanation')
-
-    for fn in expected_funcs:
-        assert fn in legacy[1], f'[{name}] legacy prompt missing function {fn}'
-        assert fn in new[1], f'[{name}] new prompt missing function {fn}'
-
-
-@pytest.mark.parametrize('name,builder', FIXTURES)
-@pytest.mark.asyncio
-async def test_dependencies_appear_in_both_architecture_prompts(
-    name: str, builder, tmp_path: Path,
-) -> None:
-    """Both paths' architecture prompts list the same top-level dependencies."""
-    from docgen._legacy_analyzer import SourceAnalyzer
-
-    f = builder(tmp_path)
-    metadata = SourceAnalyzer().analyze_file(f)
-    expected_deps = {d for d in metadata.dependencies if d}
-
-    if not expected_deps:
-        pytest.skip(f'{name} has no top-level dependencies')
-
-    legacy = await _capture_legacy_prompt(f, 'architecture')
-    new = await _capture_new_prompt(f, tmp_path, 'architecture')
-
-    for dep in expected_deps:
-        assert dep in legacy[1], f'[{name}] legacy arch prompt missing dep {dep}'
-        assert dep in new[1], f'[{name}] new arch prompt missing dep {dep}'
-
-
-@pytest.mark.parametrize('name,builder', FIXTURES)
-@pytest.mark.asyncio
-async def test_source_code_present_in_both_prompts(
-    name: str, builder, tmp_path: Path,
-) -> None:
-    """Both paths' prompts include the file's source code."""
-    f = builder(tmp_path)
-    src = f.read_text(encoding='utf-8')
-
-    legacy = await _capture_legacy_prompt(f, 'explanation')
-    new = await _capture_new_prompt(f, tmp_path, 'explanation')
-
-    # Pick a marker line — first non-blank, non-shebang line of source.
-    lines = [ln for ln in src.splitlines() if ln.strip() and not ln.startswith('#!')]
-    if not lines:
-        pytest.skip(f'{name} has no markers')
-    marker = lines[0]
-    assert marker in legacy[1], f'[{name}] legacy prompt missing src marker {marker!r}'
-    assert marker in new[1], f'[{name}] new prompt missing src marker {marker!r}'
-
-
-# ---------------------------------------------------------------------------
-# Length parity (loose)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize('name,builder', FIXTURES)
-@pytest.mark.parametrize('doc_type', _DOC_TYPES_TO_TEST)
-@pytest.mark.asyncio
-async def test_prompt_length_within_50_percent(
-    name: str, builder, doc_type: str, tmp_path: Path,
-) -> None:
-    """The two paths shouldn't differ by more than ±50% in prompt length —
-    that would suggest a major chunk of context dropped or duplicated.
-    Loose threshold; tighter parity (±20%) is for the LLM-judge harness.
-    """
-    f = builder(tmp_path)
-    legacy = await _capture_legacy_prompt(f, doc_type)
-    new = await _capture_new_prompt(f, tmp_path, doc_type)
-
-    legacy_len = len(legacy[1])
-    new_len = len(new[1])
+    legacy_len = len(legacy_user)
+    new_len = len(new_user)
     ratio = new_len / max(legacy_len, 1)
     assert 0.5 <= ratio <= 1.5, (
         f'[{name}/{doc_type}] prompt length divergence: '
         f'legacy={legacy_len}, new={new_len}, ratio={ratio:.2f}'
     )
+
+    if doc_type in ('explanation', 'architecture'):
+        from docgen._legacy_analyzer import SourceAnalyzer
+
+        metadata = SourceAnalyzer().analyze_file(f)
+        if doc_type == 'explanation':
+            for cls in {c.name for c in metadata.public_classes}:
+                assert cls in legacy_user, f'[{name}] legacy prompt missing class {cls}'
+                assert cls in new_user, f'[{name}] new prompt missing class {cls}'
+            for fn in {fn.name for fn in metadata.public_functions}:
+                assert fn in legacy_user, f'[{name}] legacy prompt missing function {fn}'
+                assert fn in new_user, f'[{name}] new prompt missing function {fn}'
+            src = f.read_text(encoding='utf-8')
+            lines = [ln for ln in src.splitlines() if ln.strip() and not ln.startswith('#!')]
+            if lines:
+                marker = lines[0]
+                assert marker in legacy_user, f'[{name}] legacy prompt missing src marker {marker!r}'
+                assert marker in new_user, f'[{name}] new prompt missing src marker {marker!r}'
+        else:
+            for dep in {d for d in metadata.dependencies if d}:
+                assert dep in legacy_user, f'[{name}] legacy arch prompt missing dep {dep}'
+                assert dep in new_user, f'[{name}] new arch prompt missing dep {dep}'

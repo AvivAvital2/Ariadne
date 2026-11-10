@@ -14,9 +14,6 @@ import pytest
 class TestLLMProviderProtocol:
     """``LLMProvider`` protocol must declare ``call`` and ``aclose``."""
 
-    def test_protocol_is_importable(self):
-        from docgen.llm.base import LLMProvider  # noqa: F401
-
     def test_protocol_has_call_method(self):
         from docgen.llm.base import LLMProvider
         assert hasattr(LLMProvider, 'call')
@@ -28,9 +25,6 @@ class TestLLMProviderProtocol:
 
 class TestFactoryDispatch:
     """``make_llm_provider`` must dispatch to the right concrete class."""
-
-    def test_factory_is_importable(self):
-        from docgen.llm.factory import make_llm_provider  # noqa: F401
 
     def test_openai_provider_dispatch(self):
         from docgen.llm.factory import make_llm_provider

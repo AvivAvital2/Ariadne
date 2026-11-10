@@ -25,16 +25,12 @@ def test_shared_table_values():
     assert detect_doc_language(Path('a.vue')) == 'javascript'
     assert detect_doc_language(Path('Dockerfile')) == 'dockerfile'
     assert detect_doc_language(Path('a.xyz')) is None
+    assert pricing._detect_language(Path('x.conf')) == 'hocon'
+    assert pricing._detect_language(Path('x.css')) == 'css'
+    assert pricing._detect_language(Path('x.vue')) == 'javascript'
 
 
 def test_pricing_and_catalog_agree_on_every_case():
     for name in _CASES:
         p = Path(name)
         assert pricing._detect_language(p) == ce._detect_language(p), name
-
-
-def test_pricing_gained_the_drifted_cases():
-    # The exact drift that silently mispriced config/SFC files.
-    assert pricing._detect_language(Path('x.conf')) == 'hocon'
-    assert pricing._detect_language(Path('x.css')) == 'css'
-    assert pricing._detect_language(Path('x.vue')) == 'javascript'

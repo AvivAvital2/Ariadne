@@ -22,7 +22,7 @@ import sqlite3
 import pytest
 
 from library.scip import init_scip_schema
-from library.structural_assembly import scip_paths_for, seeds_from_documents
+from library.structural_assembly import seeds_from_documents
 
 # The index holds BOTH of these as real, distinct files — so preferring the longest
 # strip would silently resolve the wrong one.
@@ -64,32 +64,6 @@ def conn():
     c.commit()
     yield c
     c.close()
-
-
-def test_the_least_strip_that_the_index_confirms_wins(conn):
-    """`spark/sql/core/app.py` is `sql/core/app.py`, not `core/app.py`."""
-    resolved, unresolved = scip_paths_for(
-        conn, ['spark/sql/core/app.py'], source='src1', indexer_cwds=CWDS)
-
-    assert resolved == {'spark/sql/core/app.py': 'sql/core/app.py'}
-    assert unresolved == ()
-
-
-def test_a_path_already_in_index_form_is_left_alone(conn):
-    resolved, _ = scip_paths_for(conn, ['pkg/beta.py'], source='src1',
-                                indexer_cwds=CWDS)
-
-    assert resolved == {'pkg/beta.py': 'pkg/beta.py'}
-
-
-def test_an_unindexed_path_is_reported_not_guessed(conn):
-    """32 of the live 91 are genuinely absent — markdown, and an unindexed module."""
-    resolved, unresolved = scip_paths_for(
-        conn, ['delta/PROTOCOL.md', 'repo/pkg/beta.py'], source='src1',
-        indexer_cwds=CWDS)
-
-    assert resolved == {'repo/pkg/beta.py': 'pkg/beta.py'}
-    assert unresolved == ('delta/PROTOCOL.md',)
 
 
 def test_seeds_are_the_named_symbols_defined_in_the_resolved_files(conn):

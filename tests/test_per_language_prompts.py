@@ -120,6 +120,9 @@ class TestCodeFenceAdaptsToLanguage:
         assert '```javascript' in captured[0]
         # And the python fence isn't used.
         assert '```python\n' not in captured[0]
+        prompt = captured[0]
+        assert 'javascript' in prompt.lower() or 'JavaScript' in prompt
+        assert 'Python code' not in prompt
 
     @pytest.mark.asyncio
     async def test_json_bundle_uses_json_fence(
@@ -150,42 +153,6 @@ class TestCodeFenceAdaptsToLanguage:
 # ---------------------------------------------------------------------------
 # Language framing in user prompt
 # ---------------------------------------------------------------------------
-
-
-class TestLanguageFraming:
-    @pytest.mark.asyncio
-    async def test_javascript_prompt_mentions_javascript_not_python(
-        self, tmp_path: Path,
-    ) -> None:
-        """The user prompt's framing line should describe JavaScript code
-        when the bundle is JS — not still say 'Python code'.
-        """
-        f = tmp_path / 'app.js'
-        _write(f, '''
-            function greet() { return 1; }
-        ''')
-        bundle = enrich_file(f, source_root=tmp_path)
-        gen = DocGenerator(config=GeneratorConfig(api_key='dummy'))
-
-        captured: list[str] = []
-
-        async def fake_llm(system, user):
-            captured.append(user)
-            return '# Doc'
-
-        with patch.object(
-            DocGenerator, '_call_llm', new_callable=AsyncMock, side_effect=fake_llm,
-        ):
-            async with gen:
-                await gen.generate_from_elements(
-                    bundle, doc_types=('explanation',),
-                )
-
-        prompt = captured[0]
-        # The framing should say JavaScript (case-insensitive check).
-        assert 'javascript' in prompt.lower() or 'JavaScript' in prompt
-        # And shouldn't claim it's Python.
-        assert 'Python code' not in prompt
 
 
 # ---------------------------------------------------------------------------

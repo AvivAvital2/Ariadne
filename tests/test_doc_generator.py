@@ -57,21 +57,15 @@ class TestNormalizeHeading:
 class TestDocGeneratorReadme:
     @pytest.mark.asyncio
     async def test_generates_readme_file(self, doc_gen, mock_library):
+        assert not doc_gen.output_dir.exists()
         with patch.object(doc_gen, '_llm', new_callable=AsyncMock, return_value='# My Project\n\nGenerated README'):
             results = await doc_gen.generate(['readme'])
 
+        assert doc_gen.output_dir.exists()
         assert 'readme' in results
         path = results['readme']
         assert path.exists()
         assert 'My Project' in path.read_text()
-
-    @pytest.mark.asyncio
-    async def test_creates_output_dir(self, doc_gen):
-        assert not doc_gen.output_dir.exists()
-        with patch.object(doc_gen, '_llm', new_callable=AsyncMock, return_value='# Test'):
-            await doc_gen.generate(['readme'])
-        assert doc_gen.output_dir.exists()
-
 
 class TestDocGeneratorApi:
     @pytest.mark.asyncio

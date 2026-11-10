@@ -276,55 +276,10 @@ class TestModuleNameUniquePerFile:
             bundle2 = enrich_file(f2, source_root=tmp_path, source_config=cfg)
 
         assert bundle1 is not None and bundle2 is not None
+        assert 'Foo' in bundle1.module_name, (
+            f'module_name {bundle1.module_name!r} does not carry file identity'
+        )
         assert bundle1.module_name != bundle2.module_name, (
             f'both files got module_name={bundle1.module_name!r} — '
             f'duplicate docs will be created on generate'
-        )
-
-    def test_scala_module_name_includes_file_stem_when_scip(
-        self, tmp_path: Path,
-    ) -> None:
-        """Scala file ``Foo.scala`` in package ``com.example`` should
-        produce module_name like ``com.example.Foo`` — package + file
-        stem — so it's unique per file.
-        """
-        from docgen.catalog_enrich import enrich_file
-        from docgen.scip_config import SourceScipConfig
-        from docgen.scip_extractor import (
-            ScipIndex,
-            _ScipDoc,
-            _ScipOccurrence,
-            _ScipSymbol,
-        )
-
-        f = tmp_path / 'Foo.scala'
-        f.write_text('class Foo\n', encoding='utf-8')
-
-        sym = 'scip-java maven g a 1 com/example/Foo#'
-        synthetic = ScipIndex(
-            documents=(_ScipDoc(
-                relative_path='Foo.scala',
-                occurrences=(_ScipOccurrence(
-                    symbol=sym, range=(0, 0, 0, 5), is_definition=True,
-                ),),
-                symbols=(_ScipSymbol(symbol=sym, kind='Class'),),
-            ),),
-        )
-
-        with patch(
-            'docgen.scip_config.resolve_index', lambda cfg, lang: synthetic,
-        ):
-            cfg = SourceScipConfig(
-                repo='r', artifact_path=tmp_path / 'idx.scip',
-                index_kinds={'scala': 'scip'},
-            )
-            bundle = enrich_file(f, source_root=tmp_path, source_config=cfg)
-
-        assert bundle is not None
-        # Either "com.example.Foo" (package + stem) or just including
-        # the file stem at the end is acceptable; the critical thing is
-        # that it's unique per file in the package.
-        assert 'Foo' in bundle.module_name, (
-            f"module_name {bundle.module_name!r} doesn't carry file "
-            f"identity; duplicate docs likely"
         )

@@ -73,37 +73,6 @@ def noise_hops(count: int):
 
 
 class TestRequiredDerivation:
-    def test_transition_site_selects_the_narrowest_containing_overload(
-            self):
-        short_apply, wide_apply, generated = overload_fixture()
-
-        plan = derive_definition_body_plan(
-            hops=[short_apply, wide_apply, generated],
-            retained_symbols=("pkg.Preprocess.apply",
-                              "pkg.Generated.expression"),
-            bindings=())
-
-        required_extents = {
-            (ref.file, ref.line_start, ref.line_end)
-            for requirement in plan.required
-            for ref in (requirement.body_ref,)}
-        assert ("pkg/preprocess.scala", 50, 242) in required_extents
-        assert ("pkg/preprocess.scala", 20, 40) not in required_extents
-
-    def test_causal_callee_definition_is_required(self):
-        short_apply, wide_apply, generated = overload_fixture()
-
-        plan = derive_definition_body_plan(
-            hops=[short_apply, wide_apply, generated],
-            retained_symbols=("pkg.Preprocess.apply",
-                              "pkg.Generated.expression"),
-            bindings=())
-
-        required_names = {
-            requirement.body_ref.qualified_name
-            for requirement in plan.required}
-        assert "pkg.Generated.expression" in required_names
-
     def test_obligation_bound_occurrence_is_required(self):
         target = make_hop(
             "pkg.Registrar.install", file="pkg/registrar.scala",
@@ -169,6 +138,14 @@ class TestMonotonicity:
             retained_symbols=("pkg.Preprocess.apply",
                               "pkg.Generated.expression"),
             bindings=())
+        required_extents = {
+            (ref.file, ref.line_start, ref.line_end)
+            for requirement in quiet.required for ref in (requirement.body_ref,)
+        }
+        assert ('pkg/preprocess.scala', 50, 242) in required_extents
+        assert ('pkg/preprocess.scala', 20, 40) not in required_extents
+        required_names = {requirement.body_ref.qualified_name for requirement in quiet.required}
+        assert 'pkg.Generated.expression' in required_names
         noisy = derive_definition_body_plan(
             hops=base + noise_hops(100),
             retained_symbols=("pkg.Preprocess.apply",

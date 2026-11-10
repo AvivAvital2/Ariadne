@@ -78,13 +78,6 @@ def generator():
 
 
 class TestMethodExists:
-    def test_generate_from_elements_is_callable(
-        self, generator: DocGenerator,
-    ) -> None:
-        # The method must exist on DocGenerator — without it the new
-        # orchestrator branch can't be wired.
-        assert hasattr(generator, 'generate_from_elements')
-
     @pytest.mark.asyncio
     async def test_generate_from_elements_returns_list(
         self, generator: DocGenerator, bundle,

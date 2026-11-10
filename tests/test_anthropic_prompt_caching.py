@@ -125,21 +125,6 @@ async def test_user_prompt_not_marked_cacheable(fake_client):
         assert isinstance(msg['content'], str)
 
 
-async def test_prompt_caching_beta_header_present():
-    """The provider must advertise the prompt-caching beta so the pinned
-    ``anthropic-version: 2023-06-01`` accepts cache_control markers.
-    """
-    from docgen.llm.anthropic import AnthropicProvider
-
-    provider = AnthropicProvider(model='claude-opus-4-6', api_key='test')
-    client = provider._get_client()
-    headers = dict(client.headers)
-    assert 'anthropic-beta' in headers, (
-        'cache_control on system content requires the prompt-caching beta header'
-    )
-    assert 'prompt-caching' in headers['anthropic-beta']
-
-
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------

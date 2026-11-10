@@ -46,12 +46,6 @@ def package_dir(tmp_path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
-class TestMethodExists:
-    def test_generate_for_directory_is_callable(self) -> None:
-        gen = DocGenerator(config=GeneratorConfig(api_key='dummy'))
-        assert hasattr(gen, 'generate_for_directory')
-
-
 # ---------------------------------------------------------------------------
 # Group arch doc content
 # ---------------------------------------------------------------------------

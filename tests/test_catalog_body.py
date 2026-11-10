@@ -205,16 +205,13 @@ class TestMcpToolRegistration:
     A live MCP client test would be needed for full validation.
     """
 
-    def test_function_exists(self):
-        import ariadne_mcp.server as mcp_server
-        assert hasattr(mcp_server, 'ariadne_body'), (
-            'ariadne_body not defined in mcp_server.py'
-        )
-
     def test_function_signature(self):
         import inspect
 
         import ariadne_mcp.server as mcp_server
+        assert hasattr(mcp_server, 'ariadne_body'), (
+            'ariadne_body not defined in mcp_server.py'
+        )
         sig = inspect.signature(mcp_server.ariadne_body)
         params = list(sig.parameters.keys())
         assert 'qualified_name' in params
