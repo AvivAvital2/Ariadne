@@ -56,3 +56,30 @@ def local_deployment(tmp_path, monkeypatch):
         with ctx.write_session():
             ctx.open_library(operation='write').close()
         yield ctx, chat, embed
+
+
+@pytest.fixture
+def native_pair(tmp_path, monkeypatch, request):
+    """Independent llama.cpp protocol fixtures and a fresh Mac-profile library."""
+    from inference import InferenceContext
+    from local_models import mac_accuracy_profile, mac_model_profile
+    from model_config import resolve_models
+    from tests.llamacpp_server import LlamaServer
+    from tests.local_model_server import trap_inference
+
+    accuracy = getattr(request, 'param', 'legacy') == 'accuracy'
+    data = mac_accuracy_profile() if accuracy else mac_model_profile()
+    chat = LlamaServer(data['llm']['served_model'], thinking=accuracy)
+    embed = LlamaServer('Qwen/Qwen3-Embedding-8B', embeddings=True)
+    try:
+        data['llm']['base_url'] = chat.base_url
+        data['embeddings']['base_url'] = embed.base_url
+        trap_inference(monkeypatch, [chat.base_url, embed.base_url])
+        context = InferenceContext(resolve_models(data), tmp_path / 'library.db',
+                                   tmp_path / 'staleness.db')
+        with context.write_session():
+            context.open_library(operation='write').close()
+        yield context, chat, embed
+    finally:
+        chat.close()
+        embed.close()

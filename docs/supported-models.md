@@ -16,6 +16,13 @@ Hosted Qwen uses the production `deepinfra` provider and `DEEPINFRA_API_KEY` for
 
 ## Choose models during onboarding
 
+For the supported 27B Q4 pair, **Connect servers you manage** in Preview or Generate
+accepts endpoint URLs and credential variable names. **Test and save** explicitly
+checks native API compatibility with real inference requests, then makes the
+profile selectable. Server setup and hardware capacity belong to the operator;
+connection success does not establish model accuracy. See the
+[user-managed server guide](user-managed-models.md).
+
 The browser's Preview step offers OpenAI, Claude, hosted Qwen and configured local Qwen pairs in one application. Switch pairs to compare generation and embedding costs for the current source and scope before spending anything. Previews make no inference calls and save no project library; cloud costs can be previewed without credentials. Missing credentials or local endpoint configuration are shown beside the choices. Only **Start build** saves the selected pair under `web-projects/PROJECT_ID/ariadne.yaml`, alongside that project's library and staleness database. Search, answers and clews use the saved pair automatically. The console's project selector reopens existing libraries; it does not change their models.
 
 The configured pair is offered as `configured`. Additional deployment configurations can be supplied under `onboarding_models` in the application's root configuration, with each entry containing `llm`, `embeddings` and optional `execution` blocks. For example, put the blocks from the local preset under `onboarding_models.qwen-local` to offer local Qwen beside the cloud choices. Credentials remain environment-variable references and are required when starting a cloud build. After a build starts, changing pairs requires a new onboarding; existing libraries retain their models.

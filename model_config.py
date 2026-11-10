@@ -12,6 +12,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from local_models import (
+    MAC_ACCURACY_CHAT_MODEL,
+    MAC_CHAT_MODEL,
+    MAC_EMBEDDING_MODEL,
+    MAC_RECIPE,
+    MAC_WEIGHT_FORMAT,
+)
+
 CHAT_MODEL = 'Qwen/Qwen3.8-27B'
 EMBEDDING_MODEL = 'Qwen/Qwen3-Embedding-8B'
 EMBEDDING_DIM = 3072
@@ -147,6 +155,8 @@ class ChatSettings:
                 'weight_format': self.weight_format,
             },
             'tokenizer_revision': self.tokenizer_revision or self.model_revision,
+            **({'generation_contract': 'qwen3.8-thinking-xhigh-v1'}
+               if self.model == MAC_ACCURACY_CHAT_MODEL else {}),
         }
 
     def credential(self) -> str | None:
@@ -307,13 +317,20 @@ class ModelSettings:
             if self.execution.batch_mode == 'always':
                 raise ModelConfigurationError('DeepInfra supports live execution only; use batch_mode: never')
         if self.local:
-            if c.model != CHAT_MODEL or e.model != EMBEDDING_MODEL:
+            local_pairs = {
+                (CHAT_MODEL, EMBEDDING_MODEL): ('bf16', RECIPE),
+                (MAC_CHAT_MODEL, MAC_EMBEDDING_MODEL): (MAC_WEIGHT_FORMAT, MAC_RECIPE),
+                (MAC_ACCURACY_CHAT_MODEL, MAC_EMBEDDING_MODEL): (MAC_WEIGHT_FORMAT, MAC_RECIPE),
+            }
+            representation = local_pairs.get((c.model, e.model))
+            if representation is None:
                 raise ModelConfigurationError(
-                    f'The supported local pair is {CHAT_MODEL} and {EMBEDDING_MODEL}'
+                    'Unsupported local model pair; select the BF16 pair or the pinned Mac Q4 candidate'
                 )
-            if e.dimensions != EMBEDDING_DIM or e.recipe != RECIPE:
+            weight_format, recipe = representation
+            if e.dimensions != EMBEDDING_DIM or e.recipe != recipe:
                 raise ModelConfigurationError(
-                    f'Local embeddings require {EMBEDDING_DIM} dimensions and recipe {RECIPE}'
+                    f'Local embeddings require {EMBEDDING_DIM} dimensions and recipe {recipe}'
                 )
             for prefix, settings in [('llm', c), ('embeddings', e)]:
                 if settings.max_concurrency != 1:
@@ -325,10 +342,10 @@ class ModelSettings:
                         f'{prefix}.base_url is required for local inference'
                     )
                 tokenize_url(settings.base_url)
-                # The first supported weight representation. Quantized deployments
-                # require separate qualification and a new explicit recipe release.
-                if settings.weight_format != 'bf16':
-                    raise ModelConfigurationError(f'{prefix}.weight_format must be bf16')
+                if settings.weight_format != weight_format:
+                    raise ModelConfigurationError(
+                        f'{prefix}.weight_format must be {weight_format}'
+                    )
                 if execution:
                     _pin(f'{prefix}.model_revision', settings.model_revision)
                     if settings.tokenizer_revision is not None:
@@ -336,8 +353,24 @@ class ModelSettings:
                 elif not settings.model_revision:
                     raise ModelConfigurationError(f'{prefix}.model_revision is required')
             options = c.request_options
-            unknown = set(options) - set(DEFAULT_REQUEST_OPTIONS)
-            if unknown or options.get('chat_template_kwargs') != {'enable_thinking': False}:
+            if c.model == MAC_ACCURACY_CHAT_MODEL:
+                allowed = set(DEFAULT_REQUEST_OPTIONS) | {
+                    'reasoning_effort', 'reasoning_format', 'min_p', 'repeat_penalty',
+                }
+                if (set(options) != allowed
+                        or options.get('chat_template_kwargs') != {'enable_thinking': True}
+                        or options.get('reasoning_effort') != 'xhigh'
+                        or options.get('reasoning_format') != 'deepseek'):
+                    raise ModelConfigurationError(
+                        'The Mac 27B profile requires explicit thinking, xhigh effort and deepseek final-answer separation'
+                    )
+                minimum = options['min_p']
+                if (isinstance(minimum, bool) or not isinstance(minimum, (int, float))
+                        or not math.isfinite(minimum) or not 0 <= minimum <= 1):
+                    raise ModelConfigurationError('Invalid local request option min_p')
+                _positive('repeat_penalty', options['repeat_penalty'], integer=False)
+            elif (set(options) - set(DEFAULT_REQUEST_OPTIONS)
+                  or options.get('chat_template_kwargs') != {'enable_thinking': False}):
                 raise ModelConfigurationError(
                     'Unsupported local request_options; thinking must be explicitly disabled'
                 )

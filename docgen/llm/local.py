@@ -1,4 +1,4 @@
-"""Strict vLLM transport shared by local chat, tokenization and embeddings."""
+"""Strict local inference transport for vLLM and the pinned llama.cpp candidate."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from http import HTTPStatus
 import httpx
 
 from docgen.llm.base import CacheStats
+from local_models import MAC_WEIGHT_FORMAT
 from model_config import TOKEN_SAFETY_MARGIN, ChatSettings, tokenize_url
 
 
@@ -173,6 +174,41 @@ class LocalTransport:
                 self.request_sync('GET', self.settings.base_url + '/models', attempts=attempts)
             )
 
+    async def tokenize(
+        self, payload: dict, *, attempts: int | None = None, timeout: float | None = None
+    ) -> dict:
+        url = tokenize_url(self.settings.base_url)
+        if self.settings.weight_format != MAC_WEIGHT_FORMAT:
+            return await self.request('POST', url, payload=payload, attempts=attempts, timeout=timeout)
+        root = url.removesuffix('/tokenize')
+        template = None
+        if 'messages' in payload:
+            template = await self.request(
+                'POST', root + '/apply-template', payload=payload, attempts=attempts, timeout=timeout
+            )
+        data = await self.request(
+            'POST', url, payload=llama_token_payload(payload, template),
+            attempts=attempts, timeout=timeout,
+        )
+        props = await self.request('GET', root + '/props', attempts=attempts, timeout=timeout)
+        return llama_token_result(data, props)
+
+    def tokenize_sync(self, payload: dict, *, timeout: float | None = None) -> dict:
+        url = tokenize_url(self.settings.base_url)
+        if self.settings.weight_format != MAC_WEIGHT_FORMAT:
+            return self.request_sync('POST', url, payload=payload, timeout=timeout)
+        root = url.removesuffix('/tokenize')
+        template = None
+        if 'messages' in payload:
+            template = self.request_sync(
+                'POST', root + '/apply-template', payload=payload, timeout=timeout
+            )
+        data = self.request_sync(
+            'POST', url, payload=llama_token_payload(payload, template), timeout=timeout
+        )
+        props = self.request_sync('GET', root + '/props', timeout=timeout)
+        return llama_token_result(data, props)
+
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.aclose()
@@ -217,6 +253,9 @@ def chat_token_request(payload: dict) -> dict:
         'model': payload['model'],
         'messages': payload['messages'],
         'chat_template_kwargs': payload['chat_template_kwargs'],
+        # llama.cpp applies these top-level fields before rendering the template.
+        # Count the same thinking prompt that the completion request will use.
+        **{key: payload[key] for key in ('reasoning_effort', 'reasoning_format') if key in payload},
         'add_generation_prompt': True,
         'add_special_tokens': False,
     }
@@ -236,6 +275,27 @@ def token_count(data: dict) -> tuple[int, int]:
     ):
         raise LocalInferenceError('Tokenization response count does not match its token IDs')
     return count, limit
+
+
+def llama_token_payload(payload: dict, template: dict | None) -> dict:
+    content = template.get('prompt') if template is not None else payload.get('prompt')
+    if not isinstance(content, str) or not content.strip():
+        raise LocalInferenceError('llama.cpp returned an empty or invalid rendered prompt')
+    # llama.cpp tokenizes its rendered chat prompt with both flags true. The
+    # vLLM add_special_tokens flag must not be copied to this different API.
+    return {'content': content, 'add_special': True, 'parse_special': True, 'with_pieces': False}
+
+
+def llama_token_result(data: dict, props: dict) -> dict:
+    tokens = data.get('tokens')
+    settings = props.get('default_generation_settings')
+    result = {
+        'tokens': tokens,
+        'count': len(tokens) if isinstance(tokens, list) else None,
+        'max_model_len': settings.get('n_ctx') if isinstance(settings, dict) else None,
+    }
+    token_count(result)
+    return result
 
 
 async def check_endpoints(settings: ModelSettings) -> dict:
@@ -265,9 +325,7 @@ async def check_endpoints(settings: ModelSettings) -> dict:
         transport = LocalTransport(endpoint, attempts=settings.execution.max_attempts)
         try:
             await transport.ready()
-            count, limit = token_count(
-                await transport.request('POST', tokenize_url(endpoint.base_url), payload=payload)
-            )
+            count, limit = token_count(await transport.tokenize(payload))
             result[name] = {
                 'advertised_model': endpoint.request_model,
                 'probe_tokens': count,
@@ -397,10 +455,8 @@ class LocalOpenAICompatibleProvider:
         start = time.monotonic()
         async with self.context.chat_limit:
             await self.transport.ready(attempts=attempts)
-            counted = await self.transport.request(
-                'POST',
-                tokenize_url(self.base_url),
-                payload=chat_token_request(payload),
+            counted = await self.transport.tokenize(
+                chat_token_request(payload),
                 attempts=attempts,
                 timeout=timeout,
             )
@@ -427,10 +483,8 @@ class LocalOpenAICompatibleProvider:
         start = time.monotonic()
         with self.context.chat_limit:
             self.transport.ready_sync()
-            counted = self.transport.request_sync(
-                'POST',
-                tokenize_url(self.base_url),
-                payload=chat_token_request(payload),
+            counted = self.transport.tokenize_sync(
+                chat_token_request(payload),
                 timeout=timeout,
             )
             check_chat_context(counted, self.settings, payload)

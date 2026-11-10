@@ -1,10 +1,21 @@
 # Local models
 
-Ariadne implements local inference for the fixed pair `Qwen/Qwen3.8-27B` and `Qwen/Qwen3-Embedding-8B`. The software is tested against two independent HTTP fixtures. The pinned [serving candidate](../deployments/local-v1/README.md) still needs [real-model qualification](local-model-qualification.md); it is not a production support claim.
+For the supported Q4 pair, use the [user-managed server UI](user-managed-models.md)
+to enter local or remote endpoint URLs, test compatibility, and save a selectable
+profile. You operate the servers and provide suitable hardware. The BF16/YAML
+path documented below remains available. Hardware-specific Mac qualification is
+not an acceptance requirement for the user-managed path; model quality and correct
+application behavior still require evidence.
+
+Ariadne implements local inference for the fixed pair `Qwen/Qwen3.8-27B` and `Qwen/Qwen3-Embedding-8B`. The software is tested against two independent HTTP fixtures. The pinned BF16/GPU [serving candidate](../deployments/local-v1/README.md) still needs [real-model qualification](local-model-qualification.md); it is not a production support claim.
+
+The separate Q4 user-managed pair completed an [Intel CPU smoke on 2026-10-25](../evaluation/intel-local-2026-10-25/README.md): native generation, embedding, persistence, reopen, Search and Ask under a saved project configuration. It used one known fixture with an authored dependency document, not full native browser onboarding or a held-out accuracy benchmark. All five required generated facts passed review, with defects in extra advice; the original Ask correctly answered one question with authored-document assistance. The run took 104.97 minutes and reached 36.4 GiB combined server RSS in periodic samples on a 64 GiB Intel machine. This does not qualify BF16/GPU serving, broad model accuracy or M5 memory capacity.
+
+The October 26 follow-ups corrected Search omission counts and documentation-Ask citation instructions. Native Search passed in 3.08 seconds; the final Python suite had 5151 passed, 5 skipped and 1 existing expected failure. The earlier timeout browser selection passed 9 cases with intercepted replies. The corrected native Ask completed in 16.8 minutes and passed independent factual/document-title citation review for the same question, with the same authored dependency assistance. HTTP/static and real project-MCP metadata readiness also passed; native full browser onboarding remains outside this run's scope.
 
 For the cloud OpenAI/Claude pairs, credentials and switching configurations with `ARIADNE_CONFIG`, see [supported model configurations](supported-models.md). CLI and MCP must select the same configuration; restart MCP when changing it.
 
-Development and automated tests do not require GPUs, model weights, or running Qwen servers. Real-model qualification is deferred until a deployment is available. Actual local generation, embedding and semantic retrieval require the configured model endpoints.
+Development and automated tests do not require GPUs, model weights, or running Qwen servers. BF16/GPU real-model qualification remains deferred until that deployment is available. Actual local generation, embedding and semantic retrieval require the configured model endpoints.
 
 For paid verification without local servers, use the [shared hosted workflow runner](live-model-verification.md). Change `--profile` to run the same scenarios with hosted Qwen, Claude or OpenAI; each profile uses a fresh library and an explicit spending cap. The separate blind implementation run passed 41 checks across six fresh Qwen cases; earlier factual failures remain recorded separately.
 
@@ -12,7 +23,7 @@ The [Docker application image](docker.md) includes cloud/local presets and has p
 
 The browser compares pairs and their costs in Preview, then saves the chosen pair when you start the build for subsequent search and answers. Configured local Qwen appears beside OpenAI, Claude and hosted Qwen; see [model selection](supported-models.md#choose-models-during-onboarding). Add the [web Compose override](docker.md#browser-with-a-configured-model-pair) to either preset. The [Qwen browser journey](../web/e2e/README.md) exercises the combined image with deterministic HTTP fixtures, including clew retrieval and application restart.
 
-Start from [ariadne.local.yaml.example](../ariadne.local.yaml.example). Set independent `/v1` endpoints, actual artifact and tokenizer revisions, BF16 weight representation, and fresh library/sidecar paths. Credential settings name environment variables; `null` omits authorization. Local requests ignore `OPENAI_BASE_URL`, cloud keys and proxy environment variables. HTTP redirects are refused. Token counting uses each local server's `/tokenize`, including the rendered non-thinking chat template. Generation reserves its complete requested output budget plus 64 tokens. Inputs that do not fit fail explicitly.
+The YAML setup and embedding recipe below describe the BF16 preset; the Q4 UI pair has its own artifact and recipe identities. Start from [ariadne.local.yaml.example](../ariadne.local.yaml.example). Set independent `/v1` endpoints, actual artifact and tokenizer revisions, BF16 weight representation, and fresh library/sidecar paths. Credential settings name environment variables; `null` omits authorization. Local requests ignore `OPENAI_BASE_URL`, cloud keys and proxy environment variables. HTTP redirects are refused. Token counting uses each local server's `/tokenize`, including the rendered non-thinking chat template. Generation reserves its complete requested output budget plus 64 tokens. Inputs that do not fit fail explicitly.
 
 ```sh
 ariadne config

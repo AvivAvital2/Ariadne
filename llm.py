@@ -20,6 +20,33 @@ import os
 
 _logger = logging.getLogger(__name__)
 
+_SELECTOR_PHASES = frozenset({
+    'scip-obligation-plan', 'scip-family-select', 'scip-route-select',
+    'scip-symbol-select', 'scip-component-select', 'scip-exact-route-select',
+    'scip-body-select', 'scip-route-family-select',
+})
+_SELECTOR_THINKING_ALLOWANCE = 2048
+
+
+def _selector_max_tokens(context: InferenceContext, phase: str, requested: int) -> int:
+    """Reserve bounded thinking space for the selected Mac profile's selectors.
+
+    Their original small caps were final-answer allowances. Native completions
+    count reasoning and final text together. Direct calls and frozen Spool jobs
+    retain their recorded limits; this policy applies only to named Ask phases.
+    """
+    if not context.local or phase not in _SELECTOR_PHASES:
+        return requested
+    ceiling = context.settings.chat.max_output_tokens
+    if type(requested) is not int or not 0 < requested <= ceiling:
+        return requested  # Preserve the provider's existing invalid-cap rejection.
+    from local_models import mac_accuracy_profile
+    from model_config import resolve_models
+
+    if context.settings.identity != resolve_models(mac_accuracy_profile()).identity:
+        return requested
+    return min(ceiling, requested + _SELECTOR_THINKING_ALLOWANCE)
+
 
 async def close() -> None:
     """Backwards-compat no-op.
@@ -35,7 +62,7 @@ async def chat_complete(
     *,
     model: str | None = None,
     max_tokens: int = 2048,
-    timeout: float = 60.0,
+    timeout: float | None = None,
     phase: str = "completion",
     usage_sink: list | None = None,
     system_prompt: str | None = None,
@@ -49,6 +76,9 @@ async def chat_complete(
     provider stop reason) together with the request's ``max_tokens`` cap —
     the signal a caller needs to detect a truncated selection reply
     instead of mistaking it for a deliberately short one.
+
+    An omitted timeout uses the local deployment's configured limit; hosted
+    calls retain the historical 60-second default. Explicit limits win.
     """
     from config import get_config
     from docgen.llm.factory import make_llm_provider
@@ -89,9 +119,12 @@ async def chat_complete(
                 )
         finally:
             await owned.aclose()
+    if timeout is None:
+        timeout = context.settings.chat.timeout_seconds if context is not None and context.local else 60.0
     if context is not None:
         model = model or context.settings.chat.model
         context.validate_producer(model=model, provider=context.settings.chat.provider)
+        max_tokens = _selector_max_tokens(context, phase, max_tokens)
         provider = context.chat
     else:
         if model is None:

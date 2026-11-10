@@ -362,7 +362,6 @@ class EmbeddingService:
         self, texts: list[str], *, attempts: int | None = None
     ) -> list[NDArray[np.float32]]:
         from docgen.llm.local import ContextOverflow, token_count
-        from model_config import tokenize_url
 
         invalid = [
             i for i, text in enumerate(texts) if not isinstance(text, str) or not text.strip()
@@ -383,10 +382,8 @@ class EmbeddingService:
             await transport.ready(attempts=attempts)
             counts = []
             for text in texts:
-                data = await transport.request(
-                    'POST',
-                    tokenize_url(settings.base_url),
-                    payload={
+                data = await transport.tokenize(
+                    {
                         'model': settings.request_model,
                         'prompt': text,
                         'add_special_tokens': True,
