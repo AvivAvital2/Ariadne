@@ -89,7 +89,11 @@ CREATE INDEX IF NOT EXISTS idx_version_facts_qn
 
 
 def init_version_facts_schema(conn) -> None:
-    conn.executescript(_SCHEMA)
+    # executescript commits the caller's transaction before running its DDL.
+    # These fixed schema statements must participate in atomic pack installs.
+    for statement in _SCHEMA.split(';'):
+        if statement.strip():
+            conn.execute(statement)
     # Defensive migration: the component column postdates the first shipped
     # schema; the table is derived data, older rows just carry ''.
     cols = {row[1] for row in conn.execute('PRAGMA table_info(version_facts)')}

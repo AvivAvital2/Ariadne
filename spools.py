@@ -13,6 +13,8 @@ import yaml
 
 from config import OFFICIAL_DOC_PROVENANCE
 
+PACK_INSTALL_PENDING = '.install-pending'
+
 
 class SpoolError(Exception):
     """A Spool configuration/manifest violation — always loud, never masked."""
@@ -219,6 +221,41 @@ def nonfree_corpora(dest_dir) -> list:
     return bad
 
 
+def _manifest_embedding_identity(value: object, model: str | None, dimension: int | str | None) -> dict | None:
+    """Validate optional v1 space metadata without guessing missing local pins."""
+    if value is None:
+        return None
+    from model_config import IDENTITY_VERSION
+
+    if (not isinstance(value, dict) or value.get('version') != IDENTITY_VERSION
+            or value.get('provider') not in ('openai', 'deepinfra', 'local')
+            or not isinstance(value.get('model'), str) or not value['model']
+            or type(value.get('dimensions')) is not int or value['dimensions'] <= 0):
+        raise SpoolError('Malformed spool embedding identity')
+    if ((model is not None and value['model'] != model)
+            or (dimension is not None and value['dimensions'] != int(dimension))):
+        raise SpoolError('Spool embedding identity disagrees with model or dimensions')
+    recipe = value.get('recipe')
+    if value['provider'] == 'local':
+        artifact = value.get('artifact')
+        fields = ('name', 'tokenizer_revision', 'pooling', 'reduction', 'normalization',
+                  'query_instruction', 'document_input', 'chunk_input', 'section_input')
+        if (not isinstance(artifact, dict)
+                or any(not isinstance(artifact.get(key), str) or not artifact[key]
+                       for key in ('repository', 'revision', 'weight_format'))
+                or artifact['repository'] != value['model']
+                or not isinstance(recipe, dict)
+                or any(not isinstance(recipe.get(key), str) or not recipe[key] for key in fields)
+                or recipe.get('stored_dimensions') != value['dimensions']
+                or type(recipe.get('native_dimensions')) is not int
+                or recipe['native_dimensions'] < value['dimensions']
+                or type(recipe.get('add_special_tokens')) is not bool):
+            raise SpoolError('Malformed local spool embedding identity')
+    elif not isinstance(recipe, str) or not recipe:
+        raise SpoolError('Malformed hosted spool embedding identity')
+    return dict(value)
+
+
 @dataclass(frozen=True)
 class SpoolManifest:
     """A Spool pack's manifest (§9): identity, edition pin, certification.
@@ -239,6 +276,7 @@ class SpoolManifest:
     # different model/dimension. None when the pack carries no embeddings.
     embedding_model: str | None = None
     embedding_dim: int | None = None
+    embedding_identity: dict | None = None
     # D5 delta substrate: the per-repo commit shas this pack was built from,
     # so a later `create` can reuse unchanged repos instead of rebuilding.
     corpus_shas: dict = field(default_factory=dict)
@@ -287,6 +325,7 @@ class SpoolManifest:
             'pack_format': self.pack_format,
             'embedding_model': self.embedding_model,
             'embedding_dim': self.embedding_dim,
+            'embedding_identity': self.embedding_identity,
             'corpus_shas': dict(self.corpus_shas),
             'runtime_components': dict(self.runtime_components),
             'surfaces': {k: list(v) for k, v in self.surfaces.items()},
@@ -331,6 +370,8 @@ class SpoolManifest:
                 pack_format=int(data.get('pack_format', 1)),
                 embedding_model=data.get('embedding_model'),
                 embedding_dim=int(emb_dim) if emb_dim is not None else None,
+                embedding_identity=_manifest_embedding_identity(
+                    data.get('embedding_identity'), data.get('embedding_model'), emb_dim),
                 corpus_shas=dict(data.get('corpus_shas') or {}),
                 runtime_components=dict(
                     data.get('runtime_components') or {}),
@@ -364,7 +405,16 @@ class SpoolManifest:
 
     @classmethod
     def load(cls, path) -> 'SpoolManifest':
-        return cls.from_dict(load_yaml_mapping(path, SpoolError))
+        pending = Path(path).parent / PACK_INSTALL_PENDING
+        incomplete = 'Spool installation is incomplete; reinstall the pack to recover'
+        if pending.exists():
+            raise SpoolError(incomplete)
+        manifest = cls.from_dict(load_yaml_mapping(path, SpoolError))
+        # A concurrent reinstall may have replaced the directory after the
+        # first check, before this reader opened its manifest.
+        if pending.exists():
+            raise SpoolError(incomplete)
+        return manifest
 
 
 @dataclass(frozen=True)

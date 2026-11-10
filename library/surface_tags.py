@@ -68,7 +68,10 @@ class SurfaceTagRow:
 
 
 def init_surface_tags_schema(conn) -> None:
-    conn.executescript(_SCHEMA)
+    # Preserve an enclosing install transaction, including schema creation.
+    for statement in _SCHEMA.split(';'):
+        if statement.strip():
+            conn.execute(statement)
 
 
 def upsert_surface_tags(conn, rows) -> None:

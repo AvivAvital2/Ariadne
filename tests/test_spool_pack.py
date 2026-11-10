@@ -168,6 +168,10 @@ class TestSpoolPack:
         with Library(install_root / 'target.db') as target:
             installed = install_pack(target, pack_path, cache_dir=cache_dir)
             assert installed == manifest
+            # Sections travel into the first fresh consumer before reinstall.
+            assert [s.heading for s in target.get_sections(guide_doc.id)] == [
+                'Overview',
+            ]
             docs = {d.id: d for d in target.list_documents()}
             assert set(docs) == {engine_doc.id, guide_doc.id, readme_doc.id}
             assert np.array_equal(
@@ -228,15 +232,6 @@ class TestSpoolPack:
             assert 'pack format' in str(excinfo.value)
             assert victim.list_documents() == []
         assert not future_cache.exists()
-
-        # HIGH-2 — sections install into the consumer store too.
-        install_root = tmp_path / 'sections-consumer'
-        install_root.mkdir()
-        with Library(install_root / 'target.db') as target:
-            install_pack(target, pack_path, cache_dir=install_root / 'c')
-            assert [s.heading for s in target.get_sections(guide_doc.id)] == [
-                'Overview',
-            ]
 
         # Demand 5 (integrity) — a tampered LICENSE member is refused by its
         # recorded per-file sha256, BEFORE any store/cache write (fail-closed,

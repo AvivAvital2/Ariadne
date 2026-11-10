@@ -313,6 +313,12 @@ class TestSpoolCli:
         assert spools_cmd.HANDLERS['spools'](args) == 0
         assert out_zip.exists()
 
+        # A consumer owns a separate library. Installing into the builder's
+        # source would collide with the same IDs and overwrite source metadata.
+        consumer_dir = tmp_path / 'consumer'
+        consumer_dir.mkdir()
+        consumer = _config(consumer_dir, 'spools:\n  fakepack: true\n')
+        monkeypatch.setattr(spools_cmd, 'get_config', lambda: consumer)
         install_cache = tmp_path / 'cli-cache'
         args = parser.parse_args([
             'spools', '--cache-dir', str(install_cache),
@@ -320,13 +326,17 @@ class TestSpoolCli:
         ])
         assert spools_cmd.HANDLERS['spools'](args) == 0
         assert (install_cache / 'fakepack' / 'manifest.yaml').exists()
-        with Library(cfg2.db_path) as lib:
+        with Library(consumer.db_path) as lib:
             (doc,) = [
                 d for d in lib.list_documents()
-                if d.source_name == 'fakepack'
+                if d.source_name == 'spool:fakepack'
             ]
             # the certified tag round-tripped build -> install -> store
             assert doc.metadata['provenance'] == 'official'
+        with Library(cfg2.db_path) as builder:
+            (original,) = builder.list_documents()
+            assert original.source_name == 'fakepack'
+            assert original.metadata['provenance'] == 'human-doc'
 
 
 def test_enabled_spools_parses_projects(tmp_path):

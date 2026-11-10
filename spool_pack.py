@@ -2,21 +2,29 @@
 
 A pack is ONE zip: ``manifest.yaml`` (whose ``checksum`` covers the DB
 inside) + ``pack.db`` — a genuine Ariadne library DB holding exactly the
-spool source's documents, embeddings included, so installing never
-re-embeds (design §9 knowledge pack · §17 storage · §18.6.1/.2 tagging).
+spool source's documents, embeddings included. Matching embedding spaces
+reuse vectors; other spaces re-embed every embedded record before import.
 """
 import hashlib
 import shutil
 import sqlite3
 import tempfile
 import zipfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, nullcontext
+from contextvars import Context
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 
 from config import OFFICIAL_DOC_PROVENANCE
 from docgen.extraction_coverage import EXTRACTION_COVERAGE_VERSION
-from spools import SpoolError, SpoolManifest, spool_source_id
+from spools import PACK_INSTALL_PENDING, SpoolError, SpoolManifest, spool_source_id
+
+if TYPE_CHECKING:
+    from library import Library
+    from schema import Document
 
 # The pack container format this Ariadne writes and reads. Bump on any
 # incompatible pack.db/manifest layout change; install fails loud on a
@@ -87,14 +95,109 @@ def _strip_builder_paths(doc, root_prefix: str):
     )
 
 
+def _artifact_library(path: Path) -> 'Library':
+    """A pack is a data container, independent of the active consumer database."""
+    from library import Library
+    return Context().run(Library, path)
+
+
+def _embedding_dimension(library: 'Library') -> int | None:
+    """Inspect all carried vectors, including children of unembedded documents."""
+    with library._conn_provider.acquire() as connection:
+        widths = {row[0] for table in ('documents', 'chunks', 'sections')
+                  for row in connection.execute(
+                      f'SELECT DISTINCT length(embedding) FROM {table} WHERE embedding IS NOT NULL')}
+    if len(widths) > 1 or any(width <= 0 or width % 4 for width in widths):
+        raise SpoolError('Pack contains inconsistent embedding dimensions')
+    return next(iter(widths)) // 4 if widths else None
+
+
+def _needs_reembedding(manifest: SpoolManifest, consumer_identity: dict | None, dimension: int | None) -> bool:
+    import embedding
+
+    if (manifest.embedding_dim is not None and manifest.embedding_dim != dimension
+            or manifest.embedding_identity is not None and dimension is not None
+            and manifest.embedding_identity['dimensions'] != dimension):
+        raise SpoolError('Pack embedding dimensions disagree with its manifest')
+    if dimension is None:
+        return False
+    if manifest.embedding_identity is not None:
+        return manifest.embedding_identity != consumer_identity
+    if consumer_identity is not None:
+        return (consumer_identity['provider'] == 'local'
+                or dimension != consumer_identity['dimensions']
+                or manifest.embedding_model != consumer_identity['model'])
+    return (dimension != embedding.EMBEDDING_DIM
+            or bool(manifest.embedding_model and manifest.embedding_model != embedding.DEFAULT_MODEL))
+
+
+def _check_install_ownership(library: 'Library', pack: 'Library', docs: list['Document'], source_name: str) -> set[str]:
+    association = spool_source_id(source_name)
+    incoming = pack.list_themes(coherent_only=False, association=association)
+    theme_ids = {theme.doc_id for theme in incoming}
+    owned = library.list_themes(coherent_only=False, association=association)
+    owned_ids = {theme.doc_id for theme in owned}
+    owned_clusters = {theme.cluster_id for theme in owned}
+    for theme in incoming:
+        if library.get_theme(theme.cluster_id) is not None and theme.cluster_id not in owned_clusters:
+            raise SpoolError(f'Theme {theme.cluster_id} belongs to another source')
+    for doc in docs:
+        expected = None if doc.id in theme_ids else source_name
+        if doc.source_name != expected:
+            raise SpoolError(f'Pack document {doc.id} does not belong to its declared source')
+        previous = library.get_document(doc.id)
+        if previous is not None and (previous.source_name != association
+                                     if doc.id not in theme_ids else doc.id not in owned_ids):
+            raise SpoolError(f'Document {doc.id} belongs to another source')
+    return theme_ids
+
+
 def _copy_doc_with_sections(dest, doc, *, embedding, metadata, source_name,
-                            sections, allow_reserved_source=False):
+                            sections, chunks=(), allow_reserved_source=False, artifact=False,
+                            connection=None):
     """Copy one document (+ its sections) into ``dest`` — the shared body of
     the build and install copy loops, differing only in these values.
 
     ``allow_reserved_source`` is the install side's privilege to write under the
     reserved ``spool:`` namespace (post-verification); the build side leaves it
     False (it writes the plain environment source name)."""
+    from spools import is_spool_source
+    if is_spool_source(source_name) and not allow_reserved_source:
+        raise SpoolError('Reserved spool sources require a verified install')
+    context = getattr(dest, 'inference_context', None)
+    if context is not None and context.local:
+        from attrs import evolve
+
+        from library.prepared import PreparedDocument, apply_document
+        previous = dest.get_document(doc.id)
+        prepared = PreparedDocument(
+            document=evolve(doc, embedding=embedding, metadata=metadata, source_name=source_name),
+            chunks=tuple(chunks), sections=tuple(sections or ()),
+            expected_version=previous.updated_at if previous else None,
+            embedding_space_id=context.settings.embeddings.embedding_space_id)
+        if connection is None:
+            dest.apply_prepared_document(prepared)
+        else:
+            context.require_writer()
+            context.validate()
+            apply_document(connection, prepared)
+        return
+    if artifact:
+        from attrs import evolve
+        copied = evolve(doc, embedding=embedding, metadata=metadata, source_name=source_name)
+        # Artifact copies are wholly offline: add_document would token-count
+        # via the legacy hosted provider and discard the stored timestamps.
+        with dest._conn_provider.acquire() as conn:
+            conn.execute(
+                'INSERT INTO documents '
+                '(id,content_type,title,content,source_files,embedding,created_at,updated_at,metadata,source_name) '
+                'VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (copied.id, copied.content_type, copied.title, copied.content,
+                 copied.source_files_json(), copied.embedding_bytes(), copied.created_at,
+                 copied.updated_at, copied.metadata_json(), copied.source_name))
+        dest.add_chunks_batch(list(chunks))
+        dest.store_sections(doc.id, list(sections or ()))
+        return
     dest.add_document(
         doc.content_type,
         doc.title,
@@ -108,6 +211,9 @@ def _copy_doc_with_sections(dest, doc, *, embedding, metadata, source_name,
     )
     if sections:
         dest.store_sections(doc.id, sections)
+    if chunks:
+        dest.delete_chunks(doc.id)
+        dest.add_chunks_batch(list(chunks))
 
 
 _SCIP_SOURCE_SCOPED_LAYERS = (
@@ -222,7 +328,6 @@ def _copy_source_scip(src, dest, source_name, *, dest_source_name=None,
                 sconn, dconn, table, source_name, target_source,
                 strip_path_prefix=strip_path_prefix,
             )
-        dconn.commit()
 
 
 def _copy_version_facts(src, dest, source_name):
@@ -236,10 +341,9 @@ def _copy_version_facts(src, dest, source_name):
         init_version_facts_schema(dconn)
         _copy_source_scoped_table(
             sconn, dconn, 'version_facts', source_name, source_name)
-        dconn.commit()
 
 
-def _copy_spool_themes(src, dest, spool_name) -> list:
+def _copy_spool_themes(src, dest, spool_name, *, artifact=False, copy_documents=True) -> list:
     """Ship the spool's OWN theme pass (docs + themes rows + members —
     Slice 3). Theme docs are cross-source by design (source_name=NULL) and
     gate by ASSOCIATION: it is already the reserved spool id
@@ -251,18 +355,30 @@ def _copy_spool_themes(src, dest, spool_name) -> list:
     from spools import spool_source_id
 
     association = spool_source_id(spool_name)
-    dest.delete_themes_for_association(association)
+    themes = src.list_themes(coherent_only=False, association=association)
+    if copy_documents:
+        dest.delete_themes_for_association(association)
+    else:
+        incoming = {theme.doc_id for theme in themes}
+        for old in dest.list_themes(coherent_only=False, association=association):
+            if old.doc_id not in incoming:
+                dest.delete_document(old.doc_id)
+        with dest._conn_provider.acquire() as conn:
+            conn.execute('DELETE FROM themes WHERE association=?', (association,))
+            conn.execute('DELETE FROM spool_assoc_sync WHERE association=?', (association,))
     inserted = []
-    for theme in src.list_themes(coherent_only=False, association=association):
+    for theme in themes:
         doc = src.get_document(theme.doc_id)
         if doc is None:
             continue
         if dest.get_document(doc.id) is None:
             inserted.append(doc.id)
-        _copy_doc_with_sections(
-            dest, doc, embedding=doc.embedding, metadata=dict(doc.metadata),
-            source_name=None, sections=src.get_sections(doc.id),
-        )
+        if copy_documents:
+            _copy_doc_with_sections(
+                dest, doc, embedding=doc.embedding, metadata=dict(doc.metadata),
+                source_name=None, sections=src.get_sections(doc.id),
+                chunks=src.get_chunks(doc.id), artifact=artifact,
+            )
         dest.add_theme(
             cluster_id=theme.cluster_id, doc_id=theme.doc_id,
             member_count=theme.member_count, resolution=theme.resolution,
@@ -272,6 +388,53 @@ def _copy_spool_themes(src, dest, spool_name) -> list:
         dest.set_theme_members(
             theme.cluster_id, src.get_theme_members(theme.cluster_id))
     return inserted
+
+
+def _stage_records(pack: 'Library', docs: list['Document'], library: 'Library', *,
+                   reembed: bool, pack_path: Path) -> dict:
+    """Prepare every imported vector before modifying the consumer library."""
+    from attrs import evolve
+
+    from embedding import doc_embedding_text, embed_batch_sync
+
+    records = {doc.id: [doc, pack.get_chunks(doc.id), pack.get_sections(doc.id)] for doc in docs}
+    pending = []
+    texts = []
+    if reembed:
+        for doc, chunks, sections in records.values():
+            if doc.embedding is not None:
+                pending.append((doc.id, 0, None, doc))
+                texts.append(doc_embedding_text(doc.title, doc.content))
+            for kind, children in ((1, chunks), (2, sections)):
+                for index, child in enumerate(children):
+                    if child.embedding is not None:
+                        pending.append((doc.id, kind, index, child))
+                        texts.append(child.content if kind == 1 else child.heading or 'Introduction')
+        if texts:
+            context = getattr(library, 'inference_context', None)
+            try:
+                with context.activate() if context else nullcontext():
+                    vectors = embed_batch_sync(texts, **({'purpose': 'document'} if context else {}))
+            except Exception as exc:
+                raise SpoolError(
+                    f'pack {pack_path}: re-embedding under the consumer model failed ({exc}); '
+                    'ensure the embedding API is configured') from exc
+            if len(vectors) != len(pending):
+                raise SpoolError(f'pack {pack_path}: re-embed returned {len(vectors)} vectors '
+                                 f'for {len(pending)} records — refusing')
+            for (doc_id, kind, index, record), vector in zip(pending, vectors, strict=True):
+                updated = evolve(record, embedding=vector)
+                if index is None:
+                    records[doc_id][kind] = updated
+                else:
+                    records[doc_id][kind][index] = updated
+    context = getattr(library, 'inference_context', None)
+    if context is not None and context.local:
+        from library.prepared import validate_vector
+        for doc, chunks, sections in records.values():
+            for record in (doc, *chunks, *sections):
+                validate_vector(record.embedding)
+    return records
 
 
 def _copy_surface_tags(src, dest, source_name):
@@ -284,7 +447,6 @@ def _copy_surface_tags(src, dest, source_name):
         init_surface_tags_schema(dconn)
         _copy_source_scoped_table(
             sconn, dconn, 'surface_tags', source_name, source_name)
-        dconn.commit()
 
 
 def _license_name(text) -> str | None:
@@ -372,6 +534,57 @@ def _stage_attribution_licenses(pack_path, attribution):
     return staged
 
 
+@contextmanager
+def _staged_cache(cache_dir: str | Path, environment: str, manifest_bytes: bytes,
+                  staged_db: Path, licenses: dict[tuple[str, str], bytes]) -> Iterator[Callable[[], None]]:
+    """Publish as incomplete, then enable only after the database commit.
+
+    Ordinary exceptions restore the old cache. A process exit leaves the new
+    cache disabled; reinstalling safely completes or repeats its library write.
+    """
+    cache = Path(cache_dir)
+    created = not cache.exists()
+    cache.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.TemporaryDirectory(prefix='.install-', dir=cache) as temporary:
+            workspace = Path(temporary)
+            prepared, backup, destination = workspace / 'new', workspace / 'old', cache / environment
+            prepared.mkdir()
+            (prepared / PACK_INSTALL_PENDING).touch()
+            (prepared / 'manifest.yaml').write_bytes(manifest_bytes)
+            shutil.copyfile(staged_db, prepared / 'pack.db')
+            for (repo, name), blob in licenses.items():
+                directory = prepared / 'licenses' / repo
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / name).write_bytes(blob)
+            published = False
+
+            def publish() -> None:
+                nonlocal published
+                if destination.exists():
+                    destination.replace(backup)
+                prepared.replace(destination)
+                published = True
+
+            try:
+                yield publish
+            except BaseException:
+                if published:
+                    shutil.rmtree(destination)
+                if backup.exists():
+                    backup.replace(destination)
+                raise
+            else:
+                # The caller's SQLite context has committed before returning
+                # here. Failure to remove the marker must leave this cache
+                # disabled, rather than restore a cache for older content.
+                if published:
+                    (destination / PACK_INSTALL_PENDING).unlink()
+    finally:
+        if created and cache.exists() and not any(cache.iterdir()):
+            cache.rmdir()
+
+
 def build_pack(
     library,
     *,
@@ -395,8 +608,6 @@ def build_pack(
     Certified-dir docs are tagged ``official`` in the PACK only; the
     building store is never mutated.
     """
-    from library import Library
-
     # HIGH-3: read ONLY the target source's docs — never
     # ``list_documents()`` (which materializes every source's content +
     # embeddings into memory; fatal on a real multi-GB store). Lite metas
@@ -437,12 +648,9 @@ def build_pack(
             library, outer_sources=[read_source], corpus_source=environment,
             surfaces=surfaces)
 
-    import numpy as np
-
-    embedding_dim: int | None = None
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / 'pack.db'
-        with Library(db_path) as pack:
+        with _artifact_library(db_path) as pack:
             for batch_start in range(0, len(ids), _PACK_BATCH):
                 batch = ids[batch_start:batch_start + _PACK_BATCH]
                 docs = library.get_documents_batch(batch)
@@ -454,32 +662,32 @@ def build_pack(
                         for f in doc.source_files
                     ):
                         metadata['provenance'] = OFFICIAL_DOC_PROVENANCE
-                    # CRIT-10: capture the embedding dim off the first real
-                    # vector in this single pass (no second full scan).
-                    if embedding_dim is None and doc.embedding is not None:
-                        embedding_dim = int(
-                            np.asarray(doc.embedding, dtype=np.float32).shape[0],
-                        )
                     shipped = _strip_builder_paths(doc, root_prefix)
                     _copy_doc_with_sections(
                         pack, shipped, embedding=doc.embedding,
                         metadata=metadata,
                         source_name=environment,
                         sections=sections.get(doc.id),  # HIGH-2: sections travel
+                        chunks=library.get_chunks(doc.id), artifact=True,
                     )
             _copy_source_scip(library, pack, environment,
                               strip_path_prefix=root_prefix)
             _copy_version_facts(library, pack, environment)
             _copy_surface_tags(library, pack, environment)
-            _copy_spool_themes(library, pack, environment)
+            _copy_spool_themes(library, pack, environment, artifact=True)
+            embedding_dim = _embedding_dimension(pack)
         _checkpoint(db_path)
         db_blob = db_path.read_bytes()
 
     # CRIT-10: stamp the embedding identity so install can verify it. The
-    # dimension came off the actual vectors above; the model is the builder's
-    # configured embedding model. None when the corpus carries no embeddings.
+    # Dimension comes from every embedded record; bound identity includes
+    # artifact revision, representation and the full input/vector recipe.
     import embedding as _embedding
-    embedding_model = _embedding.DEFAULT_MODEL if embedding_dim is not None else None
+    from library.model_binding import inspect_binding
+    binding = inspect_binding(library.path)
+    embedding_identity = binding.manifest['embedding'] if binding is not None else None
+    embedding_model = ((embedding_identity['model'] if embedding_identity else _embedding.DEFAULT_MODEL)
+                       if embedding_dim is not None else None)
 
     attribution, license_blobs = _gather_attribution(source_root)
 
@@ -492,6 +700,7 @@ def build_pack(
         pack_format=PACK_FORMAT,
         embedding_model=embedding_model,
         embedding_dim=embedding_dim,
+        embedding_identity=embedding_identity,
         corpus_shas=dict(corpus_shas or {}),
         taxonomy=tuple(taxonomy or ()),
         runtime_components=dict(runtime_components or {}),
@@ -528,8 +737,8 @@ def install_pack(library, pack_path, *, cache_dir,
 
     The checksum is verified BEFORE anything is written — a tampered pack
     leaves both the store and the cache untouched (fail-closed, §5).
-    Embeddings travel as stored blobs; installing never calls an
-    embedding API. Idempotent: re-installing upserts by doc_id.
+    Matching embeddings travel as stored blobs. Other spaces are re-embedded
+    before any destination write. Re-installing upserts by doc_id.
 
     CRIT-10 (match-or-re-embed): shipped vectors are used verbatim when the
     consumer's embedding model matches the pack's; on a mismatch the docs are
@@ -545,7 +754,6 @@ def install_pack(library, pack_path, *, cache_dir,
     (§5 requires signature + checksum + pinned registry); that is a hard
     prerequisite, tracked in the design, not a nice-to-have.
     """
-    from library import Library
 
     pack_path = Path(pack_path)
     with tempfile.TemporaryDirectory() as staging:
@@ -612,97 +820,45 @@ def install_pack(library, pack_path, *, cache_dir,
         # it DIFFERS (dimension or model), RE-EMBED the docs' content with the
         # consumer's model instead of refusing — so a pack is portable across
         # models and a dimension mismatch can never reach the matrix build.
-        reembed = False
-        if manifest.embedding_dim is not None:
-            import embedding
-            reembed = (
-                manifest.embedding_dim != embedding.EMBEDDING_DIM
-                or (manifest.embedding_model
-                    and manifest.embedding_model != embedding.DEFAULT_MODEL)
-            )
+        from library.model_binding import inspect_binding
+        binding = inspect_binding(library.path)
+        consumer_identity = binding.manifest['embedding'] if binding else None
         # Open a disposable copy because schema migrations must not mutate
         # the checksum-verified artifact later written to the cache.
         working_db = Path(staging) / 'working-pack.db'
         shutil.copyfile(staged_db, working_db)
 
-        # CRIT-4: copy the docs into the store FIRST, and only write the cache
-        # files (which register the spool) AFTER the copy fully succeeds — so a
-        # crash mid-copy leaves the spool UNREGISTERED (honest "not installed"),
-        # never a partial store that reports healthy. On failure, roll back the
-        # rows THIS install newly created (a reinstall's pre-existing rows are
-        # left intact — the upsert is idempotent).
+        # Stage all inference first. One transaction covers documents and
+        # derived metadata, including reinstalls. The cache carries a pending
+        # marker until commit so a process exit cannot register partial work.
         # CRIT-9: land docs under the reserved ``spool:<env>`` source id, not
         # the raw environment name — so a spool can never co-mingle with a
         # real source of the same name, and uninstall/disable are clean.
         install_source = spool_source_id(manifest.environment)
-        newly_inserted: list[str] = []
-        try:
-            with Library(working_db) as pack:
-                pack_docs = pack.list_documents()
-                # CRIT-10 fallback: on a model mismatch, re-embed the docs
-                # that carried a vector — with the consumer's model — so the
-                # stored vectors live in the consumer's space. Docs that had
-                # no embedding stay unembedded. On match, keep shipped vectors.
-                embeddings = {d.id: d.embedding for d in pack_docs}
-                if reembed:
-                    from embedding import doc_embedding_text, embed_batch_sync
-                    to_embed = [d for d in pack_docs if d.embedding is not None]
-                    if to_embed:
-                        # Embed over the CANONICAL doc text (shared helper),
-                        # so re-embedded spool vectors match how the consumer
-                        # embeds its own docs — content-only would skew ranks.
-                        try:
-                            vecs = embed_batch_sync(
-                                [doc_embedding_text(d.title, d.content)
-                                 for d in to_embed],
-                            )
-                        except Exception as exc:
-                            raise SpoolError(
-                                f'pack {pack_path}: re-embedding under the '
-                                f'consumer model failed ({exc}); ensure the '
-                                f'embedding API is configured',
-                            ) from exc
-                        if len(vecs) != len(to_embed):
-                            raise SpoolError(
-                                f'pack {pack_path}: re-embed returned '
-                                f'{len(vecs)} vectors for {len(to_embed)} docs '
-                                f'— refusing (would misalign embeddings)',
-                            )
-                        embeddings.update(
-                            {d.id: v for d, v in zip(to_embed, vecs)},
+        with _artifact_library(working_db) as pack:
+            pack_docs = pack.list_documents()
+            theme_ids = _check_install_ownership(library, pack, pack_docs, manifest.environment)
+            reembed = _needs_reembedding(manifest, consumer_identity, _embedding_dimension(pack))
+            records = _stage_records(pack, pack_docs, library, reembed=reembed, pack_path=pack_path)
+            with _staged_cache(cache_dir, manifest.environment, manifest_bytes,
+                               staged_db, staged_licenses) as publish_cache:
+                with library._conn_provider.acquire() as connection:
+                    connection.execute('BEGIN IMMEDIATE')
+                    for doc, chunks, sections in records.values():
+                        _copy_doc_with_sections(
+                            library, doc, embedding=doc.embedding,
+                            metadata=dict(doc.metadata), source_name=None if doc.id in theme_ids else install_source,
+                            sections=sections, chunks=chunks,
+                            allow_reserved_source=True, connection=connection,
                         )
-                for doc in pack_docs:
-                    if library.get_document(doc.id) is None:
-                        newly_inserted.append(doc.id)
-                    _copy_doc_with_sections(
-                        library, doc, embedding=embeddings[doc.id],
-                        metadata=dict(doc.metadata), source_name=install_source,
-                        sections=pack.get_sections(doc.id),
-                        allow_reserved_source=True,
-                    )
-                # Land the environment's self-contained SCIP graph under the
-                # same reserved namespace as the docs (canonical_ids raw).
-                _copy_source_scip(
-                    pack, library, manifest.environment,
-                    dest_source_name=install_source,
-                )
-                _copy_version_facts(pack, library, manifest.environment)
-                _copy_surface_tags(pack, library, manifest.environment)
-                newly_inserted.extend(
-                    _copy_spool_themes(pack, library, manifest.environment))
-        except Exception:
-            for doc_id in newly_inserted:
-                library.delete_document(doc_id)
-            raise
+                    # Every row, including existing content and derived metadata,
+                    # participates in the same transaction on install/reinstall.
+                    _copy_source_scip(pack, library, manifest.environment, dest_source_name=install_source)
+                    _copy_version_facts(pack, library, manifest.environment)
+                    _copy_surface_tags(pack, library, manifest.environment)
+                    _copy_spool_themes(pack, library, manifest.environment, copy_documents=False)
+                    publish_cache()
 
-        dest = Path(cache_dir) / manifest.environment
-        dest.mkdir(parents=True, exist_ok=True)
-        (dest / 'manifest.yaml').write_bytes(manifest_bytes)
-        shutil.copyfile(staged_db, dest / 'pack.db')
-        for (repo, name), blob in staged_licenses.items():
-            lic_dir = dest / 'licenses' / repo
-            lic_dir.mkdir(parents=True, exist_ok=True)
-            (lic_dir / name).write_bytes(blob)
     return manifest
 
 
