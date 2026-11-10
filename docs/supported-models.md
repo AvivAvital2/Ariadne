@@ -1,6 +1,10 @@
 # Supported model configurations
 
-Ariadne supports native OpenAI and Anthropic generation with OpenAI embeddings, and a fixed Qwen generation/embedding pair served locally or by DeepInfra. CLI generation, MCP synthesis and retrieval use the same configured pair. The MCP client, such as Claude Code, can use its own model independently of Ariadne's backend.
+Ariadne supports native OpenAI and Anthropic generation with OpenAI embeddings,
+Qwen generation/embeddings served locally or by DeepInfra, and local Gemma 4 12B
+generation with the existing Qwen Q4 embeddings. CLI generation, MCP synthesis
+and retrieval use the same configured pair. The MCP client, such as Claude Code,
+can use its own model independently of Ariadne's backend.
 
 ## Model pairs and verification
 
@@ -16,12 +20,18 @@ Hosted Qwen uses the production `deepinfra` provider and `DEEPINFRA_API_KEY` for
 
 ## Choose models during onboarding
 
-For the supported 27B Q4 pair, **Connect servers you manage** in Preview or Generate
+For the Qwen 27B or Gemma 4 12B Q4 generation profiles, each paired with Qwen 8B
+Q4 embeddings, **Connect servers you manage** in Preview or Generate
 accepts endpoint URLs and credential variable names. **Test and save** explicitly
 checks native API compatibility with real inference requests, then makes the
 profile selectable. Server setup and hardware capacity belong to the operator;
 connection success does not establish model accuracy. See the
 [user-managed server guide](user-managed-models.md).
+
+The managed Mac menu also includes **Gemma 4 12B + Qwen 8B embeddings** with
+download/start/stop controls. The profile retains the Qwen embedding recipe and
+3072 stored dimensions, with a 16K generation context and thinking disabled.
+See [Gemma setup and library compatibility](local-models.md#gemma-generation-with-qwen-embeddings).
 
 The browser's Preview step offers OpenAI, Claude, hosted Qwen and configured local Qwen pairs in one application. Switch pairs to compare generation and embedding costs for the current source and scope before spending anything. Previews make no inference calls and save no project library; cloud costs can be previewed without credentials. Missing credentials or local endpoint configuration are shown beside the choices. Only **Start build** saves the selected pair under `web-projects/PROJECT_ID/ariadne.yaml`, alongside that project's library and staleness database. Search, answers and clews use the saved pair automatically. The console's project selector reopens existing libraries; it does not change their models.
 
@@ -86,7 +96,12 @@ OpenAI generation needs `OPENAI_API_KEY`. Claude generation needs both `ANTHROPI
 
 Start with [ariadne.local.yaml.example](../ariadne.local.yaml.example) and the [local setup guide](local-models.md). Set `provider: local` for both `llm` and `embeddings`, independent `/v1` URLs, immutable model/tokenizer revisions and fresh database paths. Both endpoints must expose the matching `/tokenize` route. The [pinned serving candidate](../deployments/local-v1/README.md) and Docker local preset contain concrete artifact pins.
 
-Local mode does not require cloud credentials. Endpoint authentication is optional through `api_key_env`; `null` sends no authorization header. The initial local implementation requires the exact Qwen pair, BF16 artifacts and `qwen3-embedding-8b-3072-v1` recipe. Mixed local/cloud pairs, other local models, other serving engines and alternate quantizations are outside this release's contract.
+Local mode does not require cloud credentials. Endpoint authentication is optional
+through `api_key_env`; `null` sends no authorization header. The initial BF16 preset
+uses the exact Qwen pair and `qwen3-embedding-8b-3072-v1` recipe. The managed and
+user-managed Q4 profiles use their pinned artifacts and the separate Qwen Q4
+embedding recipe. Mixed local/cloud pairs and arbitrary model combinations are
+not accepted; supported pairs are enumerated in `model_config.py`.
 
 ## Switch configurations
 

@@ -62,14 +62,15 @@ def local_deployment(tmp_path, monkeypatch):
 def native_pair(tmp_path, monkeypatch, request):
     """Independent llama.cpp protocol fixtures and a fresh Mac-profile library."""
     from inference import InferenceContext
-    from local_models import mac_accuracy_profile, mac_model_profile
+    from local_models import gemma_model_profile, mac_accuracy_profile, mac_model_profile
     from model_config import resolve_models
     from tests.llamacpp_server import LlamaServer
     from tests.local_model_server import trap_inference
 
-    accuracy = getattr(request, 'param', 'legacy') == 'accuracy'
-    data = mac_accuracy_profile() if accuracy else mac_model_profile()
-    chat = LlamaServer(data['llm']['served_model'], thinking=accuracy)
+    selected = getattr(request, 'param', 'legacy')
+    data = {'legacy': mac_model_profile, 'accuracy': mac_accuracy_profile,
+            'gemma': gemma_model_profile}[selected]()
+    chat = LlamaServer(data['llm']['served_model'], thinking=selected == 'accuracy')
     embed = LlamaServer('Qwen/Qwen3-Embedding-8B', embeddings=True)
     try:
         data['llm']['base_url'] = chat.base_url

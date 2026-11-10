@@ -15,13 +15,15 @@ from mcp.client import stdio
 from config import Config
 from docgen.spool import LocalExecutor, SpoolStore
 from inference import InferenceContext
-from local_models import MAC_PROFILE_ID
+from local_runtime import managed_profile_id
 from tests.local_model_server import DOCUMENT
 from tests.test_local_spool import document_spec
 from tests.test_mac_runtime_api import Runtime
 from web.mcp_client import stdio_server_params
 from web.projects import ProjectStore
 from web.server import make_app
+
+pytestmark = pytest.mark.parametrize('native_pair', ['legacy', 'accuracy', 'gemma'], indirect=True)
 
 
 def document_snapshot(path, document_id):
@@ -68,7 +70,8 @@ async def run_client(native_pair, tmp_path, monkeypatch):
     projects = ProjectStore(Config(config_path))
     projects.runtime = Runtime()  # Fixture endpoints stand in for the model-serving processes.
     projects.runtime.phase = 'ready'
-    project = projects.prepare(MAC_PROFILE_ID, 'alpha')
+    projects.runtime.profile_id = managed_profile_id(unused_context.settings)
+    project = projects.prepare(projects.runtime.profile_id, 'alpha')
     path = projects.path(project['id'])
     saved = Config(path)
     identity = saved.model_settings().identity

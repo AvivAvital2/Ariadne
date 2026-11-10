@@ -11,7 +11,8 @@ memory use or speed.
 
 1. Open onboarding and continue to **Preview** or **Generate**.
 2. Open **Connect servers you manage** beside the model controls.
-3. Enter the generation and embedding server URLs, each ending in `/v1`. URL
+3. Choose **Qwen 27B + Qwen 8B embeddings** or **Gemma 4 12B + Qwen 8B embeddings**,
+   then enter the generation and embedding server URLs, each ending in `/v1`. URL
    prefixes are supported, for example `https://models.example/chat/v1`.
 4. If authentication is required, enter the names of credential environment
    variables already set in the Ariadne server process. Do not paste API keys.
@@ -25,10 +26,10 @@ memory use or speed.
 7. After success, the saved profile is selected for estimates and the next build.
    Generate, reopen, Search, Ask and resumable build controls remain in the UI.
 
-The form currently connects the selected **Qwen3.8-27B Q4 thinking +
-Qwen3-Embedding-8B Q4** pair. It is not a generic arbitrary-model configuration
-editor. Existing YAML-configured BF16 and legacy pairs remain supported through
-their existing profiles.
+The form connects either **Qwen3.8-27B Q4 thinking** or **Gemma 4 12B Q4
+non-thinking** generation with **Qwen3-Embedding-8B Q4**. Omitting the model choice
+in an API request retains the original Qwen profile. Existing YAML-configured
+BF16 and legacy pairs remain supported through their existing profiles.
 
 The connection check verifies advertised model aliases, template/tokenization
 APIs, server context capacity, a complete final chat response, and actual document
@@ -50,6 +51,15 @@ verify their hashes and runtime configuration.
 | GGUF artifact | `Qwen3.8-27B-Q4_K_M.gguf` | `Qwen3-Embedding-8B-Q4_K_M.gguf` |
 | Minimum advertised context for this form's fixed profile | 32768 tokens | 8192 tokens |
 | Completion/vector contract | Thinking enabled, `xhigh`; separate final content; up to 8192 total completion tokens for document jobs | Return all 4096 components, without server-side dimensional reduction |
+
+For the Gemma choice, the generation alias is `google/gemma-4-12b-it`, the artifact
+is `gemma-4-12b-it-Q4_K_M.gguf`, and the minimum generation context is **16384**.
+Run generation with `--jinja --chat-template-kwargs '{"enable_thinking":false}'
+--reasoning-format auto`. The profile keeps reasoning disabled and accepts only
+complete final content, with up to 8192 output tokens. The embedding server,
+8192-token embedding context, input recipe, dimensions, and normalization are
+identical to the Qwen Q4 pair. `model_profile: gemma4-12b-qwen8b-mac-q4-v1` selects
+this pair in the `/api/external-models` request.
 
 Both servers must implement `/v1/models`, `/tokenize` and `/props`. The generation
 server must also implement `/apply-template` and `/v1/chat/completions`; the

@@ -1,11 +1,35 @@
 # Local models
 
-For the supported Q4 pair, use the [user-managed server UI](user-managed-models.md)
+For the supported Q4 pairs, use the [user-managed server UI](user-managed-models.md)
 to enter local or remote endpoint URLs, test compatibility, and save a selectable
 profile. You operate the servers and provide suitable hardware. The BF16/YAML
 path documented below remains available. Hardware-specific Mac qualification is
 not an acceptance requirement for the user-managed path; model quality and correct
 application behavior still require evidence.
+
+## Gemma generation with Qwen embeddings
+
+The `gemma4-12b-qwen8b-mac-q4-v1` profile pairs **Gemma 4 12B Q4_K_M** with
+the existing **Qwen3-Embedding-8B Q4_K_M** artifact. Select it in the managed Mac
+model menu, or choose it under **Connect servers you manage**. Managed downloads
+verify the pinned sizes and SHA-256 hashes from [local_models.py](../local_models.py).
+The native runtime remains llama.cpp `b11669`; this profile uses text input,
+non-thinking generation, a 16384-token context, and an 8192-token output ceiling.
+Its sampling defaults follow the [Gemma 4 model card](https://ai.google.dev/gemma/docs/core/model_card_4).
+
+This preserves Qwen's entire embedding recipe and embedding-space identity:
+native 4096 components, normalized 3072-component prefixes, unchanged query
+instructions, and unchanged document/chunk/section inputs. It does not use
+EmbeddingGemma. Existing Qwen Spools with the same embedding identity can retain
+their vectors when installed into a fresh Gemma project. Existing project
+libraries remain bound to their original generator; choosing Gemma creates a
+separate project rather than rebinding a Qwen library.
+
+The two weight files total 11,798,666,368 bytes (11.80 GB). This is download size,
+not total runtime memory. The 24GB M5 target and answer quality still need hardware
+and workload qualification. See the [qualification record](mac-local-models-qualification.md).
+
+## Existing Qwen configurations
 
 Ariadne implements local inference for the fixed pair `Qwen/Qwen3.8-27B` and `Qwen/Qwen3-Embedding-8B`. The software is tested against two independent HTTP fixtures. The pinned BF16/GPU [serving candidate](../deployments/local-v1/README.md) still needs [real-model qualification](local-model-qualification.md); it is not a production support claim.
 

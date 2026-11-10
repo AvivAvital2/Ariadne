@@ -30,6 +30,31 @@ describe('Managed Mac models from the UI',()=>{
     cy.intercept('POST','/api/estimate',estimate).as('estimate');
   });
 
+  it('starts and reopens the saved Gemma pair for Ask and Search',()=>{
+    const gemma={...choice,id:'gemma4-12b-qwen8b-mac-q4-v1',
+      managed_local_profile:'gemma4-12b-qwen8b-mac-q4-v1',profile_hash:'gemma-profile-hash',
+      model:'unsloth/gemma-4-12b-it-GGUF',label:'Gemma 4 12B + Qwen 8B embeddings',
+      memory_note:'24GB target with a 16K generation context; M5 memory use remains unmeasured.'};
+    cy.intercept('GET','/api/projects',{projects:[{...gemma,id:project,source:'demo'}]});
+    cy.intercept('POST','/api/local-models',req=>{
+      expect(req.body).to.deep.equal({action:'start',profile_id:gemma.id});
+      state={...state,phase:'ready',profile_id:gemma.id,profile_hash:gemma.profile_hash};
+      req.reply({statusCode:202,body:state});
+    }).as('gemmaStart');
+    cy.intercept('POST','/api/ask',{answer:'Gemma reads the retrieved documentation.',documents:[]}).as('ask');
+    cy.intercept('POST','/api/search',{documents:[]}).as('search');
+    cy.visit(base+'/static/console.html?project='+project);
+    cy.get('#localModels').should('contain','Gemma').and('contain','Qwen').and('contain','16K');
+    cy.get('#askBtn').should('be.disabled');
+    cy.get('#localModels [data-action="start"]').click();
+    cy.wait('@gemmaStart');
+    cy.get('#askBtn').should('be.enabled');
+    cy.reload();
+    cy.get('#q').type('What does the code do?{enter}');
+    for(const alias of ['@ask','@search']) cy.wait(alias).its('request.body.project_id').should('eq',project);
+    cy.get('#answerCard').should('contain','Gemma reads');
+  });
+
   it('downloads, starts, builds, and reopens the saved pair without terminal configuration',()=>{
     cy.intercept('POST','/api/local-models',req=>{
       expect(req.body).to.deep.equal(req.body.action==='stop'?{action:'stop'}:{action:req.body.action,profile_id:choice.id});

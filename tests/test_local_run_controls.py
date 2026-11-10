@@ -10,13 +10,13 @@ from ariadne_mcp.service import AriadneService
 from config import Config
 from docgen.spool import SpoolStore, UnsupportedSpoolVersion
 from library.model_binding import ModelBindingMismatch
-from local_models import mac_model_profile
+from local_models import MAC_PROFILE_IDS, managed_model_profile
 from tests.test_local_spool import document_spec
 
 
-@pytest.fixture
-def service(tmp_path):
-    data = mac_model_profile()
+@pytest.fixture(params=MAC_PROFILE_IDS)
+def service(tmp_path, request):
+    data = managed_model_profile(request.param)
     data.update(
         db_path='data/library.db',
         staleness_db_path='data/staleness.db',

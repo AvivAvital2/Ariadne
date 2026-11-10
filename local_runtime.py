@@ -19,6 +19,8 @@ import httpx
 
 from docgen.llm.local import TransientInferenceError, check_endpoints
 from local_models import (
+    GEMMA_ARTIFACTS,
+    GEMMA_PROFILE_ID,
     MAC_ACCURACY_ARTIFACTS,
     MAC_ACCURACY_PROFILE_ID,
     MAC_ARTIFACTS,
@@ -126,7 +128,7 @@ def server_command(
         options = settings.chat.request_options
         command += ['--jinja', '--chat-template-kwargs', canonical_json(options['chat_template_kwargs']),
                     '--no-context-shift', '--batch-size', '512', '--ubatch-size', '512']
-        if profile_id == MAC_ACCURACY_PROFILE_ID:
+        if 'reasoning_format' in options:
             command += ['--reasoning-format', options['reasoning_format']]
     else:
         command += ['--embedding', '--pooling', 'last',
@@ -145,6 +147,8 @@ def profile_artifacts(profile_id: str | None) -> Mapping[str, ModelArtifact]:
         return MAC_ARTIFACTS
     if profile_id == MAC_ACCURACY_PROFILE_ID:
         return MAC_ACCURACY_ARTIFACTS
+    if profile_id == GEMMA_PROFILE_ID:
+        return GEMMA_ARTIFACTS
     raise RuntimeSetupError(f'Unknown managed local model profile: {profile_id!r}')
 
 

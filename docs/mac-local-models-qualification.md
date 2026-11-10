@@ -1,6 +1,6 @@
 # Mac local model work: evidence and open gates
 
-Updated: 2026-10-26. Branch: `codex/mac-local-models-tdd`.
+Updated: 2026-11-10. Branch: `codex/mac-local-models-tdd`.
 
 **Acceptance scope update:** the [user-managed server path](user-managed-models.md)
 assigns model installation, server operation and hardware capacity to the operator.
@@ -513,3 +513,43 @@ Still required:
 - Complete a broader judged retrieval comparison and repeat factual-quality evaluation on representative repositories.
 - Measure peak memory and latency on the intended M5 configurations; the earlier memory ballpark is not a measured guarantee.
 - Rerun appropriate regression checks after subsequent implementation changes; the current full Python and selected browser acceptance runs pass.
+
+## Gemma 4 12B with Qwen embeddings — 2026-11-10
+
+Profile `gemma4-12b-qwen8b-mac-q4-v1` adds text-only Gemma generation with the exact
+existing Qwen Q4 embedding identity. This is a separate profile; existing Qwen
+libraries keep their generator and cannot be rebound by changing configuration.
+
+| Component | Pinned candidate |
+| --- | --- |
+| Generation repository | `unsloth/gemma-4-12b-it-GGUF` |
+| Revision | `fc034cfff751157913579611efad8462ac1be606` |
+| File | `gemma-4-12b-it-Q4_K_M.gguf` |
+| Bytes | 7,121,861,440 |
+| SHA-256 | `0a270ec9fe6b34f4a0d33992b6135117b484ebc4766ab76b51d4ae8c457e4c42` |
+| Serving alias | `google/gemma-4-12b-it` |
+| Generation | Thinking disabled; auto reasoning separation; context 16384; output cap 8192 |
+| Sampling | Temperature 1.0, top-p 0.95, top-k 64, min-p 0, presence penalty 0, repeat penalty 1 |
+| Embeddings | Existing Qwen3-Embedding-8B Q4_K_M, unchanged artifact and recipe |
+| Embedding-space ID | `9d40de70f1deb65107f8bd5fe83f24228f1044d6c8cb905b119b10e971c97db2` |
+| Runtime | Existing llama.cpp `b11669` |
+
+Publisher [artifact metadata](https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/tree/fc034cfff751157913579611efad8462ac1be606)
+was checked, and both downloaded weight files passed their size and SHA-256 checks.
+A real Intel CPU smoke used the production local adapter to generate a short
+explanation of `def add(a, b): return a + b`, persist a 3072-dimensional Qwen vector,
+reopen the library, Search, and Ask. The answer correctly described the sum and
+cited the generated document, “Arithmetic addition.” Both servers were stopped
+after the run. Logs, downloaded weights, and temporary databases remain ignored
+under `build/gemma-qwen-verification/`.
+
+Focused Python regressions cover model validation, runtime commands, generation,
+Search/Ask, project reopening, and Spool imports that preserve Qwen vectors across
+generators. The final follow-up passed 119 tests. All 22 managed/external dashboard
+browser cases passed using Node 22.23.1, and `ty check` passed. Browser replies in
+those tests are intercepted; the separate native smoke above uses the real models.
+
+This establishes basic native serving and application compatibility on this
+Intel machine. One trivial fixture does not qualify answer quality, large-source
+onboarding, Apple Silicon performance, or 24GB M5 memory capacity. The profile
+remains experimental. The Qwen-only records above describe separate runs.

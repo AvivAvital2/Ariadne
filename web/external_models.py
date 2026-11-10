@@ -1,4 +1,4 @@
-"""Explicit compatibility smoke for the supported user-managed Qwen servers."""
+"""Explicit compatibility smoke for supported user-managed model pairs."""
 
 from __future__ import annotations
 
@@ -17,7 +17,12 @@ from aiohttp import web
 
 from docgen.llm.local import LocalInferenceError, check_endpoints
 from inference import InferenceContext
-from local_models import mac_accuracy_profile
+from local_models import (
+    GEMMA_CHAT_MODEL,
+    GEMMA_PROFILE_ID,
+    MAC_ACCURACY_PROFILE_ID,
+    managed_model_profile,
+)
 from model_config import identity_hash, normalize_url, resolve_models, tokenize_url
 
 PROBE_TIMEOUT = 120
@@ -26,7 +31,7 @@ MAX_URL_LENGTH = 2048
 MIN_REQUEST_TIMEOUT = 600
 MAX_REQUEST_TIMEOUT = 14400
 _FIELDS = {'chat_url', 'embedding_url', 'chat_api_key_env', 'embedding_api_key_env',
-           'request_timeout_seconds'}
+           'request_timeout_seconds', 'model_profile'}
 _CHECK_LOCK = web.AppKey('external_model_check_lock', asyncio.Lock)
 _CHECK_TASKS = web.AppKey('external_model_check_tasks', set)
 
@@ -35,7 +40,10 @@ def build_profile(body: dict) -> dict:
     """Take endpoint locations and credential references, never arbitrary model options."""
     if not isinstance(body, dict) or set(body) - _FIELDS:
         raise ValueError('Provide server URLs, optional credential variable names and request timeout only')
-    profile = mac_accuracy_profile()
+    selected = body.get('model_profile', MAC_ACCURACY_PROFILE_ID)
+    if selected not in (MAC_ACCURACY_PROFILE_ID, GEMMA_PROFILE_ID):
+        raise ValueError('Select a supported generation and embedding pair')
+    profile = managed_model_profile(selected)
     if 'request_timeout_seconds' in body:
         seconds = body['request_timeout_seconds']
         if type(seconds) is not int or not MIN_REQUEST_TIMEOUT <= seconds <= MAX_REQUEST_TIMEOUT:
@@ -74,6 +82,8 @@ def _validated_profile(profile: dict) -> dict:
             'chat_api_key_env': profile['llm'].get('api_key_env'),
             'embedding_api_key_env': profile['embeddings'].get('api_key_env'),
         }
+        if profile['llm']['model'] == GEMMA_CHAT_MODEL:
+            body['model_profile'] = GEMMA_PROFILE_ID
         # Legacy profiles omit this field and retain their original identity.
         if 'timeout_seconds' in profile['embeddings']:
             body['request_timeout_seconds'] = profile['embeddings']['timeout_seconds']

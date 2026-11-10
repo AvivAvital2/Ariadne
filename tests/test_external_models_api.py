@@ -49,6 +49,34 @@ async def test_ui_check_saves_selectable_profile_and_preserves_sources(external_
     assert 'managed_local_profile' not in saved._explicit
 
 
+@pytest.mark.parametrize('native_pair', ['gemma'], indirect=True)
+async def test_ui_gemma_pair_probes_and_reopens_with_qwen_embeddings(external_client, native_pair):
+    from local_models import GEMMA_PROFILE_ID
+
+    client, store = external_client
+    context, chat, embed = native_pair
+    try:
+        response = await client.post('/api/external-models', json={
+            'model_profile': GEMMA_PROFILE_ID,
+            'chat_url': chat.base_url, 'embedding_url': embed.base_url,
+        })
+        assert response.status == 201
+        body = await response.json()
+        assert body['checks']['embeddings']['dimensions'] == 3072
+        choice = next(item for item in body['models'] if item['id'] == body['profile_id'])
+        assert 'Gemma' in choice['label'] and choice['user_managed']
+        reopened = ProjectStore(Config(store.config.config_path))
+        project = reopened.prepare(body['profile_id'], 'consumer')
+        settings = Config(reopened.path(project['id'])).model_settings()
+        assert settings.identity == context.settings.identity
+        assert settings.embeddings.dimensions == 3072
+        calls = [payload for route, payload in chat.requests if route.endswith('/chat/completions')]
+        assert calls[0]['chat_template_kwargs'] == {'enable_thinking': False}
+        assert calls[0]['reasoning_format'] == 'auto'
+    finally:
+        await context.aclose()
+
+
 def test_changed_deployment_gets_new_project_without_rebinding_old(tmp_path):
     # Separate synchronous store because this test does not contact endpoints.
     from web.external_models import build_profile

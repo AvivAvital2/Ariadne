@@ -53,6 +53,33 @@ describe('User-managed model endpoints', () => {
     cy.get('#externalEmbeddingUrl').type('https://embed.example.test/v1');
   }
 
+  it('selects Gemma generation with Qwen embeddings and saves the tested pair', () => {
+    const gemma = {...external, model:'unsloth/gemma-4-12b-it-GGUF', user_managed:true,
+      label:'Gemma 4 12B + Qwen 8B embeddings'};
+    cy.intercept('POST', '/api/estimate', req => {
+      req.reply(estimate(req.body.onboarding_model === gemma.id ? gemma : hosted));
+    }).as('estimate');
+    cy.intercept('POST', '/api/external-models', req => {
+      expect(req.body).to.deep.equal({
+        model_profile:'gemma4-12b-qwen8b-mac-q4-v1',
+        chat_url:'https://chat.example.test/v1',
+        embedding_url:'https://embed.example.test/v1',
+      });
+      req.reply({delay:300, statusCode:201, body:{profile_id:gemma.id, models:[hosted, gemma],
+        checks:{chat:{completed:true}, embeddings:{dimensions:3072}}, qualification:'unqualified'}});
+    }).as('gemmaCheck');
+    preview();
+    cy.get('#externalModelProfile').select('gemma4-12b-qwen8b-mac-q4-v1');
+    enterEndpoints();
+    cy.get('#externalModels button[type="submit"]').click();
+    cy.get('#externalModelProfile').should('be.disabled');
+    cy.wait('@gemmaCheck');
+    cy.wait('@estimate').its('request.body.onboarding_model').should('eq',gemma.id);
+    cy.get('#externalModelProfile').should('be.enabled').and('have.value','gemma4-12b-qwen8b-mac-q4-v1');
+    cy.get('#modeldd .ddbtn').should('contain','Gemma');
+    cy.get('#externalModelStatus').should('contain','profile saved');
+  });
+
   it('checks only on request, selects the saved profile, and builds with that profile', () => {
     let checks = 0;
     cy.intercept('POST', '/api/external-models', req => {

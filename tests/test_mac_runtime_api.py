@@ -138,7 +138,7 @@ async def test_shutdown_cancels_download_and_reaps_runtime(client):
     assert runtime.cancelled and runtime.calls == ['download', 'stop']
 
 
-@pytest.mark.parametrize('profile_id', [MAC_PROFILE_ID, 'qwen-mac-27b-q4-thinking-v1'])
+@pytest.mark.parametrize('profile_id', [MAC_PROFILE_ID, 'qwen-mac-27b-q4-thinking-v1', 'gemma4-12b-qwen8b-mac-q4-v1'])
 @pytest.mark.parametrize('action', ['download', 'start'])
 async def test_runtime_actions_select_the_explicit_registered_profile(client, profile_id, action):
     client, runtime = client

@@ -64,6 +64,7 @@ def test_accuracy_profile_rejects_ambiguous_or_invalid_request_options(key, valu
 
 def test_profile_registry_returns_fresh_data_and_rejects_unknown_ids():
     from local_models import (
+        GEMMA_PROFILE_ID,
         MAC_ACCURACY_PROFILE_ID,
         MAC_PROFILE_ID,
         MAC_PROFILE_IDS,
@@ -72,7 +73,7 @@ def test_profile_registry_returns_fresh_data_and_rejects_unknown_ids():
         managed_model_profile,
     )
 
-    assert set(MAC_PROFILE_IDS) == {MAC_PROFILE_ID, MAC_ACCURACY_PROFILE_ID}
+    assert set(MAC_PROFILE_IDS) == {MAC_PROFILE_ID, MAC_ACCURACY_PROFILE_ID, GEMMA_PROFILE_ID}
     assert managed_model_profile(MAC_PROFILE_ID) == mac_model_profile()
     assert managed_model_profile(MAC_ACCURACY_PROFILE_ID) == mac_accuracy_profile()
     data = managed_model_profile(MAC_ACCURACY_PROFILE_ID)
@@ -116,19 +117,23 @@ def test_runtime_defaults_to_accuracy_and_launches_its_exact_artifact(tmp_path):
     assert command[command.index('--reasoning-format') + 1] == 'deepseek'
 
 
-async def test_profile_switch_during_running_servers_fails_without_killing_or_rebinding(tmp_path):
-    from local_models import MAC_PROFILE_ID
+@pytest.mark.parametrize('selected', ['legacy', 'accuracy', 'gemma'])
+async def test_profile_switch_during_running_servers_fails_without_killing_or_rebinding(tmp_path, selected):
+    from local_models import MAC_PROFILE_IDS, managed_model_profile
     from local_runtime import MacRuntime, RuntimeSetupError
 
-    runtime = MacRuntime(tmp_path)
+    profile_id = dict(zip(('legacy', 'accuracy', 'gemma'), MAC_PROFILE_IDS, strict=True))[selected]
+    runtime = MacRuntime(tmp_path, settings=resolve_models(managed_model_profile(profile_id)))
     sentinel = object()
     runtime.processes['llm'] = sentinel
     before = runtime.settings
-    for operation in (runtime.setup, runtime.start):
-        with pytest.raises(RuntimeSetupError, match='Stop'):
-            await operation(profile_id=MAC_PROFILE_ID)
-        assert runtime.settings is before
-        assert runtime.processes == {'llm': sentinel}
+    for other in MAC_PROFILE_IDS:
+        if other != profile_id:
+            for operation in (runtime.setup, runtime.start):
+                with pytest.raises(RuntimeSetupError, match='Stop'):
+                    await operation(profile_id=other)
+                assert runtime.settings is before
+                assert runtime.processes == {'llm': sentinel}
 
 
 async def test_unknown_profile_rejected_before_download_or_process_side_effects(tmp_path):

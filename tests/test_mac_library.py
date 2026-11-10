@@ -17,6 +17,7 @@ from web.projects import ProjectStore
 from writer import LibraryWriter
 
 
+@pytest.mark.parametrize('native_pair', ['legacy', 'accuracy', 'gemma'], indirect=True)
 @pytest.mark.asyncio
 async def test_native_prefix_normalization_and_stored_document_children(native_pair):
     context, chat, embed = native_pair
@@ -52,7 +53,8 @@ async def test_native_prefix_normalization_and_stored_document_children(native_p
         await context.aclose()
 
 
-@pytest.mark.parametrize('invalid', ['wrong_width', 'nonfinite', 'zero_prefix'])
+@pytest.mark.parametrize('native_pair', ['legacy', 'accuracy', 'gemma'], indirect=True)
+@pytest.mark.parametrize('invalid', ['wrong_width', 'nonfinite', 'zero_prefix', 'overflow', 'missing_index', 'boolean_index'])
 @pytest.mark.asyncio
 async def test_bad_native_embedding_preserves_existing_knowledge(native_pair, invalid):
     context, _chat, embed = native_pair
@@ -67,9 +69,16 @@ async def test_bad_native_embedding_preserves_existing_knowledge(native_pair, in
                     values.pop()
                 elif invalid == 'nonfinite':
                     values[0] = float('nan')
-                else:
+                elif invalid == 'zero_prefix':
                     values[:3072] = [0.0] * 3072
-                embed.overrides['/native/v1/embeddings'] = {'data': [{'index': 0, 'embedding': values}]}
+                elif invalid == 'overflow':
+                    values[0] = 10 ** 400
+                row = {'index': 0, 'embedding': values}
+                if invalid == 'missing_index':
+                    row.pop('index')
+                elif invalid == 'boolean_index':
+                    row['index'] = False
+                embed.overrides['/native/v1/embeddings'] = {'data': [row]}
                 with pytest.raises(EmbeddingContractError):
                     await writer.replace_document(original.id, content='New explanation.')
                 after = library.get_document(original.id)
@@ -80,6 +89,7 @@ async def test_bad_native_embedding_preserves_existing_knowledge(native_pair, in
         await context.aclose()
 
 
+@pytest.mark.parametrize('native_pair', ['legacy', 'accuracy', 'gemma'], indirect=True)
 @pytest.mark.asyncio
 async def test_mac_library_and_sidecar_reopen_with_exact_pair_and_preserve_knowledge(native_pair, tmp_path):
     context, _chat, _embed = native_pair

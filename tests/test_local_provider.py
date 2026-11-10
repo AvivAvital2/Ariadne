@@ -1,7 +1,13 @@
 import httpx
 import pytest
 
-from docgen.llm.local import ContextOverflow, LocalInferenceError
+from docgen.llm.local import ContextOverflow, LocalInferenceError, response_json
+
+
+def test_malformed_http_json_is_rejected_without_exposing_response_content():
+    with pytest.raises(LocalInferenceError, match='malformed JSON') as error:
+        response_json(httpx.Response(200, content=b'PRIVATE server diagnostic: invalid JSON'))
+    assert 'PRIVATE' not in str(error.value)
 
 
 @pytest.mark.asyncio

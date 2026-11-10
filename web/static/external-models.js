@@ -6,9 +6,15 @@
     container.innerHTML = `
       <details>
         <summary>Connect servers you manage</summary>
-        <p>Use your running Qwen3.8-27B Q4 generation server and Qwen3-Embedding-8B Q4 embedding server. You manage model installation and server capacity.</p>
+        <p>Choose Gemma 4 12B or Qwen3.8-27B Q4 generation with Qwen3-Embedding-8B Q4 embeddings. You manage model installation and server capacity.</p>
         <form>
           <div class="external-model-fields">
+            <label for="externalModelProfile">Model pair
+              <select id="externalModelProfile" name="model_profile">
+                <option value="qwen-mac-27b-q4-thinking-v1">Qwen 27B + Qwen 8B embeddings</option>
+                <option value="gemma4-12b-qwen8b-mac-q4-v1">Gemma 4 12B + Qwen 8B embeddings</option>
+              </select>
+            </label>
             <label for="externalChatUrl">Generation server URL
               <input id="externalChatUrl" name="chat_url" type="url" required placeholder="http://localhost:18080/v1" autocomplete="off" spellcheck="false">
             </label>
@@ -34,7 +40,7 @@
     const form = container.querySelector('form');
     const button = form.querySelector('button');
     const status = container.querySelector('[role="status"]');
-    const inputs = [...form.querySelectorAll('input')];
+    const inputs = [...form.querySelectorAll('input, select')];
     const urls = inputs.filter(input => input.type === 'url');
     let busy = false;
     urls.forEach(input => input.addEventListener('input', () => input.setCustomValidity('')));
@@ -65,6 +71,8 @@
       }
       const timeoutMinutes = body.request_timeout_minutes;
       delete body.request_timeout_minutes;
+      // Omitted selection retains the original Qwen request and saved identity.
+      if (body.model_profile === 'qwen-mac-27b-q4-thinking-v1') delete body.model_profile;
       if (timeoutMinutes) body.request_timeout_seconds = Number(timeoutMinutes) * 60;
       busy = true;
       button.disabled = true;

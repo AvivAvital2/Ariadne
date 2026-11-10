@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import io
 import os
+import signal
 import socket
 import sys
 import tarfile
@@ -10,6 +11,8 @@ from dataclasses import replace
 
 import httpx
 import pytest
+
+from local_models import MAC_PROFILE_IDS, managed_model_profile
 
 
 @pytest.mark.asyncio
@@ -115,12 +118,12 @@ def test_server_commands_use_pinned_files_and_bounded_native_settings(tmp_path):
 
 
 @pytest.mark.parametrize('mutation', ['chat_pin', 'embedding_pin', 'tokenizer', 'remote', 'same_port'])
-def test_managed_server_cannot_misrepresent_artifacts_or_bind_remote_ports(tmp_path, mutation):
-    from local_models import mac_model_profile
+@pytest.mark.parametrize('profile_id', MAC_PROFILE_IDS)
+def test_managed_server_cannot_misrepresent_artifacts_or_bind_remote_ports(tmp_path, mutation, profile_id):
     from local_runtime import RuntimeSetupError, server_command
     from model_config import resolve_models
 
-    settings = resolve_models(mac_model_profile())
+    settings = resolve_models(managed_model_profile(profile_id))
     if mutation == 'chat_pin':
         settings = replace(settings, chat=replace(settings.chat, model_revision='f' * 40))
     elif mutation == 'embedding_pin':
@@ -135,13 +138,12 @@ def test_managed_server_cannot_misrepresent_artifacts_or_bind_remote_ports(tmp_p
         server_command(settings, 'llm', tmp_path / 'llama-server', tmp_path)
 
 
-@pytest.fixture
-def managed_runtime(tmp_path, monkeypatch, unused_tcp_port_factory):
+@pytest.fixture(params=MAC_PROFILE_IDS)
+def managed_runtime(tmp_path, monkeypatch, unused_tcp_port_factory, request):
     import local_runtime
-    from local_models import mac_model_profile
     from model_config import resolve_models
 
-    data = mac_model_profile()
+    data = managed_model_profile(request.param)
     for role in ('llm', 'embeddings'):
         data[role]['base_url'] = f'http://127.0.0.1:{unused_tcp_port_factory()}/v1'
     runtime = local_runtime.MacRuntime(tmp_path, settings=resolve_models(data))
@@ -150,7 +152,8 @@ def managed_runtime(tmp_path, monkeypatch, unused_tcp_port_factory):
         return tmp_path / 'llama-server'
 
     async def ready(_settings):
-        return {'chat': {'server_context': 32768}, 'embeddings': {'server_context': 8192}}
+        return {'chat': {'server_context': runtime.settings.chat.context_window},
+                'embeddings': {'server_context': 8192}}
 
     monkeypatch.setattr(runtime, 'verify_installation', installed)
     monkeypatch.setattr(local_runtime, 'check_endpoints', ready)
@@ -181,6 +184,29 @@ async def test_managed_start_and_stop_own_only_their_processes(managed_runtime):
         await runtime.stop()
         unrelated.terminate()
         await unrelated.wait()
+
+
+async def test_stop_force_kills_unresponsive_supervisor(managed_runtime):
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, '-c',
+        'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+        'print("ready", flush=True); time.sleep(60)',
+        stdout=asyncio.subprocess.PIPE,
+    )
+    managed_runtime.processes['llm'] = process
+    try:
+        assert await asyncio.wait_for(process.stdout.readline(), 3) == b'ready\n'
+        await asyncio.wait_for(managed_runtime.stop(), 8)
+        assert process.returncode == -signal.SIGKILL
+        assert managed_runtime.processes == {}
+        assert managed_runtime.status()['phase'] == 'stopped'
+        with pytest.raises(ProcessLookupError):
+            os.kill(process.pid, 0)
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+        await managed_runtime.stop()
 
 
 async def test_runtime_uses_its_own_supervisor_from_an_untrusted_working_directory(
@@ -240,10 +266,11 @@ async def test_start_failure_cleans_up_first_child(managed_runtime, monkeypatch)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('accuracy', [False, True])
-async def test_setup_downloads_and_verifies_runtime_and_models(tmp_path, monkeypatch, accuracy):
+@pytest.mark.parametrize(('profile_id', 'artifact_name'), zip(
+    MAC_PROFILE_IDS, ('MAC_ARTIFACTS', 'MAC_ACCURACY_ARTIFACTS', 'GEMMA_ARTIFACTS'), strict=True))
+async def test_setup_downloads_and_verifies_runtime_and_models(tmp_path, monkeypatch, profile_id, artifact_name):
     import local_runtime
-    from local_models import ModelArtifact, mac_accuracy_profile, mac_model_profile
+    from local_models import ModelArtifact, mac_model_profile
     from model_config import resolve_models
 
     archive = tmp_path / 'test.tar.gz'
@@ -256,19 +283,65 @@ async def test_setup_downloads_and_verifies_runtime_and_models(tmp_path, monkeyp
     artifacts = {role: ModelArtifact('owner/model', 'f' * 40, f'{role}.gguf',
                                    hashlib.sha256(role.encode()).hexdigest(), len(role))
                  for role in ('llm', 'embeddings')}
-    monkeypatch.setattr(local_runtime, 'MAC_ACCURACY_ARTIFACTS' if accuracy else 'MAC_ARTIFACTS', artifacts)
+    monkeypatch.setattr(local_runtime, artifact_name, artifacts)
     responses = {a.url: role.encode() for role, a in artifacts.items()}
     responses[local_runtime.RUNTIME_URL] = archive_bytes
-    settings = resolve_models(mac_accuracy_profile() if accuracy else mac_model_profile())
+    settings = resolve_models(mac_model_profile())
     runtime = local_runtime.MacRuntime(tmp_path / 'installed', settings=settings)
     async with httpx.AsyncClient(transport=httpx.MockTransport(
             lambda request: httpx.Response(200, content=responses[str(request.url)]))) as client:
-        await runtime.setup(client=client)
+        await runtime.setup(client=client, profile_id=profile_id)
     executable = await runtime.verify_installation()
     assert executable.read_bytes() == b'executable'
     assert runtime.status()['phase'] == 'stopped'
+    assert runtime.status()['profile_id'] == profile_id
+    assert runtime.settings.identity == resolve_models(managed_model_profile(profile_id)).identity
     for role in artifacts:
-        assert (runtime.root / 'models' / f'{role}.gguf').read_bytes() == role.encode()
+        path = runtime.root / 'models' / f'{role}.gguf'
+        assert path.read_bytes() == role.encode()
+        path.write_bytes(b'x' * len(role))  # Correct length, incorrect checksum.
+        with pytest.raises(local_runtime.RuntimeSetupError, match='missing or damaged'):
+            await runtime.verify_installation()
+        assert runtime.processes == {}
+        path.write_bytes(role.encode())
+
+
+async def test_ready_runtime_detects_server_exit_and_reaps_both_before_restart(managed_runtime):
+    runtime = managed_runtime
+    try:
+        await runtime.start(timeout=3)
+        children = list(runtime.processes.values())
+        children[0].terminate()
+        await asyncio.wait_for(children[0].wait(), 5)
+        assert runtime.status()['phase'] == 'error'
+        assert 'exited' in runtime.status()['error']
+        await runtime.start(timeout=3)
+        assert runtime.status()['phase'] == 'ready'
+        assert all(child.returncode is not None for child in children)
+        assert len(runtime.processes) == 2
+        assert not {child.pid for child in children} & {p.pid for p in runtime.processes.values()}
+    finally:
+        await runtime.stop()
+
+
+async def test_start_waits_for_transient_model_loading(managed_runtime, monkeypatch):
+    from docgen.llm.local import TransientInferenceError
+
+    probes = []
+
+    async def loading(settings):
+        probes.append(settings.profile_hash)
+        if len(probes) == 1:
+            raise TransientInferenceError('Model is loading')
+        return {}
+
+    monkeypatch.setattr('local_runtime.check_endpoints', loading)
+    try:
+        await managed_runtime.start(timeout=3)
+        assert probes == [managed_runtime.settings.profile_hash] * 2
+        assert managed_runtime.status()['phase'] == 'ready'
+    finally:
+        await managed_runtime.stop()
 
 
 @pytest.mark.asyncio

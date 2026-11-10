@@ -360,8 +360,9 @@ def parse_chat_response(data: dict) -> tuple[str, dict[str, int | None]]:
     if (
         not isinstance(content, str)
         or not content.strip()
-        or '<think>' in content
-        or '</think>' in content
+        or any(marker in content for marker in (
+            '<think>', '</think>', '<|channel>', '<channel|>', '<|think|>',
+        ))
     ):
         raise LocalInferenceError(
             'Local chat returned empty, malformed or reasoning-only final content'
@@ -377,7 +378,7 @@ def parse_chat_response(data: dict) -> tuple[str, dict[str, int | None]]:
 
 
 class LocalOpenAICompatibleProvider:
-    """Fixed Qwen deployment, with no hosted transport inheritance."""
+    """Configured local deployment, with no hosted transport inheritance."""
 
     def __init__(self, context: InferenceContext) -> None:
         self.context = context

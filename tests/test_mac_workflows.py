@@ -12,12 +12,15 @@ from docgen.catalog_enrich import enrich_file
 from docgen.generator import DocGenerator, GeneratorConfig
 from docgen.validator import ContentValidator
 from inference import InferenceContext
-from local_models import MAC_ACCURACY_CHAT_MODEL, mac_accuracy_profile, mac_model_profile
+from local_models import (
+    GEMMA_CHAT_MODEL, MAC_ACCURACY_CHAT_MODEL,
+    gemma_model_profile, mac_accuracy_profile, mac_model_profile,
+)
 from tests.local_model_server import DOCUMENT
 from writer import LibraryWriter
 
 DOC_TYPES = ('explanation', 'architecture', 'qa', 'catalog', 'gotcha', 'diagram')
-pytestmark = pytest.mark.parametrize('native_pair', ['legacy', 'accuracy'], indirect=True)
+pytestmark = pytest.mark.parametrize('native_pair', ['legacy', 'accuracy', 'gemma'], indirect=True)
 SOURCE = 'def add(a: int, b: int) -> int:\n    """Add two integers."""\n    return a + b\n'
 
 
@@ -28,8 +31,9 @@ def chat_response(content):
 
 def configure(native_pair, tmp_path, monkeypatch, *, sources=None):
     context, chat, embed = native_pair
-    data = (mac_accuracy_profile() if context.settings.chat.model == MAC_ACCURACY_CHAT_MODEL
-            else mac_model_profile())
+    data = {GEMMA_CHAT_MODEL: gemma_model_profile,
+            MAC_ACCURACY_CHAT_MODEL: mac_accuracy_profile}.get(
+                context.settings.chat.model, mac_model_profile)()
     data['llm']['base_url'] = chat.base_url
     data['embeddings']['base_url'] = embed.base_url
     source = tmp_path / 'alpha'

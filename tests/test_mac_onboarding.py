@@ -7,7 +7,7 @@ import yaml
 from aiohttp.test_utils import TestClient, TestServer
 
 from config import Config
-from local_models import MAC_PROFILE_ID, mac_model_profile
+from local_models import GEMMA_PROFILE_ID, MAC_PROFILE_ID, mac_model_profile
 from local_runtime import MacRuntime
 from model_config import resolve_models
 from tests.test_web_server import _FakeBridge, _FakeReq
@@ -53,7 +53,7 @@ def test_managed_choice_can_preview_offline_but_build_requires_ready(store, tmp_
     assert ProjectStore(store.config).describe(project['id']) == project
 
 
-@pytest.mark.parametrize('saved_profile', [MAC_PROFILE_ID, 'qwen-mac-27b-q4-thinking-v1'])
+@pytest.mark.parametrize('saved_profile', [MAC_PROFILE_ID, 'qwen-mac-27b-q4-thinking-v1', GEMMA_PROFILE_ID])
 @pytest.mark.parametrize('operation', ['ask', 'search', 'rebuild', 'resume'])
 async def test_inference_routes_reject_the_other_managed_profile_before_connecting(
         store, tmp_path, monkeypatch, saved_profile, operation):

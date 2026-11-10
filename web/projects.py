@@ -15,6 +15,8 @@ import yaml
 
 from config import Config
 from local_models import (
+    GEMMA_CHAT_MODEL,
+    GEMMA_PROFILE_ID,
     MAC_ACCURACY_PROFILE_ID,
     MAC_PROFILE_IDS,
     managed_model_profile,
@@ -88,9 +90,10 @@ class ProjectStore:
             })
             if key in external:
                 host = urlsplit(settings.chat.base_url).netloc
+                generation = 'Gemma 4 12B' if settings.chat.model == GEMMA_CHAT_MODEL else 'Qwen 27B'
                 choices[-1].update(
                     user_managed=True, qualification='unqualified',
-                    label=f'Experimental Qwen 27B Q4 + 8B embeddings — {host} (user managed)',
+                    label=f'Experimental {generation} Q4 + 8B embeddings — {host} (user managed)',
                     quality_note='Connection tested; generated-answer accuracy remains unqualified.',
                 )
             if key in MAC_PROFILE_IDS:
@@ -115,6 +118,11 @@ class ProjectStore:
                    'profile_hash': profile_hash, 'qualification': 'unqualified'}
         if profile_id not in MAC_PROFILE_IDS:
             return details
+        if profile_id == GEMMA_PROFILE_ID:
+            return {**details,
+                    'label': 'Experimental Gemma 4 12B + Qwen 8B embeddings on Mac (Q4)',
+                    'quality_note': 'Experimental: Gemma answer quality has not passed Ariadne qualification.',
+                    'memory_note': '24GB target with a 16K generation context; M5 memory use remains unmeasured.'}
         accuracy = profile_id == MAC_ACCURACY_PROFILE_ID
         return {**details,
                 'label': ('Experimental Qwen local on Mac (27B thinking + 8B embeddings, Q4; 32GB qualification target)'

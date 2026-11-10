@@ -22,6 +22,8 @@ from spools import SpoolError
 from tests.local_model_server import DOCUMENT
 from writer import LibraryWriter
 
+pytestmark = pytest.mark.parametrize('native_pair', ['legacy', 'accuracy', 'gemma'], indirect=True)
+
 
 def _build(library, tmp_path, name='pack.zip'):
     return build_pack(library, environment='corpus', version='1', target_runtime='fixture',
@@ -75,11 +77,17 @@ async def test_bound_pack_records_actual_space_and_preserves_all_vectors_offline
         await context.aclose()
 
 
-async def test_matching_space_installs_without_inference_and_preserves_children(native_pair, tmp_path):
+@pytest.mark.parametrize('consumer', ['different_pin', 'other_generator'])
+async def test_matching_space_installs_without_inference_and_preserves_children(native_pair, tmp_path, consumer):
+    from local_models import GEMMA_CHAT_MODEL, gemma_model_profile, mac_accuracy_profile
+    from model_config import resolve_models
+
     context, chat, embed = native_pair
-    target = InferenceContext(replace(context.settings, chat=replace(
-        context.settings.chat, model_revision='f' * 40)),
-        tmp_path / 'consumer.db', tmp_path / 'consumer-staleness.db')
+    settings = replace(context.settings, chat=replace(context.settings.chat, model_revision='f' * 40))
+    if consumer == 'other_generator':
+        settings = resolve_models(mac_accuracy_profile() if context.settings.chat.model == GEMMA_CHAT_MODEL
+                                  else gemma_model_profile())
+    target = InferenceContext(settings, tmp_path / 'consumer.db', tmp_path / 'consumer-staleness.db')
     try:
         with context.write_session(), context.open_library(operation='write') as library:
             document = await LibraryWriter(library).add_document(

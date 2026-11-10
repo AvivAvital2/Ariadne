@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from local_models import (
+    GEMMA_CHAT_MODEL,
     MAC_ACCURACY_CHAT_MODEL,
     MAC_CHAT_MODEL,
     MAC_EMBEDDING_MODEL,
@@ -157,6 +158,8 @@ class ChatSettings:
             'tokenizer_revision': self.tokenizer_revision or self.model_revision,
             **({'generation_contract': 'qwen3.8-thinking-xhigh-v1'}
                if self.model == MAC_ACCURACY_CHAT_MODEL else {}),
+            **({'generation_contract': 'gemma4-nonthinking-v1'}
+               if self.model == GEMMA_CHAT_MODEL else {}),
         }
 
     def credential(self) -> str | None:
@@ -321,11 +324,12 @@ class ModelSettings:
                 (CHAT_MODEL, EMBEDDING_MODEL): ('bf16', RECIPE),
                 (MAC_CHAT_MODEL, MAC_EMBEDDING_MODEL): (MAC_WEIGHT_FORMAT, MAC_RECIPE),
                 (MAC_ACCURACY_CHAT_MODEL, MAC_EMBEDDING_MODEL): (MAC_WEIGHT_FORMAT, MAC_RECIPE),
+                (GEMMA_CHAT_MODEL, MAC_EMBEDDING_MODEL): (MAC_WEIGHT_FORMAT, MAC_RECIPE),
             }
             representation = local_pairs.get((c.model, e.model))
             if representation is None:
                 raise ModelConfigurationError(
-                    'Unsupported local model pair; select the BF16 pair or the pinned Mac Q4 candidate'
+                    'Unsupported local model pair; select the BF16 pair or a supported Mac Q4 profile'
                 )
             weight_format, recipe = representation
             if e.dimensions != EMBEDDING_DIM or e.recipe != recipe:
@@ -353,15 +357,20 @@ class ModelSettings:
                 elif not settings.model_revision:
                     raise ModelConfigurationError(f'{prefix}.model_revision is required')
             options = c.request_options
-            if c.model == MAC_ACCURACY_CHAT_MODEL:
-                allowed = set(DEFAULT_REQUEST_OPTIONS) | {
-                    'reasoning_effort', 'reasoning_format', 'min_p', 'repeat_penalty',
+            if c.model in (MAC_ACCURACY_CHAT_MODEL, GEMMA_CHAT_MODEL):
+                gemma = c.model == GEMMA_CHAT_MODEL
+                required = {
+                    'chat_template_kwargs': {'enable_thinking': not gemma},
+                    'reasoning_format': 'auto' if gemma else 'deepseek',
                 }
+                if not gemma:
+                    required['reasoning_effort'] = 'xhigh'
+                allowed = set(DEFAULT_REQUEST_OPTIONS) | required.keys() | {'min_p', 'repeat_penalty'}
                 if (set(options) != allowed
-                        or options.get('chat_template_kwargs') != {'enable_thinking': True}
-                        or options.get('reasoning_effort') != 'xhigh'
-                        or options.get('reasoning_format') != 'deepseek'):
+                        or any(options.get(key) != value for key, value in required.items())):
                     raise ModelConfigurationError(
+                        'Gemma requires disabled thinking and auto final-answer separation'
+                        if gemma else
                         'The Mac 27B profile requires explicit thinking, xhigh effort and deepseek final-answer separation'
                     )
                 minimum = options['min_p']
