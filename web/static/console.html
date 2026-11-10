@@ -95,6 +95,14 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
 :root[data-theme="light"] .answer p{color:#2b3656}
 .answer b{color:var(--text);font-weight:700}
 .answer code{background:var(--bg-0);border:1px solid var(--border);border-radius:5px;padding:1px 5px;font-size:12.5px}
+.answer-grid>*{min-width:0}
+.answer pre{overflow:auto;padding:14px;background:var(--bg-0);border:1px solid var(--border);border-radius:8px;margin:12px 0;white-space:pre}
+.answer pre code{background:none;border:0;padding:0}
+.answer-diagram-block{margin:16px 0}
+.answer-diagram{overflow:auto;max-width:100%;padding:12px;border-radius:8px;background:#fff;color:#15203c}
+.answer-diagram svg{display:block}
+.answer-diagram-block summary{cursor:pointer;color:var(--muted);font-size:12px;padding:8px 0}
+.answer .diagram-error{color:#8b2440;margin:0}
 .nudge{margin-top:6px;font-size:12.5px;color:var(--cyan)}
 .provenance{display:flex;align-items:center;gap:14px;margin-top:8px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--faint);flex-wrap:wrap}
 .fb{display:flex;gap:8px;margin-left:auto}
@@ -163,6 +171,7 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
 <link rel="stylesheet" href="/static/local-models.css">
 <script src="/static/local-models.js"></script>
 <script src="/static/local-runs.js"></script>
+<script src="/static/answer-renderer.js"></script>
 <script>
 (function(){
   const $ = id => document.getElementById(id);
@@ -193,16 +202,6 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
     try { data = await r.json(); } catch(e){ /* non-JSON */ }
     if(!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
     return data;
-  }
-
-  // Escape first (XSS-safe), then apply light inline formatting on the escaped
-  // text: **bold**, `code`, and paragraph breaks on blank lines.
-  function prose(text){
-    return esc(text).split(/\n\s*\n/).map(p =>
-      '<p>' + p.replace(/`([^`]+)`/g, '<code>$1</code>')
-               .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-               .replace(/\n/g, '<br>') + '</p>'
-    ).join('');
   }
 
   function setStatus(msg, isErr){
@@ -236,7 +235,7 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
     }).join('');
   }
 
-  function renderAnswer(a, s){
+  async function renderAnswer(a, s){
     const docs = (s && s.documents) || [];
     const types = [...new Set(docs.map(d => d.content_type).filter(Boolean))].slice(0, 4);
     const conf = (a.confidence || 'medium').toLowerCase();
@@ -249,7 +248,7 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
       ? `<div class="nudge">💡 ${esc(s.improvement_hint)}</div>` : '';
     $('answerCard').innerHTML = `
       <div class="meta">${badges}</div>
-      ${prose(a.answer)}
+      <div class="answer-content"></div>
       ${nudge}
       <div class="provenance">
         <span>⛓ ${docs.length} ranked source${docs.length===1?'':'s'}</span>
@@ -264,6 +263,7 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
       btn.addEventListener('click', () => sendFeedback(btn, eventId, btn.dataset.fb === '1')));
     renderChips(s && s.suggested_queries);
     $('answerGrid').hidden = false;
+    await renderAnswerContent($('answerCard').querySelector('.answer-content'), a.answer);
   }
 
   async function sendFeedback(btn, eventId, helpful){
@@ -292,7 +292,7 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monosp
         postJSON('/api/search', {query: question, role, source}),
       ]);
       setStatus('');
-      renderAnswer(a, s);
+      await renderAnswer(a, s);
     } catch(e){
       setStatus('Could not answer: ' + e.message, true);
     } finally {
