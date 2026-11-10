@@ -208,6 +208,17 @@ async def test_ask_enabled_synthesizes_via_messages(
     assert 'SYNTHESIZED-ANSWER' in result.answer
     roles = {m['role'] for m in captured['messages']}
     assert {'system', 'user'} <= roles
+    system = next(m['content'] for m in captured['messages'] if m['role'] == 'system')
+    user = next(m['content'] for m in captured['messages'] if m['role'] == 'user')
+    assert system == (
+        'You are a technical documentation assistant. Answer questions concisely '
+        'using only the provided documentation. Cite document titles.')
+    assert 'based ONLY on the documentation below' in user
+    assert 'Cite which document(s) you used' in user
+    assert 'Widget Guide' in user and 'batches records before flush' in user
+    assert 'Compiler evidence graph:' not in user
+    assert result.chain_citations == [] and result.claims == []
+    assert result.llm_calls == 1
 
 
 @pytest.mark.asyncio
@@ -308,7 +319,14 @@ async def test_ask_offers_a_menu_then_prunes_unaccounted_claims(
     assert 'SCIP CONNECTED COMPONENTS' in menu_prompt
     assert 'SCIP CONNECTED COMPONENTS' not in answer_prompt
     assert "w.py:20" in answer_prompt and "w.py:7" in answer_prompt
-    assert "file:line" in answer_system
+    assert answer_system == (
+        'You explain compiler-derived code evidence. Use only the provided chain. '
+        'Cite file:line for every code claim; never cite document titles as proof.')
+    assert 'Compiler evidence graph:' in answer_prompt
+    assert 'Documentation:' not in answer_prompt
+    assert next(m['content'] for m in calls[3] if m['role'] == 'system') == answer_system
+    repair_prompt = next(m['content'] for m in calls[3] if m['role'] == 'user')
+    assert 'invented.py:999' in repair_prompt
     assert result.citations
     assert result.chain_citations
     assert result.unsupported_locations == []

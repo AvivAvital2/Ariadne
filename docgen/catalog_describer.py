@@ -31,15 +31,19 @@ class _EmptyDescriptionError(Exception):
     """
 
 _PROMPT = (
-    'You are a code documenter. Write a concise 1-2 sentence description of '                                                                                                        
-    'what this code element does. Be specific. No filler, no preamble, no code blocks. '
-    'Respond with ONLY the description.\n\n'                                                                                                                                       
+    'You are a code documenter. Write a concise 1-2 sentence description based on '
+    'the metadata only. Describe the declared interface: kind, parent, signature, '
+    'and any explicitly supplied parameter or return annotations. '
+    'The implementation body is not provided. Names alone do not establish runtime '
+    'behavior: do not infer algorithms, return values, side effects, or error handling. '
+    'If behavior is unknown, say so briefly while describing the known interface. '
+    'No filler, no preamble, no code blocks. Respond with ONLY the description.\n\n'
     'Kind: {subtype}\n'
-    'Name: {qualified_name}\n'                                                                                                                                                      
-    'Parent: {parent}\n'                                                                                                                                                            
+    'Name: {qualified_name}\n'
+    'Parent: {parent}\n'
     'Signature: {signature}\n'
-    'Location: {file}:{line_start}-{line_end}\n\n'                                                                                                                                 
-    'Description:'                                                                                                                                                                   
+    'Location: {file}:{line_start}-{line_end}\n\n'
+    'Description:'
 )
 def build_describe_prompt(metadata: dict) -> str:
     """The exact user prompt ``describe_element`` sends for one element.

@@ -1146,8 +1146,12 @@ class AnalysisMixin:
             if story_ir is not None:
                 from library.chain_story import render_formulation_spine
                 spine = render_formulation_spine(story_ir)
+            system_prompt = 'You explain compiler-derived code evidence. Use only the provided chain. Cite file:line for every code claim; never cite document titles as proof.'
             prompt = _chain_prompt(question, spine, notes=notes)
         else:
+            system_prompt = (
+                'You are a technical documentation assistant. Answer questions concisely '
+                'using only the provided documentation. Cite document titles.')
             prompt = (
                 f'Answer this question based ONLY on the documentation below. '
                 f'Cite which document(s) you used. Be concise and specific.\n\n'
@@ -1163,7 +1167,7 @@ class AnalysisMixin:
             _graph_diagnostics.setdefault("post_walk_selection", {})["formulation_prompt_chars"] = len(prompt)
             from llm import chat_complete
             messages = [
-                {'role': 'system', 'content': 'You explain compiler-derived code evidence. Use only the provided chain. Cite file:line for every code claim; never cite document titles as proof.'},
+                {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': prompt},
             ]
             _formulation_started = time.perf_counter()
@@ -2174,10 +2178,16 @@ async def _ask_compact(self, question, *, source, notes,
              "content": "You plan proof obligations. Reply with "
                         "C<n>: <requirement> lines only."},
             {"role": "user",
-             "content": "Create at most five fixed obligations that "
-                        "each require a distinct source-code chain to "
-                        "prove. Name exact code identifiers where the "
-                        "question names them.\n\nQuestion: " + question},
+             "content": "Create proof obligations only for the requirements stated in the question. "
+                        "Each obligation must describe evidence to establish, not an assumed answer. "
+                        "Do not answer the question or propose how the code works. "
+                        "Do not introduce code identifiers absent from the question. "
+                        "Do not invent intermediate calls, routes, directness, or implementation behavior. "
+                        "Preserve the identifiers and distinctions the question actually names. "
+                        "Use one obligation for a single focused question when sufficient. "
+                        "For compound questions, separate only genuinely distinct requested behaviors, "
+                        "using at most five obligations. Five is a ceiling, not a target."
+                        "\n\nQuestion: " + question},
         ],
         max_tokens=384, phase="scip-obligation-plan")
     obligation_lines = _re.findall(
