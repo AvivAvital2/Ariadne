@@ -1,0 +1,12 @@
+.external-models{margin:14px 0;border:1px solid var(--line,#536077);border-radius:12px;background:var(--panel,#17202e);padding:14px 16px}
+.external-models[hidden]{display:none}
+.external-models summary{cursor:pointer;font-size:14px;font-weight:600}
+.external-models p{font-size:13px;line-height:1.5;margin:12px 0}
+.external-model-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:16px 0}
+.external-model-fields label{display:block;font-size:12px;line-height:1.5;color:var(--muted,#bbb)}
+.external-model-fields input{display:block;width:100%;box-sizing:border-box;margin-top:5px;border:1px solid var(--line,#536077);border-radius:7px;padding:9px 10px;color:var(--text,#eee);background:var(--inset,#111821);font:inherit;font-size:13px}
+.external-model-fields input:focus-visible,.external-models summary:focus-visible{outline:2px solid var(--accent,#6aa2ff);outline-offset:2px}
+.external-models [role="status"]{overflow-wrap:anywhere}
+.external-models [role="status"].error{color:var(--red,#fa928d)}
+.external-models input:disabled,.external-models button:disabled{opacity:.6;cursor:wait}
+@media(max-width:640px){.external-model-fields{grid-template-columns:1fr}}

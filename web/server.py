@@ -17,6 +17,7 @@ from pathlib import Path
 from aiohttp import web
 
 from local_models import MAC_PROFILE_IDS
+from web.external_models import register_routes as register_external_model_routes
 from web.jobs import (
     ProjectBusyError,
     check_managed_admission,
@@ -434,6 +435,7 @@ def make_app(bridge=None, *, server_params=None, mcp_url=None, projects=None) ->
     app['projects'] = projects
     app['runtime_actions'] = {'task': None, 'error': None, 'stopping': False}
     register_run_routes(app)
+    register_external_model_routes(app)
     app.router.add_get('/api/onboarding-models', _onboarding_models)
     app.router.add_get('/api/projects', _projects)
     app.router.add_get('/api/local-models', _local_models)

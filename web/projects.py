@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -27,9 +28,20 @@ class ProjectStore:
     def __init__(self, config: Config):
         self.config = config
         self.root = config.config_dir.resolve() / 'web-projects'
+        self.external_profiles_path = self.root / 'model-profiles.json'
         self._sessions = {}
         self._interruptions = {}
         self.runtime = MacRuntime(config.config_dir.resolve() / 'local-models')
+
+    def external_profiles(self) -> dict:
+        from web.external_models import load_profiles
+
+        return load_profiles(self.external_profiles_path)
+
+    def save_external_profile(self, profile: dict) -> str:
+        from web.external_models import save_profile
+
+        return save_profile(self.external_profiles_path, profile)
 
     def profiles(self) -> dict:
         """Only configuration and credential presence are read; no inference calls."""
@@ -51,11 +63,13 @@ class ProjectStore:
             if key in ('llm', 'embeddings', 'execution', 'model', 'provider', 'defaults')
         }
         profiles.update(self.config._explicit.get('onboarding_models', {}) or {})
+        profiles.update(self.external_profiles())
         profiles.update({profile_id: managed_model_profile(profile_id) for profile_id in MAC_PROFILE_IDS})
         return profiles
 
     def choices(self) -> list[dict]:
         choices = []
+        external = self.external_profiles()
         for key, profile in self.profiles().items():
             settings = resolve_models(profile)
             credentials = {
@@ -72,6 +86,13 @@ class ProjectStore:
                 'preview_available': True,
                 'reason': 'Missing ' + ', '.join(missing) if missing else None,
             })
+            if key in external:
+                host = urlsplit(settings.chat.base_url).netloc
+                choices[-1].update(
+                    user_managed=True, qualification='unqualified',
+                    label=f'Experimental Qwen 27B Q4 + 8B embeddings — {host} (user managed)',
+                    quality_note='Connection tested; generated-answer accuracy remains unqualified.',
+                )
             if key in MAC_PROFILE_IDS:
                 reason = self._runtime_unavailable(key)
                 choices[-1].update(
@@ -143,8 +164,11 @@ class ProjectStore:
                             if k not in ('model', 'provider')}
         data.update(copy.deepcopy(profile))
         data.pop('managed_local_profile', None)
+        data.pop('external_model_profile', None)
         if profile_id in MAC_PROFILE_IDS:
             data['managed_local_profile'] = profile_id
+        elif profile_id in self.external_profiles():
+            data['external_model_profile'] = profile_id
         # Keep source settings (including discovery and exclusions) and resolve
         # paths before relocating the configuration beside its own databases.
         sources = {}
@@ -209,6 +233,8 @@ class ProjectStore:
         if profile_id in MAC_PROFILE_IDS:
             # Externally managed endpoints must retain their own project config.
             project_identity['managed_local_profile'] = profile_id
+        elif data.get('external_model_profile') == profile_id:
+            project_identity['external_model_profile'] = profile_id
         return identity_hash(project_identity)[:24]
 
     async def start(self, profile_id: str, name: str, *, themes_enabled: bool | None = None) -> dict:
@@ -237,6 +263,7 @@ class ProjectStore:
         return {'id': project_id, 'source': cfg.default_source,
                 'model': settings.chat.model, 'provider': settings.chat.provider,
                 'embedding_model': settings.embeddings.model,
+                **({'user_managed': True} if 'external_model_profile' in cfg._explicit else {}),
                 **(self._managed_details(cfg._explicit['managed_local_profile'], settings.profile_hash)
                    if 'managed_local_profile' in cfg._explicit else {})}
 

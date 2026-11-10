@@ -448,7 +448,8 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
 .dd{position:relative}
 .dd .ddbtn{display:flex;align-items:center;gap:10px;width:100%;border:1px solid var(--line);border-radius:9px;background:var(--inset);padding:9px 12px;cursor:pointer;transition:.14s}
 .dd .ddbtn:hover{border-color:var(--gold-line)}
-.dd .ddbtn .nm{font-weight:600;font-size:15px;letter-spacing:.01em}
+.dd .ddbtn .nm{font-weight:600;font-size:15px;letter-spacing:.01em;min-width:0;overflow-wrap:anywhere}
+.dd .deployment{display:block;font-size:11.5px;font-weight:400;line-height:1.5;color:var(--muted);overflow-wrap:anywhere}
 .dd .ddbtn .rate{margin-left:auto;font-family:var(--mono);font-size:12.5px;color:var(--gold)}
 .dd .ddbtn .chev{color:var(--faint);transition:.2s}
 .dd.open .ddbtn .chev{transform:rotate(180deg)}
@@ -720,6 +721,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
           <p class="lede">Set the model, speed, and themes in the bar above; choose which doc types to generate below. The estimate updates live.</p>
 
           <div id="generateBar">
+            <div id="externalModels"></div>
             <div class="controls" id="levers">
               <div class="ctl model">
                 <div class="clbl">Model</div>
@@ -824,8 +826,10 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   </div>
 
 <link rel="stylesheet" href="/static/local-models.css">
+<link rel="stylesheet" href="/static/external-models.css">
 <script src="/static/local-models.js"></script>
 <script src="/static/local-runs.js"></script>
+<script src="/static/external-models.js"></script>
 <script>
 (function(){
   const $ = (id)=>document.getElementById(id);
@@ -845,7 +849,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   let cur=1; const TOTAL=STEPS.length;
 
   const state = {
-    projectId:null, savedProject:null, onboardingModels:[], profileId:null, estimating:false,
+    projectId:null, savedProject:null, onboardingModels:[], profileId:null, estimating:false, externalChecking:false,
     source:null, model:null, batch:false, concurrency:4, estimate:null, discover:null,
     excludeGlobs:[], excludeDirs:[], excludeFiles:[], exemptDirs:[], branches:[], depends:[],
     docTypes:null,            // null = all applicable; else the enabled subset
@@ -858,6 +862,18 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   };
 
   let localRuns=null;
+  createExternalModels($('externalModels'), async result=>{
+    if(state.projectId||state.jobId) return;
+    state.onboardingModels=result.models;
+    $('onboardingModels').hidden=false;
+    await selectModel(result.profile_id);
+  }, busy=>{
+    state.externalChecking=busy;
+    $('modeldd').inert=busy;
+    $('modeldd').setAttribute('aria-disabled', String(busy));
+    if(busy) $('modeldd').classList.remove('open');
+    syncBuildButton();
+  });
   const localModels=createLocalModels($('localModels'),()=>{syncBuildButton();localRuns?.render();});
   localRuns=createLocalRuns($('localRuns'),{
     canResume:project=>!project.managed_local||localModels.ready,
@@ -882,7 +898,7 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     if(state.streamLost) recoverLostStream();
   }
   function syncBuildButton(){
-    $('nextBtn').disabled=state.estimating || (cur>=3&&!state.estimate) ||
+    $('nextBtn').disabled=state.externalChecking || state.estimating || (cur>=3&&!state.estimate) ||
       (cur===TOTAL && managedChoice() && !localModels.ready);
   }
 
@@ -1136,6 +1152,19 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   }
   function applyLocalTotals(){ if(state.estimate) renderEstimate(state.estimate, false); }   // instant, no backend, no tree rebuild
   function bumpOpt(delta){ state.optDelta=(state.optDelta||0)+delta; }
+  function modelPresentation(choice){
+    if(!choice.user_managed) return {name:choice.model, deployment:''};
+    const token=choice.id.replace(/^external-/, '');
+    const others=state.onboardingModels.filter(m=>m.user_managed&&m.id!==choice.id)
+      .map(m=>m.id.replace(/^external-/, ''));
+    let length=Math.min(8, token.length);
+    while(length<token.length&&others.some(id=>id.startsWith(token.slice(0,length)))) length++;
+    return {name:choice.label||choice.model, deployment:'Profile '+token.slice(0,length)};
+  }
+  function modelMarkup(choice){
+    const display=modelPresentation(choice);
+    return esc(display.name)+(display.deployment?' <span class="deployment">'+esc(display.deployment)+'</span>':'');
+  }
   function renderModels(e){
     if(state.onboardingModels.length){
       const groups={};
@@ -1143,11 +1172,11 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
       const seg=$('modelSeg');
       seg.innerHTML=Object.keys(groups).map(p=>'<div class="provhdr">'+esc(p==='local'?'Local':p==='deepinfra'?'DeepInfra':p==='anthropic'?'Anthropic':'OpenAI')+'</div>'+
         groups[p].map(m=>'<div class="ml'+(m.id===state.profileId?' on':'')+'" data-model="'+esc(m.id)+'"'+(m.preview_available===false?' aria-disabled="true"':'')+' title="'+esc(m.label)+'">'+
-          '<span class="mn">'+esc(m.model)+'</span><span class="mv">'+esc(m.embedding_model)+'</span><span class="mp">'+esc(m.reason||'')+'</span><span class="me">'+(m.id===state.profileId&&e?'~'+money(modelTotal(e.model,state.batch)):'Preview cost')+'</span></div>').join('')).join('');
+          '<span class="mn">'+modelMarkup(m)+'</span><span class="mv">'+esc(m.embedding_model)+'</span><span class="mp">'+esc(m.reason||'')+'</span><span class="me">'+(m.id===state.profileId&&e?'~'+money(modelTotal(e.model,state.batch)):'Preview cost')+'</span></div>').join('')).join('');
       seg.querySelectorAll('.ml[data-model]').forEach(row=>row.onclick=()=>selectModel(row.dataset.model));
       const choice=state.onboardingModels.find(m=>m.id===state.profileId);
       localModels.setProfile(state.savedProject||choice);
-      $('ddnm').textContent=choice?choice.model:'Choose a model pair';
+      $('ddnm').innerHTML=choice?modelMarkup(choice):'Choose a model pair';
       setText('ddrate', e?'$'+e.input_per_million+' / $'+e.output_per_million:'');
       setText('modelPair', choice?'Embeddings: '+choice.embedding_model+' · '+choice.provider:'');
       return;
@@ -1402,8 +1431,11 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
   function renderReview(){
     const e=state.estimate;
     const m=e&&(e.available_models||[]).find(x=>x.model===state.model);
+    const choice=!state.projectId&&state.onboardingModels.find(item=>item.id===state.profileId);
+    const display=choice?.user_managed?modelPresentation(choice):null;
+    const modelLabel=display?display.name+' '+display.deployment:state.model;
     setText('rvSource', state.source||'—');
-    setText('rvModel', state.model+(m?(' · $'+m.input_per_million+' / $'+m.output_per_million+' per 1M'):''));
+    setText('rvModel', modelLabel+(m?(' · $'+m.input_per_million+' / $'+m.output_per_million+' per 1M'):''));
     setText('rvSpeed', e?.provider==='local'?'Local · resumable · runtime unestimated':(state.batch?'Batch · within 24h':'Live · ready in minutes'));
     setText('rvScope', e?(e.file_count+' files · ~'+(e.input_tokens/1e6).toFixed(1)+'M input tokens'):'—');
     setText('rvDoc', e&&e.by_doc_type.length?e.by_doc_type.map(d=>cap(d.doc_type)).join(', '):'—');
@@ -1526,7 +1558,14 @@ p.lede{color:var(--muted);font-size:15px;margin-bottom:30px;max-width:560px}
     return scopeSave;
   }
   function commitScope(){ persistScope(true); }   // glob/exempt/reset → re-walk
-  function moveLevers(targetId){ const lv=$('levers'), t=$(targetId); if(lv && t && lv.parentNode!==t) t.appendChild(lv); }
+  function moveLevers(targetId){
+    const target=$(targetId);
+    for(const id of ['externalModels','levers']){
+      const element=$(id);
+      if(element&&target&&element.parentNode!==target) target.appendChild(element);
+    }
+    $('externalModels').hidden=Boolean(state.projectId||state.jobId);
+  }
   async function onEnter(n){
     if(n===1) await loadSources();
     else if(n===2) await doDiscover();
