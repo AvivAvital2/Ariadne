@@ -19,6 +19,9 @@ class TestLanguageDocTypes:
         # Scala gets the full Python-equivalent set — implicits, traits, and
         # OO patterns benefit from explanation/architecture/qa/gotcha/diagram.
         assert {'explanation', 'architecture', 'qa', 'catalog', 'gotcha', 'diagram'}.issubset(types)
+        from docgen.prompts import LANGUAGE_FENCE, LANGUAGE_FRAMING
+        assert LANGUAGE_FENCE['scala'] == 'scala'
+        assert LANGUAGE_FRAMING['scala'] == 'Scala'
 
     def test_java_has_explicit_entry(self) -> None:
         from docgen.prompts import LANGUAGE_DOC_TYPES
@@ -26,31 +29,6 @@ class TestLanguageDocTypes:
         assert 'java' in LANGUAGE_DOC_TYPES
         types = set(LANGUAGE_DOC_TYPES['java'])
         assert {'explanation', 'architecture', 'qa', 'catalog', 'gotcha', 'diagram'}.issubset(types)
-
-
-class TestLanguageFence:
-    def test_scala_fence(self) -> None:
-        from docgen.prompts import LANGUAGE_FENCE
-
-        assert LANGUAGE_FENCE['scala'] == 'scala'
-
-    def test_java_fence(self) -> None:
-        from docgen.prompts import LANGUAGE_FENCE
-
+        from docgen.prompts import LANGUAGE_FENCE, LANGUAGE_FRAMING
         assert LANGUAGE_FENCE['java'] == 'java'
-
-
-class TestLanguageFraming:
-    def test_scala_framing(self) -> None:
-        """Framing word is what the prompt's prose substitutes for ``Python``
-        when describing the source language. Capitalization matters for
-        natural-sounding prose ('Scala module', not 'scala module').
-        """
-        from docgen.prompts import LANGUAGE_FRAMING
-
-        assert LANGUAGE_FRAMING['scala'] == 'Scala'
-
-    def test_java_framing(self) -> None:
-        from docgen.prompts import LANGUAGE_FRAMING
-
         assert LANGUAGE_FRAMING['java'] == 'Java'

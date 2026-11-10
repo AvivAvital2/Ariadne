@@ -319,18 +319,6 @@ def test_activation_block_full_extraction(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_malformed_hocon_returns_empty(tmp_path: Path):
-    """Parse failures must not crash sync_file_catalog. The extractor
-    swallows the error and returns []; the file_index doc still gets
-    created, just with zero element_ids."""
-    from docgen.catalog_extractor import extract_elements
-
-    # Genuinely broken: starts a block and never closes anything.
-    f = _write(tmp_path, 'broken.conf', 'foo { unclosed = 1\nbar = ')
-    elements = extract_elements(f, tmp_path)
-    assert elements == []
-
-
 def test_parse_failure_is_logged_not_silent(tmp_path: Path, caplog) -> None:
     """A `.conf` that isn't valid HOCON — a genuinely malformed file, or a
     non-INI dialect (PAM limits.conf, …) — must NOT be silently swallowed.

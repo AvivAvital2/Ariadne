@@ -100,6 +100,12 @@ def test_required_columns_present(
     downstream query path reads. Producer additions are fine; removals
     break callers (``CrossSourceGraph.load_from``, the trace-flow
     query, etc.) and this test bites first."""
+    if table in ('config_values', 'string_literals'):
+        row = fresh_scip_db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()
+        assert row is not None
     actual = _columns(fresh_scip_db, table)
     missing = required - actual
     assert missing == set(), (

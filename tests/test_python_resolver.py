@@ -247,22 +247,6 @@ class TestSystemFallback:
 
 
 class TestProvenance:
-    def test_resolution_carries_source_label(
-        self, tmp_path: Path,
-    ) -> None:
-        """Every resolution result carries a ``source`` label so the
-        adapter can log what was picked. Helps users spot wrong picks
-        before committing to a long index run."""
-        from docgen.python_resolver import resolve_python_interpreter
-
-        _make_venv(tmp_path)
-        result = resolve_python_interpreter(
-            tmp_path, which=_no_system_python,
-        )
-        assert result.source in {
-            'env_hints', 'cwd-venv', 'walk-up', 'system', 'unresolved',
-        }
-
     def test_env_hints_with_nonexistent_path_falls_through(
         self, tmp_path: Path,
     ) -> None:
@@ -402,6 +386,9 @@ class TestAPIShape:
             tmp_path, which=_no_system_python,
         )
         assert isinstance(result, InterpreterResolution)
+        assert result.source in {
+            'env_hints', 'cwd-venv', 'walk-up', 'system', 'unresolved',
+        }
         # @frozen raises FrozenInstanceError on attribute assignment
         try:
             result.path = Path('/etc/passwd')  # type: ignore[misc]

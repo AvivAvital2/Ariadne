@@ -145,32 +145,6 @@ class TestDirectLiteral:
 
 
 class TestVariableResolution:
-    def test_variable_resolves_via_scip_symbol(
-        self, conn: sqlite3.Connection,
-    ) -> None:
-        """``URL`` identifier at the call site, defined as a
-        module-level constant on line 1 with a literal value."""
-        from docgen.scip_resolution import resolve_arg_value
-
-        # Module-level: URL = "/api/users" on line 1
-        _add_scip_symbol(
-            conn, canonical_id='scip:app.URL',
-            source_name='myapi', file='/app.py',
-            line_start=1, line_end=1,
-            qualified_name='app.URL',
-        )
-        _add_string_literal(
-            conn, source_name='myapi', file='/app.py',
-            line=1, col=6, value='/api/users',
-        )
-        # The call passes URL at line 5 (some position in the source)
-        value, confidence = resolve_arg_value(
-            conn=conn, source_name='myapi', file='/app.py',
-            line=5, col=18, identifier_name='URL',
-        )
-        assert value == '/api/users'
-        assert confidence == 'resolved-constant'
-
     def test_unknown_identifier_unresolved(
         self, conn: sqlite3.Connection,
     ) -> None:

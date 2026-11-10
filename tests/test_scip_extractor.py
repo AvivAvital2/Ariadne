@@ -204,39 +204,11 @@ class TestExtractScala:
         cls = next(e for e in elements if e.qualified_name == 'com.example.Foo')
         assert cls.subtype == 'scala_class'
         assert cls.language == 'scala'
-
-    def test_method_qualified_name_for_scala(self) -> None:
-        """Scala does NOT decode the method's JVM signature — qn ends in
-        ``bar``, not ``bar()``.
-        """
-        from docgen.scip_extractor import extract
-
-        index = self._build_index()
-        elements = extract(
-            Path('/repo/src/main/scala/com/example/Foo.scala'),
-            source_root=Path('/repo'),
-            index=index,
-        )
         m = next(e for e in elements if e.qualified_name.endswith('.bar'))
         assert m.subtype == 'scala_def'
         assert m.parent_qualified_name == 'com.example.Foo'
-
-    def test_lines_are_one_indexed(self) -> None:
-        """SCIP ranges are 0-indexed; ElementInfo lines are 1-indexed.
-        A symbol at proto line 0 must surface as line_start=1.
-        """
-        from docgen.scip_extractor import extract
-
-        index = self._build_index()
-        elements = extract(
-            Path('/repo/src/main/scala/com/example/Foo.scala'),
-            source_root=Path('/repo'),
-            index=index,
-        )
-        cls = next(e for e in elements if e.qualified_name == 'com.example.Foo')
         assert cls.line_start == 1
         assert cls.line_end == 1
-
 
 # ---------------------------------------------------------------------------
 # extract — Java overload disambiguation

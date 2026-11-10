@@ -46,28 +46,6 @@ def conn():
 
 
 class TestSchema:
-    def test_init_scip_schema_creates_string_literals_table(
-        self, conn: sqlite3.Connection,
-    ) -> None:
-        cur = conn.execute(
-            "SELECT name FROM sqlite_master "
-            "WHERE type='table' AND name='string_literals'"
-        )
-        assert cur.fetchone() is not None
-
-    def test_required_columns_present(
-        self, conn: sqlite3.Connection,
-    ) -> None:
-        cur = conn.execute('PRAGMA table_info(string_literals)')
-        cols = {row[1] for row in cur.fetchall()}
-        for col in (
-            'source_name', 'file', 'line_start', 'col_start',
-            'value', 'owning_symbol_id',
-        ):
-            assert col in cols, (
-                f'string_literals missing column: {col}'
-            )
-
     def test_indexed_for_symbol_lookup(
         self, conn: sqlite3.Connection,
     ) -> None:

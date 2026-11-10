@@ -29,17 +29,7 @@ class TestGoIsFirstClass:
         # ('explanation',) fallback reserved for prose/data formats.
         assert 'go' in LANGUAGE_DOC_TYPES
         assert FULL_SET.issubset(set(LANGUAGE_DOC_TYPES['go']))
-
-    def test_fence_and_framing(self) -> None:
         assert LANGUAGE_FENCE['go'] == 'go'
         assert LANGUAGE_FRAMING['go'] == 'Go'
-
-    def test_pricing_detects_go_extension(self) -> None:
-        # The estimator mirror must agree with the real extractor, else a
-        # Go corpus is priced through the generic unknown-language branch.
         assert _detect_language(Path('pkg/server.go')) == 'go'
-
-    def test_pricing_supported_doc_types_match_generation(self) -> None:
-        # Generation's filter allows all requested types for go; the
-        # estimator must not silently cap go at ('explanation',).
         assert FULL_SET.issubset(set(_supported_doc_types_for('go')))

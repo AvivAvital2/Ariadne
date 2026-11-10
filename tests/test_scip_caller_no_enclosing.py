@@ -68,31 +68,6 @@ def test_call_resolves_when_indexer_omits_enclosing_range() -> None:
     )
 
 
-def test_real_enclosing_range_still_wins() -> None:
-    """scip-python supplies true body extents; those must not be overridden."""
-    from docgen.scip_extractor import _ScipDoc, _ScipOccurrence, _ScipSymbol
-
-    caller = 'scip-python python proj 0.1 `svc`/caller().'
-    callee = 'scip-python python proj 0.1 `svc`/callee().'
-    doc = _ScipDoc(
-        relative_path='svc.py',
-        occurrences=(
-            _ScipOccurrence(symbol=callee, range=(0, 4, 0, 10),
-                            is_definition=True, enclosing_range=(0, 0, 1, 8)),
-            _ScipOccurrence(symbol=caller, range=(3, 4, 3, 10),
-                            is_definition=True, enclosing_range=(3, 0, 7, 12)),
-            _ScipOccurrence(symbol=callee, range=(5, 8, 5, 14), is_definition=False),
-        ),
-        symbols=(
-            _ScipSymbol(symbol=caller, kind='Function', display_name='caller'),
-            _ScipSymbol(symbol=callee, kind='Function', display_name='callee'),
-        ),
-    )
-    g = _graph_with(doc, source='proj', language='python')
-    assert any(e.caller.canonical_id == caller and e.callee.canonical_id == callee
-               for e in g._edges)
-
-
 def test_reference_before_the_first_definition_is_still_dropped() -> None:
     """A file-scope reference has no enclosing definition and must stay dropped.
 

@@ -71,21 +71,8 @@ def test_symbols_and_edges_round_trip(conn):
     assert [(e.caller.canonical_id, e.callee.canonical_id, e.edge_type)
             for e in back.edges if e.edge_type == 'call'] == [
         (RUN.format(src='src1'), HELPER.format(src='src1'), 'call')]
-
-
-def test_body_extents_survive_the_round_trip(conn):
-    """Without this a cited hop cannot be quoted — the store held 0 of 306,473."""
-    save_rows(conn, _rows_for('src1'), source_name='src1')
-    back = load_rows(conn)
-
     run = back.symbols[RUN.format(src='src1')]
     assert (run.line_start, run.line_end) == (5, 21)
-
-
-def test_implements_edges_reach_the_store(conn):
-    """The relation the store never held."""
-    save_rows(conn, _rows_for('src1'), source_name='src1')
-
     kinds = dict(conn.execute(
         'SELECT edge_type, COUNT(*) FROM scip_edges GROUP BY 1').fetchall())
     assert kinds.get('implements') == 1
@@ -101,6 +88,13 @@ def test_resaving_one_source_leaves_another_untouched(conn):
         'SELECT source_name, COUNT(*) FROM scip_symbols GROUP BY 1').fetchall())
     assert set(per_source) == {'src1', 'src2'}
     assert per_source['src1'] == per_source['src2']
+    orphans = conn.execute('''
+        SELECT COUNT(*) FROM scip_edges e
+        LEFT JOIN scip_symbols c ON c.canonical_id = e.caller_canonical_id
+        LEFT JOIN scip_symbols d ON d.canonical_id = e.callee_canonical_id
+        WHERE c.canonical_id IS NULL OR d.canonical_id IS NULL
+    ''').fetchone()[0]
+    assert orphans == 0
 
 
 def test_resaving_replaces_rather_than_duplicates(conn):
@@ -109,25 +103,6 @@ def test_resaving_replaces_rather_than_duplicates(conn):
     save_rows(conn, _rows_for('src1'), source_name='src1')
 
     assert conn.execute('SELECT COUNT(*) FROM scip_edges').fetchone()[0] == first
-
-
-def test_a_sources_edges_are_cleared_before_its_symbols(conn):
-    """Edges carry no source, so clearing them means joining through the symbols.
-
-    Do it in the wrong order and the join finds nothing: the symbols are already gone and
-    their edges are left behind, pointing at rows that no longer exist.
-    """
-    save_rows(conn, _rows_for('src1'), source_name='src1')
-    save_rows(conn, _rows_for('src2'), source_name='src2')
-    save_rows(conn, _rows_for('src1'), source_name='src1')
-
-    orphans = conn.execute('''
-        SELECT COUNT(*) FROM scip_edges e
-        LEFT JOIN scip_symbols c ON c.canonical_id = e.caller_canonical_id
-        LEFT JOIN scip_symbols d ON d.canonical_id = e.callee_canonical_id
-        WHERE c.canonical_id IS NULL OR d.canonical_id IS NULL
-    ''').fetchone()[0]
-    assert orphans == 0
 
 
 def test_a_store_built_this_way_passes_the_wiring_gate(conn):
@@ -152,20 +127,12 @@ def _ownership_rows(source):
         owner_type, owner_term, member)
 
 
-def test_canonical_contains_edges_reach_the_store(conn):
-    rows, (owner_type, _owner_term, member) = _ownership_rows("src1")
-
-    save_rows(conn, rows, source_name="src1")
-
-    assert conn.execute(
-        "SELECT caller_canonical_id,callee_canonical_id FROM scip_edges "
-        "WHERE edge_type='contains'"
-    ).fetchall() == [(owner_type, member)]
-
-
 def test_canonical_ownership_replaces_a_stale_companion_edge(conn):
     rows, (owner_type, owner_term, member) = _ownership_rows("src1")
     save_rows(conn, rows, source_name="src1")
+    assert conn.execute(
+        "SELECT caller_canonical_id,callee_canonical_id FROM scip_edges WHERE edge_type='contains'"
+    ).fetchall() == [(owner_type, member)]
     conn.execute(
         "INSERT OR REPLACE INTO scip_edges VALUES (?,?,?,?,?,?)",
         (owner_term, member, "contains", "src1/Owner.scala", 4, "stale"))

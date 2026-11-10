@@ -39,6 +39,7 @@ class TestVendorMinifiedDetection:
         assert len(suspects) == 1
         assert suspects[0].reason == 'vendor_minified'
         assert suspects[0].entry == entry
+        assert suspects[0].suggested_pattern == 'runtime/src/main/resources/*.min.js'
 
     def test_directory_with_min_css_flagged(self) -> None:
         """``*.min.css`` also counts as vendor minified."""
@@ -140,6 +141,7 @@ class TestMassDuplicateDetection:
         suspects = classify_suspects([entry], source_root=Path('/x'))
         mass = [s for s in suspects if s.reason == 'mass_duplicate']
         assert len(mass) == 1
+        assert suspects[0].suggested_pattern == 'testkit/src/main/resources/js/*.js'
 
     def test_few_files_NOT_flagged(self) -> None:
         """A handful of files (<10) is normal — not a duplicate set."""
@@ -203,48 +205,6 @@ class TestNonSuspectEntries:
 
 
 class TestSuggestedPatterns:
-    def test_vendor_minified_suggests_glob_in_cwd(self) -> None:
-        """For a vendor-minified entry, the suggested pattern excludes
-        all ``*.min.js`` files in that cwd (relative to source root)."""
-        from docgen.scip_discovery import DiscoveryEntry
-        from docgen.scip_review import classify_suspects
-
-        entry = DiscoveryEntry(
-            kind='typescript',
-            cwd=Path('/x/runtime/src/main/resources'),
-            markers=(
-                Path('/x/runtime/src/main/resources/jquery-2.1.4.min.js'),
-                Path('/x/runtime/src/main/resources/jquery.tablesorter.min.js'),
-            ),
-            entry_kind='scripts',
-        )
-        suspects = classify_suspects([entry], source_root=Path('/x'))
-        # Pattern is relative to source_root and globs the .min.js files
-        assert suspects[0].suggested_pattern == (
-            'runtime/src/main/resources/*.min.js'
-        )
-
-    def test_mass_duplicate_suggests_dir_glob(self) -> None:
-        """For mass duplicates, suggest globbing the whole directory."""
-        from docgen.scip_discovery import DiscoveryEntry
-        from docgen.scip_review import classify_suspects
-
-        markers = tuple(
-            Path(f'/x/testkit/src/main/resources/js/file{i}.js')
-            for i in range(15)
-        )
-        entry = DiscoveryEntry(
-            kind='typescript',
-            cwd=Path('/x/testkit/src/main/resources/js'),
-            markers=markers,
-            entry_kind='scripts',
-        )
-        suspects = classify_suspects([entry], source_root=Path('/x'))
-        # Glob covers all .js in that directory
-        assert suspects[0].suggested_pattern == (
-            'testkit/src/main/resources/js/*.js'
-        )
-
     def test_description_includes_count_and_path(self) -> None:
         """The description shown at the prompt should let the user
         decide without leaving the terminal — count + path + kind."""
@@ -338,10 +298,14 @@ class TestPromptKeepEntry:
         from docgen.scip_review import prompt_keep_entry
 
         suspect = _make_suspect()
+        out = _Outputter()
         result = prompt_keep_entry(
-            suspect, input_fn=_Inputter(['n']), output_fn=_Outputter(),
+            suspect, input_fn=_Inputter(['n']), output_fn=out,
         )
         assert result is False
+        all_output = '\n'.join(out.lines)
+        assert suspect.description in all_output
+        assert suspect.suggested_pattern in all_output
 
     def test_empty_input_defaults_to_exclude(self) -> None:
         """Hitting Enter without typing → default is exclude (capital
@@ -379,27 +343,3 @@ class TestPromptKeepEntry:
             assert result is False, (
                 f'{response!r} should default to exclude'
             )
-
-    def test_description_printed_to_user(self) -> None:
-        """User sees the description before the prompt."""
-        from docgen.scip_review import prompt_keep_entry
-
-        suspect = _make_suspect()
-        out = _Outputter()
-        prompt_keep_entry(
-            suspect, input_fn=_Inputter(['n']), output_fn=out,
-        )
-        all_output = '\n'.join(out.lines)
-        assert suspect.description in all_output
-
-    def test_suggested_pattern_printed(self) -> None:
-        """User sees the suggested pattern they can paste into yaml."""
-        from docgen.scip_review import prompt_keep_entry
-
-        suspect = _make_suspect()
-        out = _Outputter()
-        prompt_keep_entry(
-            suspect, input_fn=_Inputter(['n']), output_fn=out,
-        )
-        all_output = '\n'.join(out.lines)
-        assert suspect.suggested_pattern in all_output

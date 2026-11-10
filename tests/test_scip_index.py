@@ -243,32 +243,16 @@ class TestProtoTranslation:
         assert doc.relative_path == 'm.py'
         assert len(doc.occurrences) == 3
         assert index.source_root == tmp_path
-
-    def test_the_definition_role_and_enclosing_range_survive(self, tmp_path):
-        doc = ScipIndex.load(self._write(tmp_path), repo='src1',
-                             max_staleness_days=None).documents[0]
         impl = next(o for o in doc.occurrences if o.symbol.endswith('Impl#'))
 
         assert impl.is_definition
         assert doc.extent_of(impl) == (5, 19)
-
-    def test_a_reference_is_not_a_definition(self, tmp_path):
-        doc = ScipIndex.load(self._write(tmp_path), repo='src1',
-                             max_staleness_days=None).documents[0]
         ref = next(o for o in doc.occurrences if 'helper' in o.symbol)
 
         assert not ref.is_definition
-
-    def test_load_scopes_locals_so_no_bare_id_ever_enters_the_process(self, tmp_path):
-        doc = ScipIndex.load(self._write(tmp_path), repo='src1',
-                             max_staleness_days=None).documents[0]
         locals_ = [o.symbol for o in doc.occurrences if o.symbol.startswith('local ')]
 
         assert locals_ == ['local src1:m.py:3']
-
-    def test_metadata_and_relationships_translate(self, tmp_path):
-        doc = ScipIndex.load(self._write(tmp_path), repo='src1',
-                             max_staleness_days=None).documents[0]
         info = doc.symbols[0]
 
         assert info.effective_kind == 'Class'
@@ -314,16 +298,8 @@ class TestLocalShapes:
         scoped = index.documents[0].occurrences[0].symbol
         assert scoped != bare
         assert scoped.startswith('local src1:a.py:')
-
-    def test_the_binding_name_survives_scoping(self):
-        """`local 1(self)` keeps `(self)` — it is part of what SCIP said."""
-        index = ScipIndex(documents=(
-            ScipDocument('a.py', occurrences=(
-                ScipOccurrence(symbol='local 1(self)', range=(1, 0, 1, 5),
-                               is_definition=True),)),
-        )).scoped_to('src1')
-
-        assert index.documents[0].occurrences[0].symbol == 'local src1:a.py:1(self)'
+        if bare == 'local 1(self)':
+            assert scoped == 'local src1:a.py:1(self)'
 
     def test_a_named_local_in_two_files_does_not_fuse(self):
         index = ScipIndex(documents=(

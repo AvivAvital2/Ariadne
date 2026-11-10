@@ -54,16 +54,6 @@ class TestSinkSpec:
             language='python',
         )
         assert s.arg_index == 0
-
-    def test_default_http_method_is_none(self) -> None:
-        from docgen.scip_sink_registry import SinkSpec
-
-        s = SinkSpec(
-            name='foo',
-            symbol_suffixes=('foo.',),
-            kind='http_client',
-            language='python',
-        )
         assert s.http_method is None
 
     def test_explicit_fields(self) -> None:
@@ -278,13 +268,6 @@ class TestJavaScriptHttpClientEntries:
     sink names + http_method assignments so the registry growth
     doesn't accidentally drop entries."""
 
-    def test_fetch_present(self) -> None:
-        from docgen.scip_sink_registry import (
-            JAVASCRIPT_HTTP_CLIENT_SINKS,
-        )
-        names = {s.name for s in JAVASCRIPT_HTTP_CLIENT_SINKS}
-        assert 'fetch' in names
-
     def test_node_fetch_present(self) -> None:
         from docgen.scip_sink_registry import (
             JAVASCRIPT_HTTP_CLIENT_SINKS,
@@ -362,11 +345,6 @@ class TestJvmHttpClientEntries:
     v1 ships play-ws ``WSClient.url()`` only — sttp / Akka HTTP
     client / OkHttp builder are fluent patterns that need Phase 2s
     chained-call walking and are deferred."""
-
-    def test_play_ws_url_present(self) -> None:
-        from docgen.scip_sink_registry import SCALA_HTTP_CLIENT_SINKS
-        names = {s.name for s in SCALA_HTTP_CLIENT_SINKS}
-        assert 'play.WSClient.url' in names
 
     def test_play_ws_url_method_is_none(self) -> None:
         """The HTTP method for ``WSClient.url(...).get()`` is on the

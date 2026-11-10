@@ -49,27 +49,6 @@ def conn():
 
 
 class TestSchema:
-    def test_init_scip_schema_creates_config_values_table(
-        self, conn: sqlite3.Connection,
-    ) -> None:
-        """``init_scip_schema`` (called by Library.__attrs_post_init__)
-        also creates the config_values table."""
-        cur = conn.execute(
-            "SELECT name FROM sqlite_master "
-            "WHERE type='table' AND name='config_values'"
-        )
-        assert cur.fetchone() is not None
-
-    def test_required_columns_present(
-        self, conn: sqlite3.Connection,
-    ) -> None:
-        """Schema columns: source_name, file, key, value, line_start.
-        All required for Layer C lookups."""
-        cur = conn.execute('PRAGMA table_info(config_values)')
-        cols = {row[1] for row in cur.fetchall()}
-        for col in ('source_name', 'file', 'key', 'value', 'line_start'):
-            assert col in cols, f'config_values missing column: {col}'
-
     def test_indexed_for_source_and_key_lookup(
         self, conn: sqlite3.Connection,
     ) -> None:

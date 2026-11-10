@@ -29,15 +29,6 @@ class TestSourceScipConfig:
         )
         assert c.repo == 'scalaproject'
         assert c.artifact_path == Path('/tmp/index.scip')
-
-    def test_defaults(self) -> None:
-        from docgen.scip_config import SourceScipConfig
-
-        c = SourceScipConfig(
-            repo='scalaproject',
-            artifact_path=Path('/tmp/index.scip'),
-        )
-        # Per plan §4.4 — sane defaults so callers can omit the obvious cases.
         assert c.max_staleness_days == 7
         assert c.allow_degraded is False
         assert c.index_kinds == {}
@@ -201,21 +192,4 @@ sources:
         scip_cfg = cfg.get_source_scip_config('scalaproject')
         assert scip_cfg is not None
         assert scip_cfg.max_staleness_days == 7
-
-    def test_allow_degraded_starts_false(self, tmp_path: Path) -> None:
-        """Even if YAML somehow has allow_degraded=true (which would be
-        unusual), per-call CLI flag is the gate. Defaults must be safe.
-        """
-        from config import Config
-
-        cfg_path = _write_config(tmp_path, '''\
-sources:
-  scalaproject:
-    path: /tmp/scalaproject
-    scip:
-      artifact_path: /tmp/idx.scip
-''')
-        cfg = Config(cfg_path)
-        scip_cfg = cfg.get_source_scip_config('scalaproject')
-        assert scip_cfg is not None
         assert scip_cfg.allow_degraded is False

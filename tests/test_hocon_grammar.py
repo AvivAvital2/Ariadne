@@ -38,17 +38,6 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_hocon_grammar_module_exposes_parse():
-    """The HOCON grammar module ships a `parse` function returning a
-    lark.Tree. That's the contract the extractor depends on."""
-    from docgen.hocon_grammar import parse
-
-    tree = parse('key = "value"\n')
-    # Lark trees are duck-typed; check attributes rather than isinstance
-    # (saves importing lark at the test layer).
-    assert hasattr(tree, 'children'), 'parse() must return a lark.Tree-like object'
-
-
 def test_hocon_grammar_propagates_positions():
     """Every node must carry line/column info via propagate_positions=True.
     Without this we cannot emit ElementInfo with line ranges."""
@@ -56,6 +45,7 @@ def test_hocon_grammar_propagates_positions():
 
     tree = parse('key = "value"\n')
     # Walk to the first non-root node and confirm line tracking is on.
+    assert hasattr(tree, 'children'), 'parse() must return a lark.Tree-like object'
     first_child = next(iter(tree.children), None)
     assert first_child is not None, 'parse tree must have at least one entry'
     meta = getattr(first_child, 'meta', None)

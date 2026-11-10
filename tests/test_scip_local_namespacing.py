@@ -79,35 +79,13 @@ def test_the_same_bare_local_in_two_documents_becomes_two_symbols():
                if cid.startswith('local ')]
     assert len(locals_) == 2, 'one row per document, not one row shared'
     assert {sym.file for sym in locals_} == {'a.py', 'b.py'}
-
-
-def test_no_bare_local_id_survives_ingest():
-    """A bare id is the defect: it is what makes two documents collide."""
-    graph = _graph()
-
     assert BARE_LOCAL not in graph._symbols
     assert not [cid for cid in graph._symbols if _is_bare(cid)]
-    # and the scoped ids still announce themselves as locals to every consumer
-    assert all(cid.startswith('local ')
-               for cid in graph._symbols if 'local' in cid)
-
-
-def test_a_local_id_still_resolves_within_its_own_document():
-    """Scoping must not break the local's own edges — `dc138d3` kept locals as call
-    sites deliberately, because a local-scope call site is a real dependency."""
-    graph = _graph()
-
-    a_files = {e.caller.file for e in graph._edges
-               if e.callee.canonical_id == TARGET_A}
-    assert a_files == {'a.py'}, 'a.py\'s local must not reach b.py\'s target'
-
-
-def test_locals_in_different_documents_share_no_edges():
-    """The fusion in miniature: before scoping, one local carried both files' edges."""
-    graph = _graph()
-
+    assert all(cid.startswith('local ') for cid in graph._symbols if 'local' in cid)
+    a_files = {e.caller.file for e in graph._edges if e.callee.canonical_id == TARGET_A}
+    assert a_files == {'a.py'}, "a.py's local must not reach b.py's target"
     for edge in graph._edges:
         assert edge.caller.file == edge.callee.file, (
-            f'{edge.caller.canonical_id} -> {edge.callee.canonical_id} crosses '
-            f'{edge.caller.file} into {edge.callee.file}'
+            f'{edge.caller.canonical_id} -> {edge.callee.canonical_id} '
+            f'crosses {edge.caller.file} into {edge.callee.file}'
         )

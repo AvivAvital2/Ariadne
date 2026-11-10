@@ -297,27 +297,6 @@ class TestDegenerate:
 
 
 class TestAdversarial:
-    def test_symlink_cycle_does_not_infinite_loop(self, tmp_path: Path) -> None:
-        """A symlinked directory pointing back to its parent creates
-        an infinite walk if the implementation doesn't guard against
-        revisits. Without a check, a recursive walk re-enters the same
-        tree forever (or hits Python's recursion limit, which is barely
-        better than hanging).
-        """
-        a = tmp_path / 'a'
-        a.mkdir()
-        _touch(a / '__init__.py')
-        # b symlinks back up to a → walking a then b is a cycle
-        (a / 'b').symlink_to(a, target_is_directory=True)
-
-        from docgen.scip_discovery import discover
-        # Must return without hanging or raising RecursionError
-        entries = discover(tmp_path)
-        # The package at `a` should still be detected exactly once
-        py = [e for e in entries if e.kind == 'python']
-        assert len(py) == 1
-        assert py[0].cwd == tmp_path
-
     def test_source_root_does_not_exist(self, tmp_path: Path) -> None:
         """A nonexistent source_root returns an empty list, not a
         crash."""
@@ -443,13 +422,16 @@ class TestAdversarial:
         monkeypatch.setattr(Path, 'iterdir', counting_iterdir)
 
         from docgen.scip_discovery import discover
-        discover(tmp_path)
+        entries = discover(tmp_path)
 
         duplicates = {p: c for p, c in visit_counts.items() if c > 1}
         assert duplicates == {}, (
             f'directories visited more than once (cycle protection missing):'
             f'\n  {duplicates}'
         )
+        py = [e for e in entries if e.kind == 'python']
+        assert len(py) == 1
+        assert py[0].cwd == tmp_path
 
     def test_returns_deterministic_order(self, tmp_path: Path) -> None:
         """Same input → same output order, run after run. Determinism
