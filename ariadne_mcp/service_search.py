@@ -214,12 +214,13 @@ class SearchMixin:
         from spools import resolve_spools
         spool_resolution = resolve_spools(self.config)
         spool_fp = spool_resolution.fingerprint()
-        key = self._cache_key('search-v2', query, feature, branch, status, limit, context_file, sections_only, role, source, spool_fp)
+        # v3 counts omitted sections individually even when headings repeat.
+        key = self._cache_key('search-v3', query, feature, branch, status, limit, context_file, sections_only, role, source, spool_fp)
         if key in self._query_cache:
             return self._query_cache[key]
 
         # Persistent cache (cross-session, branch-aware, 30-day TTL)
-        p_key = self._persistent_cache_key('search-v2', branch, query, feature, status, limit, context_file, sections_only, role, source, spool_fp, getattr(self, '_semantic_identity', lambda: None)())
+        p_key = self._persistent_cache_key('search-v3', branch, query, feature, status, limit, context_file, sections_only, role, source, spool_fp, getattr(self, '_semantic_identity', lambda: None)())
         cached_json = self.library.cache_get(p_key)
         if cached_json is not None:
             try:
@@ -650,12 +651,11 @@ class SearchMixin:
             if section_data is not None and d.id in section_data and section_data[d.id]:
                 # Return only relevant sections instead of full content
                 secs = section_data[d.id]
-                kept_headings = {s.heading for s in secs}
                 all_sections = self.library.get_sections(d.id)
-                omitted = [s for s in all_sections if s.heading not in kept_headings]
+                omitted_count = len(all_sections) - len(secs)
                 assembled = '\n\n'.join(s.content for s in secs)
-                if omitted:
-                    assembled += f'\n\n[... {len(omitted)} sections omitted ...]'
+                if omitted_count:
+                    assembled += f'\n\n[... {omitted_count} sections omitted ...]'
                 documents.append(DocumentResult(
                     id=d.id, title=d.title, content_type=d.content_type,
                     content=assembled, source_files=d.source_files,
