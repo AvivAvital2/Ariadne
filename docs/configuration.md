@@ -43,6 +43,45 @@ defaults:
   spools_model: claude-sonnet-5  # optional: model for SPOOL BUILDS only (unset → inherit model)
 ```
 
+### Ask synthesis output limit
+
+`ask_synthesis_max_tokens` controls the generated-token allowance for Ask's
+final answer, including reasoning tokens for thinking models. It applies to
+compact synthesis, legacy synthesis, document-only fallback and answer repair;
+selector limits are unchanged. The default is 4096. For example:
+
+```yaml
+ask_synthesis_max_tokens: 8192
+```
+
+The value must be a positive integer. For local models, it must fit within
+`llm.max_output_tokens` (8192 in the managed Mac profiles), and the prompt plus
+output reservation must fit the server context window. Local token preflight
+continues to enforce these limits. A larger allowance can increase runtime and
+lets longer responses finish; it does not guarantee greater accuracy.
+
+Local Ask planning and evidence selection have separate budgets. To override
+their per-phase defaults, set `llm.selector_max_tokens` to a positive integer
+no greater than `llm.max_output_tokens`. It applies to the named local Ask
+planner/selector phases, including route-family selection. It does not alter
+synthesis, direct provider calls or saved durable requests. When omitted, the
+existing phase limits and Qwen 27B thinking allowance remain in effect.
+
+For a Qwen 27B profile with a 32768-token context, these overrides allow up to
+16384 generated tokens per planning/selection or synthesis call. Merge the `llm`
+entries into the existing model configuration:
+
+```yaml
+ask_synthesis_max_tokens: 16384
+llm:
+  max_output_tokens: 16384
+  selector_max_tokens: 16384
+```
+
+The same context and timeout constraints apply to every call. A 16384-token
+output reservation cannot fit a 16384-token context alongside the input; in
+particular, do not copy this example unchanged to the Gemma 16K-context profile.
+
 ### Source Configuration Fields
 
 You author the **user fields** below. The **Ariadne-managed fields** are filled in by `ariadne discover` — manual edits to those get regenerated on the next `discover` run.

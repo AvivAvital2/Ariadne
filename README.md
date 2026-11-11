@@ -68,6 +68,34 @@ Start with [ariadne.local.yaml.example](ariadne.local.yaml.example) and the [loc
 
 `ariadne doctor --models` checks both configured model identities and tokenization endpoints before generation.
 
+#### Choosing an Ask output limit
+
+Local Qwen and Gemma with Qwen embeddings have been tested end to end.
+Configure Ask's final-answer allowance with `ask_synthesis_max_tokens`
+(default: 4096), and local planning/evidence selection with
+`llm.selector_max_tokens`. Both include **thinking and visible output**.
+For Qwen 27B's 32K context, merge these optional overrides into your existing
+configuration:
+
+```yaml
+ask_synthesis_max_tokens: 16384
+llm:
+  max_output_tokens: 16384
+  selector_max_tokens: 16384
+```
+
+- **Too strict:** responses can be truncated and rejected, potentially causing
+  a document-only fallback.
+- **Too relaxed:** longer generation can increase latency and resource use,
+  while reserving less context for evidence. A higher cap does not guarantee
+  greater accuracy or force the model to use every token.
+
+Input plus the output allowance must fit the context window; this 16K example
+does not fit Gemma's 16K context. Keep allowances within `llm.max_output_tokens`
+and set `llm.timeout_seconds` for your hardware. See
+[output-limit configuration](docs/configuration.md#ask-synthesis-output-limit)
+for details.
+
 ### Docker and browser
 
 For the Docker application image and ready-to-use cloud/local configuration, see [Docker usage](docs/docker.md). The public image retains its web UI, MCP server and SCIP toolchains, with cloud/local presets and explicit CLI commands. Add the documented web Compose override to use either model pair from the browser; the [Qwen container journey](web/e2e/README.md) verifies the application with HTTP model fixtures and no paid inference.
