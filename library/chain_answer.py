@@ -587,9 +587,11 @@ def _why_truncated(bundle: 'ChainBundle', spine: str) -> str:
     # stage that drops anything, and it says so in the text it returns.
     return 'chain truncated' if 'omitted to fit the context' in spine else ''
 def bounded_prompt(prompt: str, *, max_chars: int | None = None,
-                   model: str | None = None) -> str:
+                   model: str | None = None,
+                   reserved_output_tokens: int = ANSWER_MAX_TOKENS) -> str:
     """Apply a final provider-safe ceiling after every prompt transformation."""
-    budget = spine_budget_chars(model) if max_chars is None else max_chars
+    budget = (spine_budget_chars(model, reserved_output_tokens=reserved_output_tokens)
+              if max_chars is None else max_chars)
     external = os.environ.get("ARIADNE_MAX_PROMPT_CHARS")
     if external:
         external_limit = max(int(external), 0)

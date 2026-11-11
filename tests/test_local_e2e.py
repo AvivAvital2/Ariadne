@@ -155,13 +155,16 @@ def script_model(chat, monkeypatch):
 
 
 @pytest.mark.parametrize('native_pair', ['legacy', 'accuracy', 'gemma'], indirect=True)
-async def test_native_complete_local_flow(native_pair, tmp_path, monkeypatch):
+@pytest.mark.parametrize('synthesis_cap', [4096, 8192])
+async def test_native_complete_local_flow(native_pair, tmp_path, monkeypatch, synthesis_cap):
     context, chat, embed = native_pair
     profile = managed_model_profile(managed_profile_id(context.settings))
     profile['llm']['base_url'], profile['embeddings']['base_url'] = chat.base_url, embed.base_url
+    profile['ask_synthesis_max_tokens'] = synthesis_cap
     script_model(chat, monkeypatch)
     try:
-        await complete_local_flow(profile, tmp_path / 'flow')
+        report = await complete_local_flow(profile, tmp_path / 'flow')
+        assert report['calls'][-1]['max_tokens'] == synthesis_cap
     finally:
         await context.aclose()
 

@@ -634,6 +634,16 @@ def test_question_route_decides_which_forks_are_executable_blockers():
 
     assert mandatory_fan_outs("How does DeltaSink add a batch?", (routed,), (ancillary, routed)) == (routed,)
     assert mandatory_fan_outs("How does DeltaSink add a batch?", (), (ancillary,)) == ()
+def test_larger_output_reservation_leaves_less_prompt_space():
+    from library.chain_answer import bounded_prompt
+
+    prompt = 'evidence ' * 100_000
+    small = bounded_prompt(prompt, model='claude-haiku-4-5', reserved_output_tokens=4096)
+    large = bounded_prompt(prompt, model='claude-haiku-4-5', reserved_output_tokens=8192)
+    assert len(small) - len(large) == int(4096 * PROMPT_CHARS_PER_TOKEN)
+    assert small.endswith('[prompt truncated]') and large.endswith('[prompt truncated]')
+
+
 def test_spine_budget_reserves_space_for_later_mandatory_route_hops():
     from library.chain_bundle import BundleHop, ChainBundle
     from library.structural_assembly import StructuralCitation

@@ -31,7 +31,7 @@ import pytest
 
 from ariadne_mcp.service_analysis import AnalysisMixin
 from ariadne_mcp.service_search import SearchMixin
-from config import Config, get_config
+from config import Config, ConfigError, get_config
 from library import Library
 from scope_resolution import make_scoped_library
 from tests._scoped_config_fixture import install_test_config
@@ -62,6 +62,19 @@ def test_ask_synthesis_defaults_true(tmp_path):
 
 def test_ask_synthesis_respects_false(tmp_path):
     assert Config(_write_cfg(tmp_path, 'ask_synthesis: false\n')).ask_synthesis is False
+
+
+@pytest.mark.parametrize('value', [4096, 8192])
+def test_ask_synthesis_output_budget(tmp_path, value):
+    assert Config(_write_cfg(tmp_path, 'sources: {}\n')).ask_synthesis_max_tokens == 4096
+    cfg = Config(_write_cfg(tmp_path, f'ask_synthesis_max_tokens: {value}\n'))
+    assert cfg.ask_synthesis_max_tokens == value
+
+
+@pytest.mark.parametrize('value', ['0', '-1', 'true', '8192.5', 'null', '"8192"'])
+def test_ask_synthesis_rejects_invalid_budget(tmp_path, value):
+    with pytest.raises(ConfigError, match='ask_synthesis_max_tokens'):
+        Config(_write_cfg(tmp_path, f'ask_synthesis_max_tokens: {value}\n'))
 
 
 # --------------------------------------------------------------------------
@@ -187,18 +200,21 @@ async def test_ask_disabled_returns_docs_without_calling_llm(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('cap', [4096, 8192])
 async def test_ask_enabled_synthesizes_via_messages(
-    service, library, monkeypatch,
+    service, library, monkeypatch, cap,
 ):
     """Synthesis ON + key present ⇒ ``chat_complete`` invoked with a
     ``messages`` list and its text reaches ``AskResponse.answer``."""
     _seed(library)
     monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
     service.config._config['ask_synthesis'] = True
+    service.config._config['ask_synthesis_max_tokens'] = cap
     captured: dict = {}
 
     async def fake_cc(messages, *, model=None, max_tokens=2048, timeout=60.0, **kwargs):
         captured['messages'] = messages
+        captured['max_tokens'] = max_tokens
         return 'SYNTHESIZED-ANSWER'
 
     monkeypatch.setattr('llm.chat_complete', fake_cc)
@@ -206,6 +222,7 @@ async def test_ask_enabled_synthesizes_via_messages(
     result = await service.ask(question='How does the widget subsystem work?')
 
     assert 'SYNTHESIZED-ANSWER' in result.answer
+    assert captured['max_tokens'] == cap
     roles = {m['role'] for m in captured['messages']}
     assert {'system', 'user'} <= roles
     system = next(m['content'] for m in captured['messages'] if m['role'] == 'system')
@@ -288,17 +305,21 @@ async def test_ask_synthesizes_on_an_anthropic_only_install(
     fake.assert_called_once()
     assert 'SYNTHESIZED-BY-ANTHROPIC' in result.answer
 @pytest.mark.asyncio
+@pytest.mark.parametrize('cap', [4096, 8192])
 async def test_ask_offers_a_menu_then_prunes_unaccounted_claims(
-    service, library, monkeypatch,
+    service, library, monkeypatch, cap,
 ):
     """One bounded repair removes claims outside the compiler evidence."""
     _seed_chain(library)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     service.config._config["ask_synthesis"] = True
+    service.config._config['ask_synthesis_max_tokens'] = cap
     calls: list = []
+    caps: list = []
 
     async def fake_cc(messages, *, model=None, max_tokens=2048, timeout=60.0, **kwargs):
         calls.append(messages)
+        caps.append(max_tokens)
         if len(calls) <= 2:
             return "R1"
         if len(calls) == 3:
@@ -313,6 +334,7 @@ async def test_ask_offers_a_menu_then_prunes_unaccounted_claims(
     assert "w.Widget.run calls w.Widget.flush" in result.answer
     assert "invented.py" not in result.answer
     assert len(calls) == 4, 'module menu, route menu, formulation, then one repair'
+    assert caps[2:] == [cap, cap]
     menu_prompt = "\n".join(m["content"] for m in calls[0] if m["role"] == "user")
     answer_prompt = "\n".join(m["content"] for m in calls[2] if m["role"] == "user")
     answer_system = "\n".join(m["content"] for m in calls[2] if m["role"] == "system")

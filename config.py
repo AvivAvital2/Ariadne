@@ -255,6 +255,7 @@ DEFAULTS = {
     'model': 'gpt-5.5',
     'spools_model': None,  # override model for spool builds only; None → inherit model
     'ask_synthesis': True,
+    'ask_synthesis_max_tokens': 4096,
     'provider': 'openai',
     'db_path': 'ariadne.db',
     'docs_base': './docs',
@@ -364,6 +365,9 @@ class Config:
           Misconfigured values surface immediately at config load
           rather than later at indexer-invocation time.
         """
+        cap = self.ask_synthesis_max_tokens
+        if type(cap) is not int or cap <= 0:
+            raise ConfigError('ask_synthesis_max_tokens must be a positive integer')
         sources = self._config.get('sources', {}) or {}
         for source_name, raw in sources.items():
             if not isinstance(raw, dict):
@@ -1108,6 +1112,11 @@ class Config:
         also needs the resolved provider's API key; without one, ask
         degrades to retrieval regardless."""
         return bool(self._config.get('ask_synthesis', True))
+
+    @property
+    def ask_synthesis_max_tokens(self) -> int:
+        """Total generated tokens for Ask synthesis, including model reasoning."""
+        return self._config.get('ask_synthesis_max_tokens', DEFAULTS['ask_synthesis_max_tokens'])
 
     def resolve_docs_path(self, source: str) -> Path:
         """Resolve the documentation output path for a source.

@@ -301,6 +301,9 @@ class AnalysisMixin:
                   file=__import__("sys").stderr, flush=True)
         _trace("ask", "start")
         _selector_mode = str(self.config._config.get("ask_selector_mode", "llm"))
+        from library.chain_answer import ANSWER_MAX_TOKENS
+        answer_max_tokens = getattr(
+            self.config, 'ask_synthesis_max_tokens', ANSWER_MAX_TOKENS)
         async def _ask_chat(*, messages, **kwargs):
             nonlocal _llm_calls
             _llm_calls += 1
@@ -1067,7 +1070,8 @@ class AnalysisMixin:
                             {"title": title, "heading": heading}
                             for title, heading, _ in fetched.sections]
                         spine = render_selected_routes(
-                            selected_hops, selection, fetched, max_chars=spine_budget_chars())
+                            selected_hops, selection, fetched,
+                            max_chars=spine_budget_chars(reserved_output_tokens=answer_max_tokens))
                         _selection_started = time.perf_counter()
                         _trace("evidence_selection", "start")
                         _formulation_evidence = project_selected_evidence(
@@ -1131,7 +1135,7 @@ class AnalysisMixin:
                         for title, heading, _ in fetched.sections]
                     spine = render_selected_routes(
                         selected_hops, selection, fetched,
-                        max_chars=spine_budget_chars())
+                        max_chars=spine_budget_chars(reserved_output_tokens=answer_max_tokens))
                     _selection_started = time.perf_counter()
                     _trace("evidence_selection", "start")
                     _formulation_evidence = project_selected_evidence(
@@ -1160,10 +1164,10 @@ class AnalysisMixin:
             )
 
         try:
-            from library.chain_answer import ANSWER_MAX_TOKENS, expand_bare_lines, unsupported_locations, bounded_prompt
+            from library.chain_answer import expand_bare_lines, unsupported_locations, bounded_prompt
             _phase_timings["evidence_selection"] = time.perf_counter() - _selection_started
             _trace("evidence_selection", "end", _phase_timings["evidence_selection"])
-            prompt = bounded_prompt(prompt)
+            prompt = bounded_prompt(prompt, reserved_output_tokens=answer_max_tokens)
             _graph_diagnostics.setdefault("post_walk_selection", {})["formulation_prompt_chars"] = len(prompt)
             from llm import chat_complete
             messages = [
@@ -1173,7 +1177,7 @@ class AnalysisMixin:
             _formulation_started = time.perf_counter()
             _trace("formulation", "start")
             answer = await _ask_chat(messages=messages,
-                                         max_tokens=ANSWER_MAX_TOKENS)
+                                     max_tokens=answer_max_tokens)
             _phase_timings["formulation"] = time.perf_counter() - _formulation_started
             _trace("formulation", "end", _phase_timings["formulation"])
             _proof_appendix = ""
@@ -1198,9 +1202,11 @@ class AnalysisMixin:
                         answer = await _ask_chat(
                             messages=[
                                 {"role": "system", "content": messages[0]["content"]},
-                                {"role": "user", "content": bounded_prompt(repair_prompt(answer, prompt, ledger))},
+                                {"role": "user", "content": bounded_prompt(
+                                    repair_prompt(answer, prompt, ledger),
+                                    reserved_output_tokens=answer_max_tokens)},
                             ],
-                            max_tokens=ANSWER_MAX_TOKENS)
+                            max_tokens=answer_max_tokens)
                         if story_ir is not None:
                             from library.chain_story import expand_story_placeholders, render_unreferenced_story_evidence
                             _proof_appendix = render_unreferenced_story_evidence(answer, story_ir)
@@ -2417,7 +2423,7 @@ async def _ask_compact(self, question, *, source, notes,
                         "for every code claim."},
             {"role": "user", "content": prompt},
         ],
-        max_tokens=ANSWER_MAX_TOKENS)
+        max_tokens=getattr(self.config, 'ask_synthesis_max_tokens', ANSWER_MAX_TOKENS))
     phase_timings["formulation"] = _time.perf_counter() - started
     trace("formulation", "end", phase_timings["formulation"])
     appendix = render_unreferenced_story_evidence(answer, story_ir)
