@@ -361,8 +361,9 @@ def build_route_family_cards(
 
 
 def render_family_selector_prompt(cards: FamilyCards, *,
-                                  question: str) -> str:
-    """One compact selector surface. Cards only — never source bodies."""
+                                  question: str, obligations: list[dict]) -> str:
+    """Pair each requirement with its cards; never include source bodies."""
+    requirements = {row["id"]: row["text"] for row in obligations}
     lines = [
         "Select the route families that prove each obligation. Reply "
         "with one line per obligation: O<i>: F<id> F<id> ...",
@@ -374,6 +375,7 @@ def render_family_selector_prompt(cards: FamilyCards, *,
         if card.obligation_id != current:
             current = card.obligation_id
             lines.append(f"{current}:")
+            lines.append(f"  Requirement: {requirements[current]}")
         relations = ",".join(card.relation_sequence) or "identity"
         origins = ",".join(card.retrieval_origins)
         lines.append(

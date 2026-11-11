@@ -2302,7 +2302,8 @@ async def _ask_compact(self, question, *, source, notes,
             per_obligation_budget=16,
             trace=(compact.setdefault("trace", {})
                    if deep_trace else ()))
-        prompt = render_family_selector_prompt(cards, question=question)
+        prompt = render_family_selector_prompt(
+            cards, question=question, obligations=obligations)
         compact["cards_total"] = len(cards.cards)
         compact["selector_prompt_chars"] = len(prompt)
         compact["selector_prompt_tokens"] = len(prompt) // 4

@@ -171,6 +171,32 @@ def _run(service, chat, question="How does the writer flush rows?"):
 
 
 class TestCompactPhases:
+    def test_selector_receives_each_planned_requirement_with_its_id(self, service):
+        requirements = (
+            "Establish which method calls pkg.Sink.flush.",
+            "Establish what pkg.Sink.flush calls next.",
+        )
+        prompts = []
+
+        def select(prompt):
+            prompts.append(prompt)
+            return _first_family_reply(prompt)
+
+        chat = RecordingChat({
+            "scip-obligation-plan":
+                f"C1: {requirements[0]}\nC2: {requirements[1]}",
+            "scip-route-family-select": select,
+            "completion": "The write path calls flush at core/writer.scala:30.",
+        })
+
+        response, diagnostics = _run(service, chat)
+
+        assert diagnostics["compact"]["status"] == "complete"
+        assert response.llm_calls == 3
+        first, second = prompts[0].split("\nO1:\n", 1)[1].split("\nO2:\n", 1)
+        assert requirements[0] in first and requirements[1] not in first
+        assert requirements[1] in second and requirements[0] not in second
+
     def test_exactly_three_calls_with_pinned_phases(self, service):
         chat = RecordingChat({
             "scip-obligation-plan":
@@ -248,7 +274,7 @@ class TestBudgetRefusals:
             self, service, monkeypatch):
         monkeypatch.setattr(
             "library.route_families.render_family_selector_prompt",
-            lambda cards, *, question: "menu " * 10000)
+            lambda cards, *, question, obligations: "menu " * 10000)
         chat = RecordingChat({
             "scip-obligation-plan":
                 "C1: prove that pkg.Writer.write calls pkg.Sink.flush",

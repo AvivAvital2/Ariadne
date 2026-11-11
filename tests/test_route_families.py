@@ -188,13 +188,14 @@ class TestFamilyGeneration:
 
 class TestSelectorSurface:
     def test_prompt_is_bounded_and_body_free(self, conn):
+        obligations = obligations_for("q", [
+            ("prove", ["pkg.Writer.write"])])
         cards = build_route_family_cards(
             conn, source=SOURCE, question="q",
-            obligations=obligations_for("q", [
-                ("prove", ["pkg.Writer.write"])]))
+            obligations=obligations)
 
         prompt = render_family_selector_prompt(
-            cards, question="How does write flush?")
+            cards, question="How does write flush?", obligations=obligations)
 
         assert len(prompt) // 4 <= 8000
         assert "def " not in prompt and "{" not in prompt.replace(
