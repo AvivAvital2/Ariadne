@@ -78,6 +78,43 @@ async def test_other_explicit_selector_phases_receive_same_allowance(phase):
     assert call['max_tokens'] == trace['max_tokens'] == usage['max_tokens'] == 2304
 
 
+@pytest.mark.parametrize('phase', ['scip-obligation-plan', 'scip-route-family-select'])
+async def test_explicit_selector_cap_replaces_default_thinking_allowance(phase):
+    profile = mac_accuracy_profile()
+    profile['llm'].update(max_output_tokens=16384, selector_max_tokens=16384)
+    call, trace, usage = await _recorded_call(resolve_models(profile), phase, 64)
+    assert call['max_tokens'] == trace['max_tokens'] == usage['max_tokens'] == 16384
+
+
+async def test_explicit_selector_cap_does_not_change_synthesis():
+    profile = mac_accuracy_profile()
+    profile['llm'].update(max_output_tokens=16384, selector_max_tokens=16384)
+    call, trace, usage = await _recorded_call(resolve_models(profile), 'completion', 4096)
+    assert call['max_tokens'] == trace['max_tokens'] == usage['max_tokens'] == 4096
+
+
+@pytest.mark.parametrize('native_pair', ['accuracy'], indirect=True)
+@pytest.mark.parametrize('server_context', [32768, 16000])
+async def test_16k_selector_uses_native_preflight_and_wire_limit(native_pair, server_context):
+    context, chat, _embed = native_pair
+    context.settings = replace(context.settings, chat=replace(
+        context.settings.chat, max_output_tokens=16384, selector_max_tokens=16384))
+    chat.context = server_context
+    try:
+        if server_context < 16384:
+            with pytest.raises(ContextOverflow):
+                await chat_complete(user_prompt='Choose B1.', max_tokens=64,
+                                    phase='scip-route-family-select', context=context)
+            assert all(not path.endswith('/chat/completions') for path, _ in chat.requests)
+        else:
+            await chat_complete(user_prompt='Choose B1.', max_tokens=64,
+                                phase='scip-route-family-select', context=context)
+            payload = dict(chat.requests)['/native/v1/chat/completions']
+            assert payload['max_tokens'] == 16384
+    finally:
+        await context.aclose()
+
+
 @pytest.mark.parametrize('changed', ['legacy', 'hosted', 'generation_revision', 'tokenizer', 'embedding_revision'])
 async def test_allowance_requires_exact_selected_local_model_pair_identity(changed):
     settings = resolve_models(mac_accuracy_profile())

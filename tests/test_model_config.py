@@ -44,6 +44,28 @@ def test_alias_precedence_and_explicit_conflicts():
     assert resolve_models(local_config()).chat.model.startswith('Qwen/')
 
 
+def test_local_selector_budget_is_operational_and_visible():
+    data = local_config()
+    original = resolve_models(data)
+    data['llm'].update(max_output_tokens=16384, selector_max_tokens=16384)
+    settings = resolve_models(data)
+    assert settings.profile_hash == original.profile_hash
+    assert settings.display()['selector_max_tokens'] == 16384
+
+
+@pytest.mark.parametrize('cap', [0, -1, True, 1.5, '16384', 8193])
+def test_invalid_selector_budget_is_rejected(cap):
+    data = local_config()
+    data['llm']['selector_max_tokens'] = cap
+    with pytest.raises(ModelConfigurationError, match='selector_max_tokens'):
+        resolve_models(data)
+
+
+def test_hosted_selector_override_is_rejected():
+    with pytest.raises(ModelConfigurationError, match='requires local'):
+        resolve_models({'llm': {'selector_max_tokens': 16384, 'max_output_tokens': 16384}})
+
+
 @pytest.mark.parametrize(
     ('section', 'key', 'value'),
     [

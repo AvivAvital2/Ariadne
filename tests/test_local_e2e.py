@@ -178,6 +178,22 @@ async def test_bf16_complete_local_flow(local_deployment, tmp_path, monkeypatch)
         await context.aclose()
 
 
+@pytest.mark.parametrize('native_pair', ['accuracy'], indirect=True)
+async def test_27b_complete_flow_with_16k_budgets(native_pair, tmp_path, monkeypatch):
+    context, chat, embed = native_pair
+    profile = managed_model_profile(managed_profile_id(context.settings))
+    profile['llm'].update(base_url=chat.base_url, max_output_tokens=16384,
+                          selector_max_tokens=16384)
+    profile['embeddings']['base_url'] = embed.base_url
+    profile['ask_synthesis_max_tokens'] = 16384
+    script_model(chat, monkeypatch)
+    try:
+        report = await complete_local_flow(profile, tmp_path / 'flow')
+        assert [call['max_tokens'] for call in report['calls']] == [16384] * 4
+    finally:
+        await context.aclose()
+
+
 @pytest.mark.parametrize('config_path', json.loads(os.environ.get('ARIADNE_LIVE_MODEL_CONFIGS', '[]')))
 async def test_live_complete_local_flow(config_path, tmp_path, monkeypatch):
     cfg = Config(Path(config_path))

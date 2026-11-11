@@ -133,6 +133,7 @@ class ChatSettings:
     max_concurrency: int = 3
     context_window: int = 32768
     max_output_tokens: int = 8192
+    selector_max_tokens: int | None = None
     request_options_json: str = '{}'
 
     @property
@@ -312,6 +313,12 @@ class ModelSettings:
             _positive(name, value)
         if self.execution.batch_mode not in {'auto', 'always', 'never'}:
             raise ModelConfigurationError('execution.batch_mode must be auto, always or never')
+        if c.selector_max_tokens is not None:
+            _positive('llm.selector_max_tokens', c.selector_max_tokens)
+            if not self.local:
+                raise ModelConfigurationError('llm.selector_max_tokens requires local inference')
+            if c.selector_max_tokens > c.max_output_tokens:
+                raise ModelConfigurationError('llm.selector_max_tokens exceeds llm.max_output_tokens')
         if 'deepinfra' in (c.provider, e.provider):
             if (c.provider, e.provider, c.model, e.model, e.dimensions, e.recipe) != (
                 'deepinfra', 'deepinfra', CHAT_MODEL, EMBEDDING_MODEL, EMBEDDING_DIM, HOSTED_RECIPE
@@ -420,6 +427,7 @@ class ModelSettings:
                         'cloud live' if self.chat.provider == 'deepinfra' else 'cloud batch / live'),
             'context_window': self.chat.context_window,
             'max_output_tokens': self.chat.max_output_tokens,
+            'selector_max_tokens': self.chat.selector_max_tokens,
             'concurrency': self.chat.max_concurrency,
         }
 

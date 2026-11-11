@@ -29,7 +29,7 @@ _SELECTOR_THINKING_ALLOWANCE = 2048
 
 
 def _selector_max_tokens(context: InferenceContext, phase: str, requested: int) -> int:
-    """Reserve bounded thinking space for the selected Mac profile's selectors.
+    """Apply an explicit local selector cap or the selected Mac thinking allowance.
 
     Their original small caps were final-answer allowances. Native completions
     count reasoning and final text together. Direct calls and frozen Spool jobs
@@ -40,6 +40,8 @@ def _selector_max_tokens(context: InferenceContext, phase: str, requested: int) 
     ceiling = context.settings.chat.max_output_tokens
     if type(requested) is not int or not 0 < requested <= ceiling:
         return requested  # Preserve the provider's existing invalid-cap rejection.
+    if context.settings.chat.selector_max_tokens is not None:
+        return context.settings.chat.selector_max_tokens
     from local_models import mac_accuracy_profile
     from model_config import resolve_models
 
