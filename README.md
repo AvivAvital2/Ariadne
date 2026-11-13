@@ -47,12 +47,12 @@ The public comparison uses twelve difficult, target-pinned questions about Spark
 
 ## Supported models
 
-| Suite | Documentation and synthesis | Embeddings | Verification |
-| --- | --- | --- | --- |
-| OpenAI cloud | GPT family | OpenAI `text-embedding-3-large`, 3072 dimensions | 24/24 live workflow checks passed |
-| Anthropic cloud | Claude family | OpenAI `text-embedding-3-large`, 3072 dimensions | 24/24 live checks passed after the latest retrieval fix |
-| Qwen — local or remote | Qwen3.5-9B or Qwen3.8-27B | `Qwen/Qwen3-Embedding-8B`, 4096 → normalized 3072 dimensions | Local workflows tested end to end; DeepInfra used for hosted verification |
-| Local Gemma (experimental) | Gemma 4 12B | `Qwen/Qwen3-Embedding-8B`, 4096 → normalized 3072 dimensions | Tested end to end |
+| Suite | Documentation <br />and synthesis | Embeddings<br />(3072 dimensions) |
+| --- | --- | --- |
+| OpenAI cloud | GPT family | OpenAI `text-embedding-3-large` |
+| Anthropic cloud | Claude family | OpenAI `text-embedding-3-large` |
+| Qwen - local/remote | `Qwen3.5-9B` / `Qwen3.8-27B` | `Qwen3-Embedding-8B` (normalized) |
+| Local Gemma<br />Gemma 4 12B | `unsloth/gemma-4-12b-it-GGUF` | `Qwen3-Embedding-8B` (normalized) |
 
 See [supported model configurations](docs/supported-models.md) for exact YAML, credentials and switching commands. Select configurations with `ARIADNE_CONFIG` and give each model pair a separate main/staleness database pair. Existing cloud defaults are unchanged; choose the named models explicitly.
 
